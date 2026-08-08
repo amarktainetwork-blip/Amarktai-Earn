@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import subprocess
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -43,11 +44,35 @@ def _security_args(*, network: str, volume_name: str, memory: str, cpus: str, pi
         "--memory", memory,
         "--cpus", cpus,
         "--user", "10001:10001",
+        "--label", "amarktai.sandbox=true",
         "--network", network,
         "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
         "--tmpfs", "/home/sandbox:rw,nosuid,nodev,size=96m",
         "-v", f"{volume_name}:/workspace:rw",
     ]
+
+
+def cleanup_stale_containers(max_age_seconds: int) -> dict[str, int]:
+    max_age_seconds = max(60, min(int(max_age_seconds), 86400))
+    listed = _run(["docker", "ps", "-aq", "--filter", "label=amarktai.sandbox=true"], timeout=30, check=False)
+    removed = inspected = 0
+    now = datetime.now(timezone.utc)
+    for container_id in (listed.stdout or "").splitlines()[:1000]:
+        container_id = container_id.strip()
+        if not re.fullmatch(r"[0-9a-f]{12,64}", container_id):
+            continue
+        info = _run(["docker", "inspect", "-f", "{{.State.Running}}|{{.Created}}", container_id], timeout=15, check=False)
+        if info.returncode != 0 or "|" not in (info.stdout or ""):
+            continue
+        running, created_raw = info.stdout.strip().split("|", 1)
+        inspected += 1
+        try:
+            created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if running != "true" or (now - created).total_seconds() >= max_age_seconds:
+            removed += int(_run(["docker", "rm", "-f", container_id], timeout=30, check=False).returncode == 0)
+    return {"inspected": inspected, "removed": removed}
 
 
 def run_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
@@ -166,7 +191,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path != "/run":
+        if self.path not in {"/run", "/cleanup"}:
             return self._json(404, {"error": "not found"})
         auth = self.headers.get("Authorization", "")
         if not hmac.compare_digest(auth, f"Bearer {_secret()}"):
@@ -178,6 +203,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length))
             if not isinstance(payload, dict):
                 raise BrokerError("request body must be an object")
+            if self.path == "/cleanup":
+                return self._json(200, cleanup_stale_containers(int(payload.get("max_age_seconds", 1800))))
             return self._json(200, run_sandbox(payload))
         except BrokerError as exc:
             return self._json(400, {"error": str(exc)})

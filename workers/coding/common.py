@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from control.models import Job
+from control.services.admission import AdmissionDenied, require_admission
 from control.sandbox_tokens import issue_sandbox_token
 from sandbox_broker.client import SandboxBrokerClient, SandboxBrokerError
 from workers.genx_support import GenXWorkerError, select_specialist
@@ -63,6 +64,7 @@ def run_ai_coding_sandbox(request, *, agent: str) -> dict[str, Any]:
         ttl_seconds=int(os.getenv("SANDBOX_TOKEN_TTL_SECONDS", "1800")),
     )
     try:
+        require_admission(purpose="SANDBOX", job=Job.objects.get(pk=request.job_id), operation=str(request.inputs.get("operation") or ""))
         return configured_broker().run({
             "agent": agent,
             "snapshot_rel": _repo_relative(source),
@@ -75,7 +77,7 @@ def run_ai_coding_sandbox(request, *, agent: str) -> dict[str, Any]:
             "execution_id": request.execution_id,
             "attempt": request.attempt,
         })
-    except SandboxBrokerError as exc:
+    except (SandboxBrokerError, AdmissionDenied) as exc:
         raise CodingWorkerError(str(exc)) from exc
 
 
@@ -87,6 +89,7 @@ def run_ci_sandbox(request) -> dict[str, Any]:
     if not source or not test_command:
         raise CodingWorkerError("CI request is missing repository or explicit test command")
     try:
+        require_admission(purpose="SANDBOX", job=Job.objects.get(pk=request.job_id), operation=str(request.inputs.get("operation") or ""))
         return configured_broker().run({
             "agent": "ci",
             "snapshot_rel": _repo_relative(source),
@@ -97,5 +100,5 @@ def run_ci_sandbox(request) -> dict[str, Any]:
             "execution_id": request.execution_id,
             "attempt": request.attempt,
         })
-    except SandboxBrokerError as exc:
+    except (SandboxBrokerError, AdmissionDenied) as exc:
         raise CodingWorkerError(str(exc)) from exc

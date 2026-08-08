@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from control.models import Application, AuditEvent, Bid, Claim, Job
 from control.services.jobs import acquisition_decision, transition_job
+from control.services.admission import AdmissionDenied, require_admission
 from control.services.locks import JobLockUnavailable, acquire_job_lock, release_job_lock
 from markets.base import MarketAdapter
 
@@ -43,6 +44,10 @@ def acquire_profitable_job(
         raise AcquisitionError("acquisition blocked: " + ",".join(gate.reason_codes))
     if job.state != Job.State.EXPECTED:
         raise AcquisitionError(f"job must be EXPECTED before acquisition, got {job.state}")
+    try:
+        require_admission(purpose="ACQUISITION", job=job)
+    except AdmissionDenied as exc:
+        raise AcquisitionError(str(exc)) from exc
 
     action = action.upper()
     lock = acquire_job_lock(job.id, node_id=node_id, lease_seconds=180)

@@ -109,6 +109,31 @@ services:
         condition: service_healthy
     networks: [internal]
 
+  watchdog:
+    build: .
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    env_file: .env
+    command: sh -lc 'python manage.py production_check && exec python manage.py run_watchdog'
+    volumes:
+      - job_data:/var/lib/amarktai-earn/jobs
+      - repo_cache:/var/lib/amarktai-earn/repos
+      - app_cache:/var/lib/amarktai-earn/cache
+      - logs:/var/lib/amarktai-earn/logs
+      - uploads:/var/lib/amarktai-earn/uploads
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      sandbox-broker:
+        condition: service_started
+    networks: [internal]
+
   genx-proxy:
     build: .
     restart: unless-stopped
@@ -139,6 +164,9 @@ services:
       - "${DOCKER_GID:-999}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
     networks: [internal]
 
   sandbox-agent-image:

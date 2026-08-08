@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from control.models import Artifact, AuditEvent, Execution, Job, QAResult, Worker
 from control.services.jobs import transition_job
+from control.services.admission import AdmissionDenied, require_admission
 from control.services.locks import JobLockUnavailable, acquire_job_lock, release_job_lock, renew_job_lock
 from workers.base import WorkRequest
 from workers.qa.runtime import run_qa
@@ -91,6 +92,10 @@ def execute_registered_job(
         raise ExecutionError(str(exc)) from exc
     if expected_worker_class and spec.worker_class != expected_worker_class:
         raise ExecutionError(f"operation {operation!r} belongs to {spec.worker_class!r}, not {expected_worker_class!r}")
+    try:
+        require_admission(purpose="WORKPLAN_EXECUTION", job=job, operation=operation)
+    except AdmissionDenied as exc:
+        raise ExecutionError(str(exc)) from exc
 
     root = Path(workspace_root or os.getenv("AMARKTAI_JOB_ROOT", "/var/lib/amarktai-earn/jobs"))
     upload_root = Path(os.getenv("AMARKTAI_UPLOAD_ROOT", "/var/lib/amarktai-earn/uploads"))
