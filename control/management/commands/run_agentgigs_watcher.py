@@ -8,6 +8,7 @@ from control.services.agentgigs_assets import sync_awarded_agentgigs_assets
 from planning.coding import dispatch_coding_jobs
 from planning.services import dispatch_awarded_jobs
 from markets.agentgigs.client import AgentGigsError
+from control.services.recovery import heartbeat
 
 
 class Command(BaseCommand):
@@ -24,11 +25,13 @@ class Command(BaseCommand):
         limit = max(1, min(int(options["limit"]), 500))
         while True:
             try:
+                heartbeat("agentgigs-watcher", details={"phase": "cycle"})
                 adapter = configured_adapter()
                 result = run_cycle(adapter, limit=limit)
                 result["assets"] = sync_awarded_agentgigs_assets(adapter, limit=limit)
                 result["dispatch"] = dispatch_awarded_jobs(marketplace_slug="agentgigs", limit=limit)
                 result["coding_dispatch"] = dispatch_coding_jobs(marketplace_slug="agentgigs", limit=limit)
+                heartbeat("agentgigs-watcher", details=result)
                 self.stdout.write(self.style.SUCCESS(str(result)))
             except (AgentGigsError, ValueError) as exc:
                 if options["once"]:

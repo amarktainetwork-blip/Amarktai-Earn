@@ -201,9 +201,14 @@ def plan_awarded_job(job_id) -> WorkPlan:
 
 
 def _queue_execution(plan: WorkPlan) -> bool:
+    from control.services.admission import decide_admission
     from control.queueing import queue
     from control.tasks import execute_work_plan_task
 
+    decision = decide_admission(purpose="WORKPLAN_QUEUE", job=plan.job, operation=plan.operation)
+    if not decision.allowed:
+        WorkPlan.objects.filter(pk=plan.pk).update(status=WorkPlan.Status.BLOCKED, reason_codes=decision.reason_codes)
+        return False
     try:
         queue("p3").enqueue(
             execute_work_plan_task,

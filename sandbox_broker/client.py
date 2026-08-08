@@ -19,8 +19,14 @@ class SandboxBrokerClient:
             raise SandboxBrokerError("SANDBOX_BROKER_SECRET must be at least 32 characters")
 
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._post("/run", payload)
+
+    def cleanup(self, *, max_age_seconds: int = 1800) -> dict[str, int]:
+        return self._post("/cleanup", {"max_age_seconds": max_age_seconds})
+
+    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         response = requests.post(
-            self.base_url + "/run",
+            self.base_url + path,
             headers={"Authorization": f"Bearer {self.secret}", "Content-Type": "application/json"},
             json=payload,
             timeout=self.timeout,

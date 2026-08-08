@@ -20,6 +20,7 @@ from control.models import (
     Worker,
 )
 from gateways.genx.client import GenXClient, GenXError
+from control.services.admission import AdmissionDenied, require_admission
 from gateways.genx.output import extract_text
 from gateways.genx.contracts import (
     ModelCandidate,
@@ -211,6 +212,10 @@ class GenXGateway:
     ) -> GenXCall:
         selected = self.select_model(task_class=task_class, category=category, preferred_model=preferred_model)
         job = Job.objects.select_related("marketplace").get(pk=job_id)
+        try:
+            require_admission(purpose="GENX", job=job)
+        except AdmissionDenied as exc:
+            raise GenXBudgetExceeded(str(exc)) from exc
         metadata = {
             "job": str(job.id),
             "worker": worker_id,
@@ -288,6 +293,10 @@ class GenXGateway:
         """Run one documented GenX stateful session message with controller-side budget truth."""
         selected = self.select_model(task_class=task_class, category="text", preferred_model=preferred_model)
         job = Job.objects.select_related("marketplace").get(pk=job_id)
+        try:
+            require_admission(purpose="GENX", job=job)
+        except AdmissionDenied as exc:
+            raise GenXBudgetExceeded(str(exc)) from exc
         metadata = {
             "job": str(job.id),
             "worker": worker_id,

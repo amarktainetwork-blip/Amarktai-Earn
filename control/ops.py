@@ -13,6 +13,7 @@ from planning.models import WorkPlan
 from workers.registry import registry_manifest
 from .models import (
     Alert,
+    AdmissionDecision,
     Artifact,
     AuditEvent,
     Execution,
@@ -27,6 +28,8 @@ from .models import (
     Payout,
     QAResult,
     RecoveryCode,
+    ResourceSnapshot,
+    ServiceHeartbeat,
     RefreshSession,
     SystemSetting,
     TreasuryBalance,
@@ -90,6 +93,7 @@ def overview_snapshot() -> dict:
     genx_used = GenXCall.objects.filter(created_at__date=today).aggregate(v=Sum("credits"))["v"] or Decimal("0")
     latest_genx = GenXAccountSnapshot.objects.order_by("-created_at").first()
     open_alerts = Alert.objects.filter(status="OPEN").count()
+    resource = ResourceSnapshot.objects.order_by("-created_at").first()
     return {
         "section": "overview",
         "cards": [
@@ -99,6 +103,7 @@ def overview_snapshot() -> dict:
             {"label": "ACTIVE PAID JOBS", "value": Job.objects.filter(state__in=[Job.State.CLAIMED, Job.State.AWARDED, Job.State.EXECUTING]).count()},
             {"label": "ACTIVE AGENTS", "value": Worker.objects.exclude(status__in=["OFFLINE", "READY"]).count()},
             {"label": "OPEN ALERTS", "value": open_alerts},
+            {"label": "RESOURCE GOVERNOR", "value": "GREEN" if resource and resource.healthy else "BLOCKED" if resource else "NO SNAPSHOT", "truth": ", ".join(resource.blocker_codes) if resource and resource.blocker_codes else "latest persisted admission state"},
             {"label": "GENX BALANCE", "value": "—" if not latest_genx or latest_genx.available_credits is None else f"{latest_genx.available_credits} cr"},
             {"label": "GENX USED TODAY", "value": f"{genx_used} cr"},
         ],
@@ -263,7 +268,8 @@ def nodes_snapshot() -> dict:
         "disk_percent": _dec(row.disk_percent),
         "last_heartbeat": _dt(row.last_heartbeat),
     } for row in Node.objects.order_by("id")]
-    return {"section": "nodes", "rows": rows}
+    heartbeats = [{"service": row.service, "node": row.node_id, "last_seen": _dt(row.last_seen_at), "details": row.details} for row in ServiceHeartbeat.objects.order_by("service")]
+    return {"section": "nodes", "rows": rows, "secondary_rows": heartbeats}
 
 
 def storage_snapshot() -> dict:
@@ -273,7 +279,24 @@ def storage_snapshot() -> dict:
         _disk_row("Artifacts", "/var/lib/amarktai-earn/artifacts"),
         _disk_row("Backups", "/var/lib/amarktai-earn/backups"),
     ]
-    return {"section": "storage", "rows": rows}
+    latest = ResourceSnapshot.objects.order_by("-created_at").first()
+    blockers = list(AdmissionDecision.objects.filter(allowed=False).order_by("-created_at").values("purpose", "operation", "reason_codes", "created_at")[:20])
+    return {
+        "section": "storage",
+        "rows": rows,
+        "secondary_rows": blockers,
+        "meta": None if latest is None else {
+            "healthy": latest.healthy,
+            "disk_free_bytes": latest.disk_free_bytes,
+            "disk_free_percent": _dec(latest.disk_free_percent),
+            "memory_available_bytes": latest.memory_available_bytes,
+            "load_per_cpu": _dec(latest.load_per_cpu),
+            "storage_usage": latest.storage_usage,
+            "queue_pressure": latest.queue_pressure,
+            "blockers": latest.blocker_codes,
+            "captured": _dt(latest.created_at),
+        },
+    }
 
 
 def performance_snapshot() -> dict:

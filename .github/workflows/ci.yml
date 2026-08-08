@@ -33,6 +33,11 @@ env:
   AGENTGIGS_WEBHOOK_SECRET: integration-webhook-secret
   AUTONOMOUS_MODE: OFF
   AGENTGIGS_AUTO_APPLY_ENABLED: "0"
+  AMARKTAI_MIN_FREE_DISK_BYTES: "1"
+  AMARKTAI_MIN_FREE_DISK_PERCENT: "0"
+  AMARKTAI_MIN_MEMORY_HEADROOM_BYTES: "1"
+  AMARKTAI_LARGE_JOB_MEMORY_HEADROOM_BYTES: "1"
+  AMARKTAI_MAX_LOAD_PER_CPU: "100"
 
 jobs:
   integration:
@@ -74,7 +79,7 @@ jobs:
       - run: python manage.py migrate --noinput
       - run: python manage.py healthcheck
       - run: python -m unittest discover -s tests -p 'test_*_stdlib.py' -q
-      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration -v 2
+      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration -v 2
       - name: Production configuration preflight
         env:
           AMARKTAI_ENV: production

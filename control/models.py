@@ -448,6 +448,48 @@ class SystemSetting(Timestamped):
     sensitive = models.BooleanField(default=False)
 
 
+class ResourceSnapshot(Timestamped):
+    node_id = models.CharField(max_length=120, default="VPS1")
+    purpose = models.CharField(max_length=40)
+    disk_free_bytes = models.PositiveBigIntegerField(default=0)
+    disk_free_percent = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    memory_available_bytes = models.PositiveBigIntegerField(default=0)
+    load_per_cpu = models.DecimalField(max_digits=8, decimal_places=3, default=0)
+    storage_usage = models.JSONField(default=dict)
+    queue_pressure = models.JSONField(default=dict)
+    healthy = models.BooleanField(default=False)
+    blocker_codes = models.JSONField(default=list)
+
+
+class AdmissionDecision(Timestamped):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    job = models.ForeignKey(Job, null=True, blank=True, on_delete=models.SET_NULL, related_name="admission_decisions")
+    snapshot = models.ForeignKey(ResourceSnapshot, null=True, blank=True, on_delete=models.SET_NULL)
+    purpose = models.CharField(max_length=40)
+    operation = models.CharField(max_length=80, blank=True)
+    allowed = models.BooleanField(default=False)
+    reason_codes = models.JSONField(default=list)
+    details = models.JSONField(default=dict)
+
+
+class ServiceHeartbeat(Timestamped):
+    service = models.CharField(max_length=80, unique=True)
+    node_id = models.CharField(max_length=120, default="VPS1")
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    details = models.JSONField(default=dict)
+
+
+class RecoveryAction(Timestamped):
+    action_key = models.CharField(max_length=200, unique=True)
+    target_type = models.CharField(max_length=80)
+    target_id = models.CharField(max_length=160, blank=True)
+    action = models.CharField(max_length=120)
+    outcome = models.CharField(max_length=32)
+    reason_code = models.CharField(max_length=120)
+    details = models.JSONField(default=dict)
+    performed_at = models.DateTimeField(default=timezone.now)
+
+
 class WebhookEvent(Timestamped):
     marketplace = models.ForeignKey(Marketplace, on_delete=models.CASCADE, related_name="webhook_events")
     event_key = models.CharField(max_length=64, unique=True)
