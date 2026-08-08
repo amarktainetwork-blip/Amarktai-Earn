@@ -103,8 +103,13 @@ class JobScore(Timestamped):
     p_payment = models.DecimalField(max_digits=6, decimal_places=5)
     expected_genx_cost = models.DecimalField(max_digits=12, decimal_places=4, default=0)
     expected_external_cost = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    expected_cash = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     expected_profit = models.DecimalField(max_digits=14, decimal_places=2)
+    expected_profit_per_minute = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    expected_profit_per_genx_credit = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
     expected_minutes = models.PositiveIntegerField()
+    decision = models.CharField(max_length=32, default="WATCH")
+    reason_codes = models.JSONField(default=list)
     score_version = models.CharField(max_length=32, default="v1")
 
 class JobLock(Timestamped):
