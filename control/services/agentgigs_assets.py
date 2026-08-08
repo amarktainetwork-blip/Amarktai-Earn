@@ -140,6 +140,10 @@ def ingest_agentgigs_assets(
         messages = adapter.get_messages(opportunity)
 
     refs = extract_source_asset_refs(details, messages)
+    if len(refs) > 1:
+        for ref in refs:
+            _blocked_asset(job, ref, "MULTIPLE_SOURCE_ASSETS_NOT_SUPPORTED")
+        return {"found": len(refs), "ingested": 0, "existing": 0, "blocked": len(refs), "failed": 0}
     maximum = max(1, int(os.getenv("AGENTGIGS_MAX_SOURCE_ASSET_BYTES", str(DEFAULT_MAX_SOURCE_BYTES))))
     upload_root = Path(os.getenv("AMARKTAI_UPLOAD_ROOT", "/var/lib/amarktai-earn/uploads")).resolve()
     target_root = upload_root / "agentgigs" / str(job.id)
@@ -209,10 +213,12 @@ def ingest_agentgigs_assets(
 
 def sync_awarded_agentgigs_assets(adapter: AgentGigsAdapter, limit: int = 100) -> dict[str, int]:
     totals = {"jobs": 0, "found": 0, "ingested": 0, "existing": 0, "blocked": 0, "failed": 0}
+    configured_cap = max(1, min(int(os.getenv("AGENTGIGS_MAX_ASSET_SYNC_JOBS_PER_CYCLE", "4")), 20))
+    cycle_limit = max(1, min(int(limit), configured_cap))
     jobs = Job.objects.filter(
         marketplace__slug="agentgigs",
         state__in=[Job.State.CLAIMED, Job.State.AWARDED],
-    ).order_by("updated_at")[: max(1, min(int(limit), 200))]
+    ).order_by("updated_at")[:cycle_limit]
     for job in jobs:
         totals["jobs"] += 1
         try:
