@@ -130,6 +130,7 @@ class AgentGigsAssetIntegrationTests(TestCase):
             with patch.dict(os.environ, {
                 "AMARKTAI_UPLOAD_ROOT": str(uploads),
                 "AMARKTAI_JOB_ROOT": str(jobs),
+                "AGENTGIGS_MAX_ASSET_SYNC_JOBS_PER_CYCLE": "4",
             }, clear=False), patch("control.services.agentgigs_assets._download_signed_asset", side_effect=fetcher):
                 result = sync_awarded_agentgigs_assets(WatcherAdapter(), limit=10)
 
@@ -139,23 +140,86 @@ class AgentGigsAssetIntegrationTests(TestCase):
         self.assertEqual(asset.status, JobAsset.Status.VERIFIED)
         self.assertEqual(asset.source, "agentgigs_message_attachment")
 
-    def test_unsupported_or_oversized_sources_are_blocked_without_fetch(self):
+    def test_multiple_source_candidates_block_before_any_download(self):
         adapter = FakeAssetAdapter()
-        job = self._job("asset-job-2")
+        job = self._job("asset-job-multiple")
         messages = [
             {
-                "id": "pdf-1",
-                "attachment_name": "brief.pdf",
-                "attachment_url": "https://files.example.test/brief.pdf",
-                "attachment_size": 100,
+                "id": "source-one",
+                "attachment_name": "one.json",
+                "attachment_url": "https://files.example.test/one.json",
+                "attachment_size": 10,
             },
             {
-                "id": "json-big",
-                "attachment_name": "huge.json",
-                "attachment_url": "https://files.example.test/huge.json",
-                "attachment_size": 2048,
+                "id": "source-two",
+                "attachment_name": "two.csv",
+                "attachment_url": "https://files.example.test/two.csv",
+                "attachment_size": 10,
             },
         ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            uploads = root / "uploads"
+            jobs = root / "jobs"
+            uploads.mkdir(); jobs.mkdir()
+            with patch.dict(os.environ, {
+                "AMARKTAI_UPLOAD_ROOT": str(uploads),
+                "AMARKTAI_JOB_ROOT": str(jobs),
+            }, clear=False):
+                result = ingest_agentgigs_assets(
+                    job,
+                    adapter,
+                    details={"job": {}},
+                    messages=messages,
+                    fetcher=lambda *_: (_ for _ in ()).throw(AssertionError("multiple sources must not download")),
+                )
+        self.assertEqual(result["blocked"], 2)
+        self.assertEqual(JobAsset.objects.filter(job=job, status=JobAsset.Status.VERIFIED).count(), 0)
+        plan = plan_awarded_job(job.id)
+        self.assertEqual(plan.status, WorkPlan.Status.BLOCKED)
+        self.assertIn("INPUT_ASSET_NOT_STAGED", plan.reason_codes)
+
+    def test_unsupported_source_is_blocked_without_fetch(self):
+        adapter = FakeAssetAdapter()
+        job = self._job("asset-job-pdf")
+        messages = [{
+            "id": "pdf-1",
+            "attachment_name": "brief.pdf",
+            "attachment_url": "https://files.example.test/brief.pdf",
+            "attachment_size": 100,
+        }]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            uploads = root / "uploads"
+            jobs = root / "jobs"
+            uploads.mkdir(); jobs.mkdir()
+            with patch.dict(os.environ, {
+                "AMARKTAI_UPLOAD_ROOT": str(uploads),
+                "AMARKTAI_JOB_ROOT": str(jobs),
+            }, clear=False):
+                result = ingest_agentgigs_assets(
+                    job,
+                    adapter,
+                    details={"job": {}},
+                    messages=messages,
+                    fetcher=lambda *_: (_ for _ in ()).throw(AssertionError("unsupported source must not download")),
+                )
+        self.assertEqual(result["blocked"], 1)
+        asset = JobAsset.objects.get(job=job)
+        self.assertEqual(asset.status, JobAsset.Status.BLOCKED)
+        plan = plan_awarded_job(job.id)
+        self.assertEqual(plan.status, WorkPlan.Status.BLOCKED)
+        self.assertIn("INPUT_ASSET_NOT_STAGED", plan.reason_codes)
+
+    def test_oversized_supported_source_is_blocked_without_fetch(self):
+        adapter = FakeAssetAdapter()
+        job = self._job("asset-job-big-json")
+        messages = [{
+            "id": "json-big",
+            "attachment_name": "huge.json",
+            "attachment_url": "https://files.example.test/huge.json",
+            "attachment_size": 2048,
+        }]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             uploads = root / "uploads"
@@ -171,10 +235,11 @@ class AgentGigsAssetIntegrationTests(TestCase):
                     adapter,
                     details={"job": {}},
                     messages=messages,
-                    fetcher=lambda *_: (_ for _ in ()).throw(AssertionError("blocked sources must not download")),
+                    fetcher=lambda *_: (_ for _ in ()).throw(AssertionError("oversized source must not download")),
                 )
-        self.assertEqual(result["blocked"], 2)
-        self.assertEqual(JobAsset.objects.filter(job=job, status=JobAsset.Status.BLOCKED).count(), 2)
+        self.assertEqual(result["blocked"], 1)
+        asset = JobAsset.objects.get(job=job)
+        self.assertEqual(asset.status, JobAsset.Status.BLOCKED)
         plan = plan_awarded_job(job.id)
         self.assertEqual(plan.status, WorkPlan.Status.BLOCKED)
         self.assertIn("INPUT_ASSET_NOT_STAGED", plan.reason_codes)
