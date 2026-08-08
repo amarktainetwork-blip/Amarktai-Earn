@@ -102,7 +102,7 @@ class Phase8BAgentIntegrationTests(TestCase):
 
     def test_transcription_plans_executes_qa_and_is_visible(self):
         job = self._job("transcript-1", "Transcribe this audio", "Transcribe the attached audio accurately.")
-        self._stage(job, "audio.mp3", b"not-real-audio-ci-boundary")
+        self._stage(job, "audio.mp3", b"ID3\x04\x00\x00\x00\x00\x00\x00")
         plan = plan_awarded_job(job.id)
         self.assertEqual((plan.worker_class, plan.operation, plan.status), ("transcription", "transcribe_media", WorkPlan.Status.READY))
         fake_call = SimpleNamespace(model="mock-transcription-model")

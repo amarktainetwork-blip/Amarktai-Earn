@@ -6,6 +6,7 @@ from typing import Any, Callable
 from urllib.parse import urljoin
 
 import requests
+from django.db.models import Sum
 from control.models import AuditEvent, Job
 from markets.agentgigs.assets import (
     DEFAULT_MAX_SOURCE_BYTES,
@@ -19,7 +20,8 @@ from markets.agentgigs.assets import (
 )
 from markets.agentgigs.client import AgentGigsAdapter, AgentGigsError
 from planning.models import JobAsset
-from planning.services import stage_local_job_asset
+from planning.asset_policy import AssetPolicyError, validate_role
+from planning.services import rebuild_asset_manifest, stage_local_job_asset
 
 
 class AssetIngestionError(RuntimeError):
@@ -90,6 +92,7 @@ def _blocked_asset(job: Job, ref: RemoteAssetRef, error_code: str) -> JobAsset:
         job=job,
         external_id=ref.external_id,
         defaults={
+            "semantic_role": "other-approved",
             "source": f"agentgigs_{ref.source_kind}"[:40],
             "name": safe_filename(ref.name, ref.external_id),
             "path": "",
@@ -99,6 +102,7 @@ def _blocked_asset(job: Job, ref: RemoteAssetRef, error_code: str) -> JobAsset:
             "mime_type": ref.mime_type[:120],
             "status": JobAsset.Status.BLOCKED,
             "verified_at": None,
+            "metadata": {"reason_codes": [error_code]},
         },
     )
     AuditEvent.objects.create(
@@ -112,7 +116,21 @@ def _blocked_asset(job: Job, ref: RemoteAssetRef, error_code: str) -> JobAsset:
             "error_code": error_code,
         },
     )
+    rebuild_asset_manifest(job)
     return asset
+
+
+def _asset_role(job: Job, ref: RemoteAssetRef, total_refs: int) -> str:
+    if ref.semantic_role:
+        return validate_role(ref.semantic_role)
+    payload = job.normalized_payload if isinstance(job.normalized_payload, dict) else {}
+    mapping = payload.get("asset_roles") if isinstance(payload.get("asset_roles"), dict) else {}
+    for key in (ref.external_id, ref.name):
+        if key in mapping:
+            return validate_role(str(mapping[key]))
+    if total_refs == 1:
+        return "source"
+    raise AssetPolicyError("ASSET_ROLE_AMBIGUOUS")
 
 
 def ingest_agentgigs_assets(
@@ -140,18 +158,32 @@ def ingest_agentgigs_assets(
         messages = adapter.get_messages(opportunity)
 
     refs = extract_source_asset_refs(details, messages)
-    if len(refs) > 1:
+    maximum_files = max(1, int(os.getenv("JOB_ASSET_MAX_FILES", "12")))
+    maximum_total = max(1, int(os.getenv("JOB_ASSET_MAX_TOTAL_BYTES", str(250 * 1024 * 1024))))
+    if len(refs) > maximum_files:
         for ref in refs:
-            _blocked_asset(job, ref, "MULTIPLE_SOURCE_ASSETS_NOT_SUPPORTED")
+            _blocked_asset(job, ref, "ASSET_FILE_COUNT_LIMIT")
+        return {"found": len(refs), "ingested": 0, "existing": 0, "blocked": len(refs), "failed": 0}
+    declared_total = sum(ref.size_bytes for ref in refs)
+    if declared_total and declared_total > maximum_total:
+        for ref in refs:
+            _blocked_asset(job, ref, "ASSET_TOTAL_BYTES_LIMIT")
         return {"found": len(refs), "ingested": 0, "existing": 0, "blocked": len(refs), "failed": 0}
     maximum = max(1, int(os.getenv("AGENTGIGS_MAX_SOURCE_ASSET_BYTES", str(DEFAULT_MAX_SOURCE_BYTES))))
     upload_root = Path(os.getenv("AMARKTAI_UPLOAD_ROOT", "/var/lib/amarktai-earn/uploads")).resolve()
     target_root = upload_root / "agentgigs" / str(job.id)
     fetch = fetcher or _download_signed_asset
     ingested = existing = blocked = failed = 0
+    current_total = JobAsset.objects.filter(job=job, status=JobAsset.Status.VERIFIED, duplicate_of=None).aggregate(total=Sum("size_bytes"))["total"] or 0
 
     for ref in refs:
         filename = safe_filename(ref.name, ref.external_id)
+        try:
+            role = _asset_role(job, ref, len(refs))
+        except AssetPolicyError as exc:
+            _blocked_asset(job, ref, exc.code)
+            blocked += 1
+            continue
         current = JobAsset.objects.filter(job=job, external_id=ref.external_id).first()
         if current and current.status == JobAsset.Status.VERIFIED and current.path:
             current_path = Path(current.path)
@@ -166,11 +198,16 @@ def ingest_agentgigs_assets(
             _blocked_asset(job, ref, "SOURCE_FILE_TOO_LARGE")
             blocked += 1
             continue
+        remaining = maximum_total - current_total
+        if remaining <= 0 or (ref.size_bytes and ref.size_bytes > remaining):
+            _blocked_asset(job, ref, "ASSET_TOTAL_BYTES_LIMIT")
+            blocked += 1
+            continue
         target = (target_root / f"{ref.external_id.rsplit(':', 1)[-1][:12]}-{filename}").resolve()
         try:
             if target_root.resolve() not in target.parents:
                 raise AssetIngestionError("remote asset target escaped upload root")
-            actual_size, content_type = fetch(ref, target, maximum)
+            actual_size, content_type = fetch(ref, target, min(maximum, remaining))
             if ref.size_bytes and actual_size != ref.size_bytes:
                 target.unlink(missing_ok=True)
                 _blocked_asset(job, ref, "SOURCE_SIZE_MISMATCH")
@@ -181,10 +218,9 @@ def ingest_agentgigs_assets(
                 path=str(target),
                 source=f"agentgigs_{ref.source_kind}"[:40],
                 external_id=ref.external_id,
+                semantic_role=role,
+                declared_mime_type=content_type,
             )
-            if content_type:
-                asset.mime_type = content_type[:120]
-                asset.save(update_fields=["mime_type", "updated_at"])
             AuditEvent.objects.create(
                 event_type="job.asset_ingested",
                 actor="agentgigs-asset-ingestor",
@@ -197,6 +233,7 @@ def ingest_agentgigs_assets(
                 },
             )
             ingested += 1
+            current_total += actual_size
         except (AgentGigsError, AssetIngestionError, RemoteAssetSafetyError, OSError, ValueError):
             target.unlink(missing_ok=True)
             _blocked_asset(job, ref, "SOURCE_DOWNLOAD_FAILED")

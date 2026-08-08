@@ -11,6 +11,7 @@ class Command(BaseCommand):
         parser.add_argument("--path", required=True)
         parser.add_argument("--source", default="upload")
         parser.add_argument("--external-id", default="")
+        parser.add_argument("--role", default="source")
 
     def handle(self, *args, **options):
         try:
@@ -19,6 +20,7 @@ class Command(BaseCommand):
                 path=options["path"],
                 source=options["source"],
                 external_id=options["external_id"],
+                semantic_role=options["role"],
             )
         except (PlanningError, ValueError) as exc:
             raise CommandError(str(exc)) from exc

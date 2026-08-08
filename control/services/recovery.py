@@ -24,7 +24,7 @@ from control.models import (
     WebhookEvent,
     Worker,
 )
-from planning.models import RepositorySnapshot, WorkPlan
+from planning.models import RepositorySnapshot, WorkPlan, WorkPlanStep
 
 
 def heartbeat(service: str, *, details: dict[str, Any] | None = None) -> ServiceHeartbeat:
@@ -117,7 +117,19 @@ def recover_persistent_state(*, now=None) -> dict[str, int]:
                 Worker.objects.filter(pk=locked.worker_id).update(status="OFFLINE", current_job=None)
             plan = WorkPlan.objects.select_for_update().filter(job_id=locked.job_id).first()
             if plan:
+                step = WorkPlanStep.objects.select_for_update().filter(plan=plan, execution=locked).first()
+                if step and step.status == WorkPlanStep.Status.EXECUTING:
+                    if step.repair_attempts < step.max_repair_attempts:
+                        step.status = WorkPlanStep.Status.NEEDS_REPAIR
+                        step.reason_codes = ["RECOVERED_STALE_STEP_EXECUTION"]
+                    else:
+                        step.status = WorkPlanStep.Status.BLOCKED
+                        step.reason_codes = ["COMPOSITE_STEP_REPAIR_LIMIT"]
+                    step.repair_history = [*step.repair_history, {"attempt": step.attempt, "reason_codes": ["STALE_EXECUTION_RECOVERED"]}]
+                    step.save(update_fields=["status", "reason_codes", "repair_history", "updated_at"])
                 next_status, reasons = _safe_plan_state(plan)
+                if step and step.status == WorkPlanStep.Status.BLOCKED:
+                    next_status, reasons = WorkPlan.Status.BLOCKED, ["COMPOSITE_STEP_REPAIR_LIMIT"]
                 plan.status = next_status
                 plan.reason_codes = reasons
                 plan.last_error_code = "STALE_EXECUTION_RECOVERED"
@@ -130,6 +142,14 @@ def recover_persistent_state(*, now=None) -> dict[str, int]:
             continue
         key = f"plan-stale:{plan.id}:{plan.updated_at.isoformat()}"
         next_status, reasons = _safe_plan_state(plan)
+        if plan.is_composite:
+            step = plan.steps.filter(status=WorkPlanStep.Status.EXECUTING).order_by("sequence").first()
+            if step:
+                step.status = WorkPlanStep.Status.NEEDS_REPAIR if step.repair_attempts < step.max_repair_attempts else WorkPlanStep.Status.BLOCKED
+                step.reason_codes = ["RECOVERED_MISSING_STEP_EXECUTION"] if step.status == WorkPlanStep.Status.NEEDS_REPAIR else ["COMPOSITE_STEP_REPAIR_LIMIT"]
+                step.save(update_fields=["status", "reason_codes", "updated_at"])
+                if step.status == WorkPlanStep.Status.BLOCKED:
+                    next_status, reasons = WorkPlan.Status.BLOCKED, ["COMPOSITE_STEP_REPAIR_LIMIT"]
         WorkPlan.objects.filter(pk=plan.pk).update(status=next_status, reason_codes=reasons, last_error_code="OWNER_EXECUTION_MISSING")
         results["plans"] += int(_record(key=key, target_type="WorkPlan", target_id=str(plan.id), action="RECONCILE_MISSING_EXECUTION", outcome="RECOVERED" if next_status != WorkPlan.Status.BLOCKED else "BLOCKED", reason="QUEUE_OWNER_MISSING"))
 

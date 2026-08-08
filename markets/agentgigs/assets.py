@@ -22,10 +22,11 @@ class RemoteAssetRef:
     size_bytes: int = 0
     mime_type: str = ""
     source_kind: str = "job_attachment"
+    semantic_role: str = ""
 
 
 SUPPORTED_SOURCE_SUFFIXES = {
-    ".json", ".csv", ".pdf", ".docx", ".txt", ".md",
+    ".json", ".csv", ".xlsx", ".pdf", ".docx", ".pptx", ".txt", ".md", ".html", ".htm",
     ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm",
 }
 DEFAULT_MAX_SOURCE_BYTES = 25 * 1024 * 1024
@@ -62,6 +63,7 @@ def _row_to_ref(row: dict[str, Any], *, source_kind: str, message_id: str = "") 
         size_bytes=positive_int(row.get("file_size") or row.get("attachment_size") or row.get("size")),
         mime_type=str(row.get("mime_type") or row.get("content_type") or "").strip(),
         source_kind=source_kind,
+        semantic_role=str(row.get("semantic_role") or row.get("role") or "").strip(),
     )
 
 

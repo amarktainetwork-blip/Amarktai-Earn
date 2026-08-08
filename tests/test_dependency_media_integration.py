@@ -209,6 +209,6 @@ class MediaWorkerIntegrationTests(TestCase):
                 if suffix == ".png":
                     Image.new("RGB", (1600, 900), "purple").save(source)
                 else:
-                    source.write_bytes(b"staged-media-placeholder")
+                    source.write_bytes(b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2")
                 stage_local_job_asset(job_id=job.id, path=str(source))
                 self.assertEqual(plan_awarded_job(job.id).operation, operation)
