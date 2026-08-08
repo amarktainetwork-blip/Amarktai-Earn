@@ -97,6 +97,7 @@ services:
     command: sh -lc 'python manage.py production_check && if [ "$$AGENTGIGS_WATCHER_ENABLED" = "1" ]; then exec python manage.py run_agentgigs_watcher; else exec sleep infinity; fi'
     volumes:
       - job_data:/var/lib/amarktai-earn/jobs
+      - repo_cache:/var/lib/amarktai-earn/repos
       - uploads:/var/lib/amarktai-earn/uploads
       - logs:/var/lib/amarktai-earn/logs
     depends_on:
@@ -107,6 +108,47 @@ services:
       redis:
         condition: service_healthy
     networks: [internal]
+
+  genx-proxy:
+    build: .
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    env_file: .env
+    command: sh -lc 'python manage.py production_check && exec python manage.py run_sandbox_genx_proxy'
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [internal, sandbox_llm]
+
+  sandbox-broker:
+    build:
+      context: .
+      dockerfile: sandbox/broker.Dockerfile
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    env_file: .env
+    group_add:
+      - "${DOCKER_GID:-999}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+
+  sandbox-agent-image:
+    image: amarktai-earn-sandbox:phase8c
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile
+    profiles: ["sandbox-build"]
+    command: ["/bin/true"]
+    networks: [sandbox_llm]
 
   postgres:
     image: postgres:17-alpine
@@ -140,6 +182,9 @@ services:
 networks:
   edge: {}
   internal: {}
+  sandbox_llm:
+    name: amarktai_sandbox_llm
+    internal: true
 
 volumes:
   postgres_data: {}
@@ -148,7 +193,8 @@ volumes:
   caddy_config: {}
   artifacts: {}
   job_data: {}
-  repo_cache: {}
+  repo_cache:
+    name: amarktai_repo_cache
   app_cache: {}
   backups: {}
   logs: {}

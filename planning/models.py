@@ -63,3 +63,24 @@ class WorkPlan(Timestamped):
     last_error_code = models.CharField(max_length=120, blank=True)
     last_queued_at = models.DateTimeField(null=True, blank=True)
     submitted_at = models.DateTimeField(null=True, blank=True)
+
+
+class RepositorySnapshot(Timestamped):
+    class Status(models.TextChoices):
+        STAGED = "STAGED"
+        VERIFIED = "VERIFIED"
+        BLOCKED = "BLOCKED"
+
+    job = models.OneToOneField("control.Job", on_delete=models.CASCADE, related_name="repository_snapshot")
+    provider = models.CharField(max_length=40, default="github")
+    repository_url = models.URLField()
+    owner = models.CharField(max_length=120)
+    repository = models.CharField(max_length=120)
+    ref = models.CharField(max_length=255, blank=True)
+    commit_sha = models.CharField(max_length=64, blank=True)
+    path = models.CharField(max_length=700, blank=True)
+    file_count = models.PositiveIntegerField(default=0)
+    total_bytes = models.PositiveBigIntegerField(default=0)
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.STAGED)
+    error_code = models.CharField(max_length=120, blank=True)
+    verified_at = models.DateTimeField(null=True, blank=True)

@@ -54,6 +54,15 @@ def _validated_inputs(inputs: dict, workspace_root: Path, upload_root: Path) -> 
         if not source_path.is_file():
             raise ExecutionError("input source file does not exist")
         clean["source"] = str(source_path)
+    repository = clean.get("repository_path")
+    if repository:
+        repo_root = Path(os.getenv("AMARKTAI_REPO_ROOT", "/var/lib/amarktai-earn/repos")).resolve()
+        repo_path = Path(str(repository)).resolve()
+        if not _inside(repo_path, repo_root):
+            raise ExecutionError("repository snapshot is outside approved repository storage")
+        if not repo_path.is_dir():
+            raise ExecutionError("repository snapshot directory does not exist")
+        clean["repository_path"] = str(repo_path)
     return clean
 
 

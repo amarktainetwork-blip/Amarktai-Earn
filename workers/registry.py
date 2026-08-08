@@ -75,6 +75,36 @@ _SPECS: tuple[WorkerSpec, ...] = (
         input_suffixes=(".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm"),
         requires_genx=True,
     ),
+    WorkerSpec(
+        worker_class="code_small",
+        version="1.0.0",
+        factory="workers.coding.aider_worker.AiderCodingWorker",
+        operations=("code_change_small",),
+        qa_profile="code_patch",
+        description="Small repository changes executed by Aider inside a disposable constrained sandbox",
+        input_suffixes=(),
+        requires_genx=True,
+    ),
+    WorkerSpec(
+        worker_class="code_heavy",
+        version="1.0.0",
+        factory="workers.coding.openhands_worker.OpenHandsCodingWorker",
+        operations=("code_change_heavy",),
+        qa_profile="code_patch",
+        description="Complex repository changes executed by OpenHands inside a disposable constrained sandbox",
+        input_suffixes=(),
+        requires_genx=True,
+    ),
+    WorkerSpec(
+        worker_class="ci_testing",
+        version="1.0.0",
+        factory="workers.ci_testing.worker.CITestingWorker",
+        operations=("run_repository_tests",),
+        qa_profile="ci",
+        description="Independent repository test execution inside a disposable network-isolated sandbox",
+        input_suffixes=(),
+        requires_genx=False,
+    ),
 )
 
 _BY_CLASS = {spec.worker_class: spec for spec in _SPECS}
