@@ -408,7 +408,7 @@ class GenXGateway:
 
     @transaction.atomic
     def reconcile(self, call_id, payload: dict[str, Any], elapsed_ms: int = 0) -> GenXCall:
-        call = GenXCall.objects.select_for_update().select_related("job").get(pk=call_id)
+        call = GenXCall.objects.select_for_update().get(pk=call_id)
         was_terminal = call.status in {"COMPLETED", "FAILED", "CANCELLED"} and call.completed_at is not None
         status = str(payload.get("status") or "UNKNOWN").upper()
         actual_credits = usage_credits(payload) or Decimal("0")
@@ -448,7 +448,7 @@ class GenXGateway:
             total = effective_reserved_credits(
                 GenXCall.objects.filter(job_id=call.job_id).values_list("credits", "estimated_credits", "status")
             )
-            score = call.job.jobscore
+            score = JobScore.objects.select_for_update().get(job_id=call.job_id)
             if not was_terminal and score.max_genx_credits > 0 and total > score.max_genx_credits:
                 Alert.objects.create(
                     severity="CRITICAL",
