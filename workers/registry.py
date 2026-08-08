@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Iterable
 
 
 class WorkerRegistryError(RuntimeError):
@@ -17,6 +16,8 @@ class WorkerSpec:
     operations: tuple[str, ...]
     qa_profile: str
     description: str
+    input_suffixes: tuple[str, ...] = ()
+    requires_genx: bool = False
 
     def build(self):
         module_name, attr = self.factory.rsplit(".", 1)
@@ -32,6 +33,47 @@ _SPECS: tuple[WorkerSpec, ...] = (
         operations=("json_to_csv", "csv_normalize"),
         qa_profile="csv",
         description="Deterministic JSON/CSV conversion and normalization",
+        input_suffixes=(".json", ".csv"),
+    ),
+    WorkerSpec(
+        worker_class="documents",
+        version="1.0.0",
+        factory="workers.documents.worker.DocumentsWorker",
+        operations=("document_extract_text", "document_summarize", "document_rewrite"),
+        qa_profile="document",
+        description="Document extraction, summarisation and rewrite for PDF/DOCX/TXT/Markdown",
+        input_suffixes=(".pdf", ".docx", ".txt", ".md"),
+        requires_genx=True,
+    ),
+    WorkerSpec(
+        worker_class="research",
+        version="1.0.0",
+        factory="workers.research.worker.ResearchWorker",
+        operations=("research_report",),
+        qa_profile="research",
+        description="Web-assisted research reports with explicit source citations",
+        input_suffixes=(),
+        requires_genx=True,
+    ),
+    WorkerSpec(
+        worker_class="localization",
+        version="1.0.0",
+        factory="workers.localization.worker.LocalizationWorker",
+        operations=("translate_document",),
+        qa_profile="translation",
+        description="Document/text localisation into an explicitly requested target language",
+        input_suffixes=(".pdf", ".docx", ".txt", ".md"),
+        requires_genx=True,
+    ),
+    WorkerSpec(
+        worker_class="transcription",
+        version="1.0.0",
+        factory="workers.transcription.worker.TranscriptionWorker",
+        operations=("transcribe_media",),
+        qa_profile="transcript",
+        description="Audio/video transcription using a live GenX transcription-capable model",
+        input_suffixes=(".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm"),
+        requires_genx=True,
     ),
 )
 
@@ -79,6 +121,8 @@ def registry_manifest() -> list[dict[str, object]]:
             "operations": list(spec.operations),
             "qa_profile": spec.qa_profile,
             "description": spec.description,
+            "input_suffixes": list(spec.input_suffixes),
+            "requires_genx": spec.requires_genx,
         }
         for spec in _SPECS
     ]

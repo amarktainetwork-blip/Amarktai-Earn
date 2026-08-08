@@ -181,11 +181,11 @@ class AgentGigsAssetIntegrationTests(TestCase):
 
     def test_unsupported_source_is_blocked_without_fetch(self):
         adapter = FakeAssetAdapter()
-        job = self._job("asset-job-pdf")
+        job = self._job("asset-job-zip")
         messages = [{
-            "id": "pdf-1",
-            "attachment_name": "brief.pdf",
-            "attachment_url": "https://files.example.test/brief.pdf",
+            "id": "zip-1",
+            "attachment_name": "archive.zip",
+            "attachment_url": "https://files.example.test/archive.zip",
             "attachment_size": 100,
         }]
         with tempfile.TemporaryDirectory() as tmp:

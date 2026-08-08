@@ -3,11 +3,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+
 @dataclass
 class WorkRequest:
     job_id: str
     workspace: Path
     inputs: dict[str, Any]
+    worker_id: str = ""
+    execution_id: int | None = None
+    attempt: int = 1
+
 
 @dataclass
 class WorkResult:
@@ -16,7 +21,9 @@ class WorkResult:
     evidence: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
 
+
 class Worker(ABC):
     worker_class: str
+
     @abstractmethod
     def execute(self, request: WorkRequest) -> WorkResult: ...

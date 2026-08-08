@@ -52,10 +52,13 @@ class AgentGigsAssetContractTests(unittest.TestCase):
         )
         self.assertEqual(refs, [])
 
-    def test_launch_lane_accepts_only_json_and_csv_and_sanitizes_names(self):
-        self.assertTrue(supported_source_name("input.JSON"))
-        self.assertTrue(supported_source_name("input.csv"))
-        self.assertFalse(supported_source_name("instructions.pdf"))
+    def test_source_lane_accepts_only_registered_worker_input_types_and_sanitizes_names(self):
+        for name in ("input.JSON", "input.csv", "instructions.pdf", "brief.docx", "notes.txt", "audio.mp3", "clip.mp4"):
+            with self.subTest(name=name):
+                self.assertTrue(supported_source_name(name))
+        for name in ("archive.zip", "program.exe", "script.sh", "image.png"):
+            with self.subTest(name=name):
+                self.assertFalse(supported_source_name(name))
         self.assertEqual(safe_filename("../../source data.csv", "agentgigs:abc"), "source_data.csv")
 
     def test_watcher_ingests_assets_before_dispatching_awarded_work(self):
@@ -72,7 +75,6 @@ class AgentGigsAssetContractTests(unittest.TestCase):
         ):
             with self.subTest(url=url), self.assertRaises(RemoteAssetSafetyError):
                 assert_public_https_url(url)
-        # Public literal avoids DNS in this deterministic test.
         assert_public_https_url("https://8.8.8.8/file.csv")
 
 
