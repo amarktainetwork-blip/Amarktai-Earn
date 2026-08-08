@@ -15,6 +15,7 @@ from django.views.decorators.http import require_GET, require_POST
 from .jwt_auth import issue_access, issue_refresh, rotate_refresh, revoke_refresh
 from .models import AuditEvent, GenXAccountSnapshot, GenXCall, Job, LoginChallenge, OwnerSecurityProfile, Payout, RecoveryCode, Worker
 from .secrets import decrypt_secret
+from .ops import SECTIONS, snapshot as ops_snapshot
 
 User = get_user_model()
 
@@ -53,9 +54,25 @@ def login_page(request):
     return render(request, "control/login.html")
 
 def overview_page(request):
+    return ops_page(request, "overview")
+
+
+def ops_page(request, section="overview"):
     if not getattr(request, "owner", None):
         return redirect("login")
-    return render(request, "control/overview.html")
+    if section not in SECTIONS:
+        return JsonResponse({"error": "unknown_section"}, status=404)
+    return render(request, "control/operations.html", {"section": section, "sections": SECTIONS})
+
+
+@require_GET
+def ops_api(request, section):
+    if not getattr(request, "owner", None):
+        return JsonResponse({"error": "unauthorized"}, status=401)
+    try:
+        return JsonResponse(ops_snapshot(section, owner=request.owner))
+    except KeyError:
+        return JsonResponse({"error": "unknown_section"}, status=404)
 
 @require_POST
 def password_login(request):

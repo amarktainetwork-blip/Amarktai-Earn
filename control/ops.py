@@ -1,0 +1,381 @@
+from __future__ import annotations
+
+import os
+import shutil
+from datetime import timedelta
+from decimal import Decimal
+from pathlib import Path
+
+from django.db.models import Count, Q, Sum
+from django.utils import timezone
+
+from planning.models import WorkPlan
+from workers.registry import registry_manifest
+from .models import (
+    Alert,
+    Artifact,
+    AuditEvent,
+    Execution,
+    GenXAccountSnapshot,
+    GenXCall,
+    Job,
+    LedgerEntry,
+    Marketplace,
+    ModelStat,
+    Node,
+    OwnerSecurityProfile,
+    Payout,
+    QAResult,
+    RecoveryCode,
+    RefreshSession,
+    SystemSetting,
+    TreasuryBalance,
+    Worker,
+)
+
+SECTIONS = (
+    "overview",
+    "live-work",
+    "agents",
+    "markets",
+    "earnings",
+    "treasury",
+    "genx",
+    "nodes",
+    "storage",
+    "performance",
+    "logs",
+    "alerts",
+    "settings",
+    "security",
+)
+
+
+def _dt(value):
+    return value.isoformat() if value else None
+
+
+def _dec(value):
+    if value is None:
+        return None
+    return str(value)
+
+
+def _disk_row(label: str, path: str) -> dict:
+    candidate = Path(path)
+    try:
+        usage = shutil.disk_usage(candidate if candidate.exists() else candidate.parent)
+        percent = 0 if usage.total <= 0 else round((usage.used / usage.total) * 100, 2)
+        return {
+            "name": label,
+            "path": str(candidate),
+            "total_bytes": usage.total,
+            "used_bytes": usage.used,
+            "free_bytes": usage.free,
+            "used_percent": percent,
+            "status": "CRITICAL" if percent >= 90 else "WARNING" if percent >= 80 else "OK",
+        }
+    except OSError as exc:
+        return {"name": label, "path": str(candidate), "status": "UNAVAILABLE", "error": exc.__class__.__name__}
+
+
+def overview_snapshot() -> dict:
+    today = timezone.localdate()
+    earned = Payout.objects.filter(
+        state__in=[Payout.State.EARNED, Payout.State.PAYOUT_PENDING, Payout.State.SETTLED],
+        earned_at__date=today,
+    ).aggregate(v=Sum("net"))["v"] or Decimal("0")
+    settled = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__date=today).aggregate(v=Sum("net"))["v"] or Decimal("0")
+    pending = Payout.objects.filter(state=Payout.State.PAYOUT_PENDING).aggregate(v=Sum("net"))["v"] or Decimal("0")
+    genx_used = GenXCall.objects.filter(created_at__date=today).aggregate(v=Sum("credits"))["v"] or Decimal("0")
+    latest_genx = GenXAccountSnapshot.objects.order_by("-created_at").first()
+    open_alerts = Alert.objects.filter(status="OPEN").count()
+    return {
+        "section": "overview",
+        "cards": [
+            {"label": "NET EARNED TODAY", "value": f"${earned}", "truth": "accepted/pending/settled earnings"},
+            {"label": "SETTLED TODAY", "value": f"${settled}", "truth": "received cash only"},
+            {"label": "PENDING PAYOUT", "value": f"${pending}", "truth": "not received cash"},
+            {"label": "ACTIVE PAID JOBS", "value": Job.objects.filter(state__in=[Job.State.CLAIMED, Job.State.AWARDED, Job.State.EXECUTING]).count()},
+            {"label": "ACTIVE AGENTS", "value": Worker.objects.exclude(status__in=["OFFLINE", "READY"]).count()},
+            {"label": "OPEN ALERTS", "value": open_alerts},
+            {"label": "GENX BALANCE", "value": "—" if not latest_genx or latest_genx.available_credits is None else f"{latest_genx.available_credits} cr"},
+            {"label": "GENX USED TODAY", "value": f"{genx_used} cr"},
+        ],
+        "meta": {
+            "autonomous_mode": os.getenv("AUTONOMOUS_MODE", "OFF"),
+            "registered_workers": len(registry_manifest()),
+            "revenue_truth": "Expected opportunity values are never earnings. Accepted/pending values are not cash. Only SETTLED is received cash.",
+        },
+    }
+
+
+def live_work_snapshot(limit: int = 100) -> dict:
+    jobs = Job.objects.select_related("marketplace").order_by("-updated_at")[:limit]
+    rows = []
+    for job in jobs:
+        execution = job.executions.select_related("worker").order_by("-attempt").first()
+        try:
+            plan = job.work_plan
+        except WorkPlan.DoesNotExist:
+            plan = None
+        latest_qa = QAResult.objects.filter(job=job).order_by("-created_at").first()
+        rows.append({
+            "job": str(job.id),
+            "market": job.marketplace.slug,
+            "title": job.title,
+            "task_class": job.task_class,
+            "state": job.state,
+            "reward": f"{job.currency} {job.reward}",
+            "plan": plan.status if plan else "—",
+            "worker": execution.worker.worker_class if execution and execution.worker else "—",
+            "worker_id": execution.worker_id if execution else None,
+            "execution": execution.status if execution else "—",
+            "attempt": execution.attempt if execution else None,
+            "qa": "PASS" if latest_qa and latest_qa.passed else "FAIL" if latest_qa else "—",
+            "artifacts": Artifact.objects.filter(job=job).count(),
+            "deadline": _dt(job.deadline),
+            "updated": _dt(job.updated_at),
+        })
+    return {"section": "live-work", "rows": rows}
+
+
+def agents_snapshot() -> dict:
+    runtime = {row.id: row for row in Worker.objects.select_related("current_job").order_by("worker_class", "id")}
+    manifest = registry_manifest()
+    rows = []
+    for spec in manifest:
+        matching = [worker for worker in runtime.values() if worker.worker_class == spec["worker_class"]]
+        if not matching:
+            rows.append({**spec, "id": "not-started", "status": "OFFLINE", "node": "—", "current_job": None, "last_heartbeat": None})
+        for worker in matching:
+            rows.append({
+                **spec,
+                "id": worker.id,
+                "version": worker.version,
+                "status": worker.status,
+                "node": worker.node,
+                "current_job": str(worker.current_job_id) if worker.current_job_id else None,
+                "last_heartbeat": _dt(worker.last_heartbeat),
+            })
+    unknown = [worker for worker in runtime.values() if worker.worker_class not in {spec["worker_class"] for spec in manifest}]
+    for worker in unknown:
+        rows.append({
+            "worker_class": worker.worker_class,
+            "version": worker.version,
+            "operations": [],
+            "qa_profile": "UNKNOWN",
+            "description": "Runtime worker not present in current registry",
+            "id": worker.id,
+            "status": worker.status,
+            "node": worker.node,
+            "current_job": str(worker.current_job_id) if worker.current_job_id else None,
+            "last_heartbeat": _dt(worker.last_heartbeat),
+        })
+    return {"section": "agents", "rows": rows, "meta": {"registry_count": len(manifest), "runtime_count": len(runtime)}}
+
+
+def markets_snapshot() -> dict:
+    rows = []
+    for market in Marketplace.objects.order_by("slug"):
+        try:
+            health = market.health_snapshot
+        except Exception:
+            health = None
+        rows.append({
+            "market": market.slug,
+            "status": market.status,
+            "enabled": market.enabled,
+            "payout_ready": market.payout_ready,
+            "south_africa_verified": market.south_africa_verified,
+            "fee_rate": _dec(market.fee_rate),
+            "api": health.api_ok if health else None,
+            "auth": health.auth_ok if health else None,
+            "payout": health.payout_ok if health else None,
+            "supply": health.supply_ok if health else None,
+            "last_error": health.last_error_code if health else "",
+            "checked": _dt(health.checked_at) if health else None,
+        })
+    return {"section": "markets", "rows": rows}
+
+
+def earnings_snapshot(limit: int = 100) -> dict:
+    rows = [{
+        "job": str(row.job_id),
+        "state": row.state,
+        "gross": f"{row.currency} {row.gross}",
+        "fee": f"{row.currency} {row.fee}",
+        "net": f"{row.currency} {row.net}",
+        "earned": _dt(row.earned_at),
+        "pending": _dt(row.pending_at),
+        "settled": _dt(row.settled_at),
+        "reference": row.external_reference,
+    } for row in Payout.objects.order_by("-updated_at")[:limit]]
+    return {"section": "earnings", "rows": rows}
+
+
+def treasury_snapshot(limit: int = 100) -> dict:
+    balances = [{
+        "account": row.account,
+        "market": row.marketplace.slug if row.marketplace else "global",
+        "currency": row.currency,
+        "earned": _dec(row.earned),
+        "pending": _dec(row.pending),
+        "settled": _dec(row.settled),
+    } for row in TreasuryBalance.objects.select_related("marketplace").order_by("account", "currency")]
+    ledger = [{
+        "created": _dt(row.created_at),
+        "event": row.event_type,
+        "reference": row.reference,
+        "account": row.account,
+        "counter_account": row.counter_account,
+        "amount": f"{row.currency} {row.amount}",
+    } for row in LedgerEntry.objects.order_by("-created_at")[:limit]]
+    return {"section": "treasury", "rows": balances, "secondary_rows": ledger}
+
+
+def genx_snapshot(limit: int = 100) -> dict:
+    latest = GenXAccountSnapshot.objects.order_by("-created_at").first()
+    rows = [{
+        "created": _dt(row.created_at),
+        "job": str(row.job_id) if row.job_id else None,
+        "worker": row.worker_id,
+        "model": row.model,
+        "task_class": row.task_class,
+        "status": row.status,
+        "estimated_credits": _dec(row.estimated_credits),
+        "credits": _dec(row.credits),
+        "latency_ms": row.latency_ms,
+        "error": row.error_code,
+    } for row in GenXCall.objects.order_by("-created_at")[:limit]]
+    return {"section": "genx", "rows": rows, "meta": {"available_credits": _dec(latest.available_credits) if latest else None, "snapshot_at": _dt(latest.created_at) if latest else None}}
+
+
+def nodes_snapshot() -> dict:
+    rows = [{
+        "node": row.id,
+        "hostname": row.hostname,
+        "release": row.release_version,
+        "role": row.role_profile,
+        "health": row.health,
+        "cpu_percent": _dec(row.cpu_percent),
+        "ram_percent": _dec(row.ram_percent),
+        "disk_percent": _dec(row.disk_percent),
+        "last_heartbeat": _dt(row.last_heartbeat),
+    } for row in Node.objects.order_by("id")]
+    return {"section": "nodes", "rows": rows}
+
+
+def storage_snapshot() -> dict:
+    rows = [
+        _disk_row("Jobs", os.getenv("AMARKTAI_JOB_ROOT", "/var/lib/amarktai-earn/jobs")),
+        _disk_row("Uploads", os.getenv("AMARKTAI_UPLOAD_ROOT", "/var/lib/amarktai-earn/uploads")),
+        _disk_row("Artifacts", "/var/lib/amarktai-earn/artifacts"),
+        _disk_row("Backups", "/var/lib/amarktai-earn/backups"),
+    ]
+    return {"section": "storage", "rows": rows}
+
+
+def performance_snapshot() -> dict:
+    since = timezone.now() - timedelta(days=7)
+    executions = Execution.objects.filter(created_at__gte=since)
+    qa = QAResult.objects.filter(created_at__gte=since)
+    grouped = list(executions.values("worker__worker_class", "status").annotate(count=Count("id")).order_by("worker__worker_class", "status"))
+    qa_total = qa.count()
+    qa_pass = qa.filter(passed=True).count()
+    models = [{
+        "model": row.model,
+        "task_class": row.task_class,
+        "attempts": row.attempts,
+        "accepted": row.accepted,
+        "credits": _dec(row.credits),
+        "profit": _dec(row.profit),
+        "avg_latency_ms": 0 if not row.attempts else round(row.total_latency_ms / row.attempts),
+    } for row in ModelStat.objects.order_by("-attempts")[:50]]
+    return {
+        "section": "performance",
+        "rows": [{"worker_class": row["worker__worker_class"] or "unassigned", "status": row["status"], "count": row["count"]} for row in grouped],
+        "secondary_rows": models,
+        "meta": {"window": "7d", "qa_total": qa_total, "qa_pass": qa_pass, "qa_pass_rate": None if qa_total == 0 else round((qa_pass / qa_total) * 100, 2)},
+    }
+
+
+def logs_snapshot(limit: int = 200) -> dict:
+    rows = [{
+        "created": _dt(row.created_at),
+        "severity": row.severity,
+        "event": row.event_type,
+        "actor": row.actor,
+        "correlation": str(row.correlation_id),
+        "metadata": row.metadata,
+    } for row in AuditEvent.objects.order_by("-created_at")[:limit]]
+    return {"section": "logs", "rows": rows}
+
+
+def alerts_snapshot(limit: int = 200) -> dict:
+    rows = [{
+        "created": _dt(row.created_at),
+        "severity": row.severity,
+        "type": row.alert_type,
+        "status": row.status,
+        "message": row.message,
+        "acknowledged": _dt(row.acknowledged_at),
+        "resolved": _dt(row.resolved_at),
+    } for row in Alert.objects.order_by("-created_at")[:limit]]
+    return {"section": "alerts", "rows": rows}
+
+
+def settings_snapshot() -> dict:
+    rows = []
+    for row in SystemSetting.objects.order_by("key"):
+        rows.append({
+            "key": row.key,
+            "value": "CONFIGURED — HIDDEN" if row.sensitive else row.value,
+            "sensitive": row.sensitive,
+            "updated": _dt(row.updated_at),
+        })
+    return {"section": "settings", "rows": rows, "meta": {"autonomous_mode": os.getenv("AUTONOMOUS_MODE", "OFF")}}
+
+
+def security_snapshot(owner) -> dict:
+    profile = OwnerSecurityProfile.objects.filter(user=owner).first()
+    now = timezone.now()
+    active_refresh = RefreshSession.objects.filter(user=owner, revoked_at__isnull=True, expires_at__gt=now).count()
+    recovery_remaining = RecoveryCode.objects.filter(user=owner, used_at__isnull=True).count()
+    rows = [{
+        "created": _dt(row.created_at),
+        "severity": row.severity,
+        "event": row.event_type,
+        "actor": row.actor,
+    } for row in AuditEvent.objects.filter(Q(event_type__startswith="auth.") | Q(event_type__startswith="security.")).order_by("-created_at")[:100]]
+    return {
+        "section": "security",
+        "cards": [
+            {"label": "TOTP", "value": "ENROLLED" if profile and profile.totp_confirmed_at else "NOT ENROLLED"},
+            {"label": "SECURITY VERSION", "value": profile.security_version if profile else 0},
+            {"label": "ACTIVE REFRESH SESSIONS", "value": active_refresh},
+            {"label": "RECOVERY CODES REMAINING", "value": recovery_remaining},
+        ],
+        "rows": rows,
+    }
+
+
+def snapshot(section: str, owner=None) -> dict:
+    section = section.strip().lower()
+    if section not in SECTIONS:
+        raise KeyError(section)
+    if section == "overview": return overview_snapshot()
+    if section == "live-work": return live_work_snapshot()
+    if section == "agents": return agents_snapshot()
+    if section == "markets": return markets_snapshot()
+    if section == "earnings": return earnings_snapshot()
+    if section == "treasury": return treasury_snapshot()
+    if section == "genx": return genx_snapshot()
+    if section == "nodes": return nodes_snapshot()
+    if section == "storage": return storage_snapshot()
+    if section == "performance": return performance_snapshot()
+    if section == "logs": return logs_snapshot()
+    if section == "alerts": return alerts_snapshot()
+    if section == "settings": return settings_snapshot()
+    if section == "security": return security_snapshot(owner)
+    raise KeyError(section)
