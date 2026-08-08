@@ -87,6 +87,7 @@ def _expected_storage_bytes(job) -> int:
 
 def run_acquisition_preflight(job, *, persist: bool = True):
     reasons: list[str] = []
+    payload = job.normalized_payload if isinstance(job.normalized_payload, dict) else {}
     operation, inference_confidence, infer_reasons = infer_operation(job)
     reasons.extend(infer_reasons)
     spec = None
@@ -113,7 +114,9 @@ def run_acquisition_preflight(job, *, persist: bool = True):
         except Exception:
             reasons.append("WORKER_RUNTIME_UNAVAILABLE")
         suffixes = _input_suffixes(job)
-        if spec.input_suffixes and not suffixes:
+        embedded_input = any(payload.get(key) for key in ("content", "slides", "sections", "brief", "requirements", "url"))
+        repository_input = operation == "technical_documentation" and any(str(payload.get(key) or "").strip() for key in ("repository_url", "repo_url", "github_url", "repository"))
+        if spec.input_suffixes and not suffixes and not embedded_input and not repository_input:
             reasons.append("INPUT_TYPE_NOT_DECLARED")
         elif spec.input_suffixes and not suffixes.intersection(spec.input_suffixes):
             reasons.append("INPUT_TYPE_NOT_SUPPORTED")
@@ -124,6 +127,20 @@ def run_acquisition_preflight(job, *, persist: bool = True):
                 reasons.append("GENX_BALANCE_UNVERIFIED")
             elif score is None or latest.available_credits < score.max_genx_credits:
                 reasons.append("GENX_BUDGET_INSUFFICIENT")
+    if operation == "public_web_extract":
+        if os.getenv("PUBLIC_WEB_DATA_ENABLED", "0") != "1":
+            reasons.append("PUBLIC_WEB_DATA_DISABLED")
+        if payload.get("authorization_confirmed") is not True or payload.get("terms_permit") is not True:
+            reasons.append("PUBLIC_WEB_POLICY_PROOF_REQUIRED")
+        if not str(payload.get("purpose") or "").strip():
+            reasons.append("PUBLIC_WEB_PURPOSE_REQUIRED")
+    if operation == "defensive_code_review":
+        if payload.get("authorization_confirmed") is not True:
+            reasons.append("DEFENSIVE_REVIEW_AUTHORIZATION_REQUIRED")
+        if not str(payload.get("scope") or "").strip():
+            reasons.append("DEFENSIVE_REVIEW_SCOPE_REQUIRED")
+        if not any(str(payload.get(key) or "").strip() for key in ("repository_url", "repo_url", "github_url", "repository")):
+            reasons.append("REPOSITORY_NOT_DECLARED")
 
     market_policy = MarketPolicyVersion.objects.filter(marketplace=job.marketplace).order_by("-checked_at", "-created_at").first()
     if not market_policy or not market_policy.automation_allowed:

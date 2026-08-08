@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import json
 import subprocess
+from html.parser import HTMLParser
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -227,6 +228,171 @@ def _media_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
     return QAOutcome(passed=passed, check_type="deterministic_media", score=1.0 if passed else 0.0, checks=checks, evidence=qa_evidence)
 
 
+def _tabular_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    checks: list[str] = []
+    suffix = primary.suffix.casefold()
+    qa_evidence: dict[str, Any] = {"format": suffix.lstrip(".")}
+    try:
+        if suffix == ".csv":
+            result = verify_csv(primary, expected_rows=evidence.get("rows"), required_columns=evidence.get("columns"))
+            checks.extend(name for name, passed in result.checks.items() if passed)
+            passed = result.passed
+            qa_evidence.update(result.evidence)
+        elif suffix == ".json":
+            payload = json.loads(primary.read_text(encoding="utf-8"))
+            if isinstance(payload, list) or (isinstance(payload, dict) and "valid" in payload and "errors" in payload):
+                checks.append("json_structure_valid")
+            passed = "json_structure_valid" in checks
+            qa_evidence["json_type"] = type(payload).__name__
+        elif suffix == ".xlsx":
+            passed, spreadsheet_checks, spreadsheet_evidence = _inspect_workbook(primary, evidence)
+            checks.extend(spreadsheet_checks); qa_evidence.update(spreadsheet_evidence)
+        else:
+            passed = False
+    except Exception:
+        passed = False
+    return QAOutcome(passed=passed, check_type="deterministic_tabular", score=1.0 if passed else 0.0, checks=checks, evidence=qa_evidence)
+
+
+def _inspect_workbook(primary: Path, evidence: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    from openpyxl import load_workbook
+
+    checks: list[str] = []
+    workbook = load_workbook(primary, read_only=True, data_only=False, keep_links=False)
+    try:
+        sheets = workbook.sheetnames
+        if len(sheets) >= int(evidence.get("minimum_sheets") or 1): checks.append("required_sheets_present")
+        populated = 0; formulas = 0
+        for sheet in workbook.worksheets:
+            for row in sheet.iter_rows():
+                for cell in row:
+                    if cell.value not in (None, ""): populated += 1
+                    if cell.data_type == "f": formulas += 1
+        if populated: checks.append("workbook_has_content")
+        expected_formulas = int(evidence.get("generated_formula_cells") or 0)
+        if formulas == expected_formulas and evidence.get("formula_injection_neutralized") is True: checks.append("formula_cells_authorized")
+        expected_names = set(evidence.get("sheet_names") or [])
+        if not expected_names or expected_names.issubset(sheets): checks.append("sheet_names_match")
+        required = {"required_sheets_present", "workbook_has_content", "formula_cells_authorized", "sheet_names_match"}
+        return required.issubset(checks), checks, {"sheet_names": sheets, "populated_cells": populated, "formula_cells": formulas}
+    finally:
+        workbook.close()
+
+
+def _spreadsheet_outcome(primary: Path, evidence: dict[str, Any], *, analysis: bool = False) -> QAOutcome:
+    try:
+        passed, checks, qa_evidence = _inspect_workbook(primary, evidence)
+    except Exception:
+        passed, checks, qa_evidence = False, [], {}
+    if analysis:
+        if evidence.get("regulated_advice") is False: checks.append("not_regulated_advice")
+        if isinstance(evidence.get("visualization_present"), bool): checks.append("visualization_state_declared")
+        passed = passed and {"not_regulated_advice", "visualization_state_declared"}.issubset(checks)
+    return QAOutcome(passed=passed, check_type="deterministic_analysis" if analysis else "deterministic_spreadsheet", score=1.0 if passed else 0.0, checks=checks, evidence=qa_evidence)
+
+
+def _professional_text_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    text = _text_file(primary); checks = []
+    if len(text) >= 80: checks.append("deliverable_has_substance")
+    if evidence.get("deliverable_type"): checks.append("deliverable_type_explicit")
+    if evidence.get("operation") in {"technical_documentation", "content_package", "support_content_package"}: checks.append("operation_supported")
+    if evidence.get("operation") != "support_content_package" or evidence.get("draft_only") is True: checks.append("external_send_not_claimed")
+    passed = {"deliverable_has_substance", "deliverable_type_explicit", "operation_supported", "external_send_not_claimed"}.issubset(checks)
+    return QAOutcome(passed=passed, check_type="professional_text_structural", score=1.0 if passed else 0.0, checks=checks, evidence={"output_chars": len(text), "deliverable_type": evidence.get("deliverable_type")})
+
+
+def _seo_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    checks = []; payload = {}
+    try: payload = json.loads(primary.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError): pass
+    required_keys = {"word_count", "headings", "top_keywords", "findings", "policy"}
+    if required_keys.issubset(payload): checks.append("structured_audit_present")
+    if payload.get("policy", {}).get("spam_or_backlink_automation") is False: checks.append("spam_automation_absent")
+    passed = {"structured_audit_present", "spam_automation_absent"}.issubset(checks)
+    return QAOutcome(passed=passed, check_type="deterministic_seo_audit", score=1.0 if passed else 0.0, checks=checks, evidence={"finding_count": len(payload.get("findings", [])) if isinstance(payload, dict) else 0})
+
+
+def _presentation_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    from pptx import Presentation
+
+    checks = []; slide_count = 0; titled = 0
+    try:
+        deck = Presentation(primary); slide_count = len(deck.slides)
+        titled = sum(bool(slide.shapes.title and slide.shapes.title.text.strip()) for slide in deck.slides)
+        if slide_count == int(evidence.get("required_slide_count") or 0) and slide_count > 0: checks.append("slide_count_matches")
+        if titled == slide_count: checks.append("all_slides_titled")
+        if evidence.get("reopened") is True: checks.append("worker_reopened_deck")
+    except Exception: pass
+    passed = {"slide_count_matches", "all_slides_titled", "worker_reopened_deck"}.issubset(checks)
+    return QAOutcome(passed=passed, check_type="deterministic_presentation", score=1.0 if passed else 0.0, checks=checks, evidence={"slide_count": slide_count, "titled_slides": titled})
+
+
+def _produced_document_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    checks = []; qa_evidence = {"format": primary.suffix.casefold().lstrip(".")}
+    try:
+        if primary.suffix.casefold() == ".docx":
+            from docx import Document
+            document = Document(primary); count = sum(bool(row.text.strip()) for row in document.paragraphs)
+            qa_evidence["paragraph_count"] = count
+            if count >= 2: checks.append("docx_has_structure")
+        elif primary.suffix.casefold() == ".pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(str(primary)); count = len(reader.pages)
+            qa_evidence["page_count"] = count
+            if count >= 1 and any((page.extract_text() or "").strip() for page in reader.pages): checks.append("pdf_has_extractable_content")
+        if evidence.get("reopened") is True: checks.append("worker_reopened_document")
+    except Exception: pass
+    passed = "worker_reopened_document" in checks and any(name in checks for name in ("docx_has_structure", "pdf_has_extractable_content"))
+    return QAOutcome(passed=passed, check_type="deterministic_produced_document", score=1.0 if passed else 0.0, checks=checks, evidence=qa_evidence)
+
+
+def _public_web_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    checks = []; payload = {}
+    try: payload = json.loads(primary.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError): pass
+    if str(payload.get("url") or "").startswith("https://"): checks.append("https_final_url")
+    if payload.get("text") and payload.get("purpose"): checks.append("bounded_extract_present")
+    if evidence.get("robots_checked") is True: checks.append("robots_checked")
+    if evidence.get("policy_confirmed") is True: checks.append("policy_confirmed")
+    passed = {"https_final_url", "bounded_extract_present", "robots_checked", "policy_confirmed"}.issubset(checks)
+    return QAOutcome(passed=passed, check_type="bounded_public_web", score=1.0 if passed else 0.0, checks=checks, evidence={"bytes": payload.get("bytes"), "url": payload.get("url")})
+
+
+class _HTMLContractParser(HTMLParser):
+    def __init__(self):
+        super().__init__(); self.lang = ""; self.title = False; self.h1 = 0; self.scripts = 0; self.forms = 0; self.skip = False
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs); tag = tag.casefold()
+        if tag == "html": self.lang = values.get("lang", "")
+        if tag == "title": self.title = True
+        if tag == "h1": self.h1 += 1
+        if tag == "script": self.scripts += 1
+        if tag == "form": self.forms += 1
+        if tag == "a" and values.get("href") == "#main": self.skip = True
+
+
+def _static_html_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    checks = []; parser = _HTMLContractParser()
+    try: parser.feed(primary.read_text(encoding="utf-8"))
+    except OSError: pass
+    if parser.lang: checks.append("language_declared")
+    if parser.title and parser.h1 == 1: checks.append("title_and_single_h1")
+    if parser.skip: checks.append("skip_link_present")
+    if parser.scripts == 0 and parser.forms == 0: checks.append("no_active_or_sending_surface")
+    if evidence.get("deployment_performed") is False: checks.append("deployment_not_claimed")
+    passed = {"language_declared", "title_and_single_h1", "skip_link_present", "no_active_or_sending_surface", "deployment_not_claimed"}.issubset(checks)
+    return QAOutcome(passed=passed, check_type="deterministic_static_html", score=1.0 if passed else 0.0, checks=checks, evidence={"h1_count": parser.h1, "scripts": parser.scripts, "forms": parser.forms})
+
+
+def _defensive_review_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    text = _text_file(primary); checks = []
+    if len(text) >= 150 and "Defensive Code Review" in text: checks.append("review_report_present")
+    if evidence.get("authorization_confirmed") is True and evidence.get("scope"): checks.append("authorization_and_scope_recorded")
+    if evidence.get("network_testing_performed") is False and evidence.get("exploitation_performed") is False: checks.append("defensive_boundary_preserved")
+    passed = {"review_report_present", "authorization_and_scope_recorded", "defensive_boundary_preserved"}.issubset(checks)
+    return QAOutcome(passed=passed, check_type="deterministic_defensive_review", score=1.0 if passed else 0.0, checks=checks, evidence={"files_scanned": evidence.get("files_scanned"), "finding_count": evidence.get("finding_count")})
+
+
 def run_qa(profile: str, primary: Path, worker_evidence: dict[str, Any] | None = None) -> QAOutcome:
     evidence = worker_evidence if isinstance(worker_evidence, dict) else {}
     if profile == "csv":
@@ -252,4 +418,24 @@ def run_qa(profile: str, primary: Path, worker_evidence: dict[str, Any] | None =
         return _ci_outcome(primary, evidence)
     if profile == "media":
         return _media_outcome(primary, evidence)
+    if profile == "tabular":
+        return _tabular_outcome(primary, evidence)
+    if profile == "spreadsheet":
+        return _spreadsheet_outcome(primary, evidence)
+    if profile == "analysis":
+        return _spreadsheet_outcome(primary, evidence, analysis=True)
+    if profile == "professional_text":
+        return _professional_text_outcome(primary, evidence)
+    if profile == "seo_audit":
+        return _seo_outcome(primary, evidence)
+    if profile == "presentation":
+        return _presentation_outcome(primary, evidence)
+    if profile == "produced_document":
+        return _produced_document_outcome(primary, evidence)
+    if profile == "public_web":
+        return _public_web_outcome(primary, evidence)
+    if profile == "static_html":
+        return _static_html_outcome(primary, evidence)
+    if profile == "defensive_review":
+        return _defensive_review_outcome(primary, evidence)
     raise ValueError(f"unsupported QA profile: {profile}")

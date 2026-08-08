@@ -46,8 +46,9 @@ def _workspace(root: Path, job: Job, attempt: int) -> Path:
     return target
 
 
-def _validated_inputs(inputs: dict, workspace_root: Path, upload_root: Path) -> dict:
+def _validated_inputs(inputs: dict, workspace_root: Path, upload_root: Path, *, job: Job) -> dict:
     clean = dict(inputs)
+    approved_sources: list[str] = []
     source = clean.get("source")
     if source:
         source_path = Path(str(source)).resolve()
@@ -56,6 +57,28 @@ def _validated_inputs(inputs: dict, workspace_root: Path, upload_root: Path) -> 
         if not source_path.is_file():
             raise ExecutionError("input source file does not exist")
         clean["source"] = str(source_path)
+        approved_sources.append(str(source_path))
+    sources = clean.get("sources")
+    if sources is not None:
+        if not isinstance(sources, list) or not sources:
+            raise ExecutionError("input sources must be a non-empty list")
+        resolved_sources = []
+        for raw in sources:
+            source_path = Path(str(raw)).resolve()
+            if not (_inside(source_path, upload_root) or _inside(source_path, workspace_root)):
+                raise ExecutionError("input source is outside approved upload/job storage")
+            if not source_path.is_file():
+                raise ExecutionError("input source file does not exist")
+            resolved_sources.append(str(source_path)); approved_sources.append(str(source_path))
+        clean["sources"] = resolved_sources
+    if approved_sources:
+        from planning.models import JobAsset
+
+        asset_paths = set(JobAsset.objects.filter(job=job, status=JobAsset.Status.VERIFIED, path__in=approved_sources).values_list("path", flat=True))
+        artifact_paths = set(Artifact.objects.filter(job=job, path__in=approved_sources).values_list("path", flat=True))
+        known = {str(Path(path).resolve()) for path in {*asset_paths, *artifact_paths}}
+        if any(path not in known for path in approved_sources):
+            raise ExecutionError("input source is not registered to this job")
     repository = clean.get("repository_path")
     if repository:
         repo_root = Path(os.getenv("AMARKTAI_REPO_ROOT", "/var/lib/amarktai-earn/repos")).resolve()
@@ -64,6 +87,9 @@ def _validated_inputs(inputs: dict, workspace_root: Path, upload_root: Path) -> 
             raise ExecutionError("repository snapshot is outside approved repository storage")
         if not repo_path.is_dir():
             raise ExecutionError("repository snapshot directory does not exist")
+        from planning.models import RepositorySnapshot
+        if not RepositorySnapshot.objects.filter(job=job, path=str(repo_path), status=RepositorySnapshot.Status.VERIFIED).exists():
+            raise ExecutionError("repository snapshot is not registered to this job")
         clean["repository_path"] = str(repo_path)
     return clean
 
@@ -114,7 +140,7 @@ def execute_registered_job(
     root = Path(workspace_root or os.getenv("AMARKTAI_JOB_ROOT", "/var/lib/amarktai-earn/jobs"))
     upload_root = Path(os.getenv("AMARKTAI_UPLOAD_ROOT", "/var/lib/amarktai-earn/uploads"))
     lease_seconds = int(os.getenv("JOB_LOCK_LEASE_SECONDS", "1800"))
-    clean_inputs = _validated_inputs(inputs, root, upload_root)
+    clean_inputs = _validated_inputs(inputs, root, upload_root, job=job)
     lock = acquire_job_lock(job.id, node_id=node_id, lease_seconds=lease_seconds)
     execution = None
     worker = None
