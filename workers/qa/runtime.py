@@ -121,6 +121,42 @@ def _transcript_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
     )
 
 
+def _code_patch_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    text = _text_file(primary)
+    checks: list[str] = []
+    if text and ("diff --git" in text or ("--- " in text and "+++ " in text)):
+        checks.append("patch_nonempty")
+    if int(evidence.get("agent_exit_code", 1)) == 0:
+        checks.append("agent_completed")
+    if int(evidence.get("test_exit_code", 1)) == 0:
+        checks.append("independent_tests_passed")
+    passed = all(name in checks for name in ("patch_nonempty", "agent_completed", "independent_tests_passed"))
+    return QAOutcome(
+        passed=passed,
+        check_type="sandbox_code_patch",
+        score=1.0 if passed else 0.0,
+        checks=checks,
+        evidence={"patch_chars": len(text), "agent_exit_code": evidence.get("agent_exit_code"), "test_exit_code": evidence.get("test_exit_code"), "sandbox_id": evidence.get("sandbox_id")},
+    )
+
+
+def _ci_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    text = _text_file(primary)
+    checks: list[str] = []
+    if text:
+        checks.append("test_report_present")
+    if int(evidence.get("test_exit_code", 1)) == 0:
+        checks.append("tests_passed")
+    passed = "test_report_present" in checks and "tests_passed" in checks
+    return QAOutcome(
+        passed=passed,
+        check_type="sandbox_ci",
+        score=1.0 if passed else 0.0,
+        checks=checks,
+        evidence={"report_chars": len(text), "test_exit_code": evidence.get("test_exit_code"), "sandbox_id": evidence.get("sandbox_id")},
+    )
+
+
 def run_qa(profile: str, primary: Path, worker_evidence: dict[str, Any] | None = None) -> QAOutcome:
     evidence = worker_evidence if isinstance(worker_evidence, dict) else {}
     if profile == "csv":
@@ -140,4 +176,8 @@ def run_qa(profile: str, primary: Path, worker_evidence: dict[str, Any] | None =
         return _translation_outcome(primary, evidence)
     if profile == "transcript":
         return _transcript_outcome(primary, evidence)
+    if profile == "code_patch":
+        return _code_patch_outcome(primary, evidence)
+    if profile == "ci":
+        return _ci_outcome(primary, evidence)
     raise ValueError(f"unsupported QA profile: {profile}")

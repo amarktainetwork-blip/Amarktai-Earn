@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from control.services.agentgigs import configured_adapter, run_cycle
 from control.services.agentgigs_assets import sync_awarded_agentgigs_assets
+from planning.coding import dispatch_coding_jobs
 from planning.services import dispatch_awarded_jobs
 from markets.agentgigs.client import AgentGigsError
 
@@ -27,6 +28,7 @@ class Command(BaseCommand):
                 result = run_cycle(adapter, limit=limit)
                 result["assets"] = sync_awarded_agentgigs_assets(adapter, limit=limit)
                 result["dispatch"] = dispatch_awarded_jobs(marketplace_slug="agentgigs", limit=limit)
+                result["coding_dispatch"] = dispatch_coding_jobs(marketplace_slug="agentgigs", limit=limit)
                 self.stdout.write(self.style.SUCCESS(str(result)))
             except (AgentGigsError, ValueError) as exc:
                 if options["once"]:

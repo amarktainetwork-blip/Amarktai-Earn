@@ -60,6 +60,16 @@ class Command(BaseCommand):
         if os.getenv("AGENTGIGS_AUTO_APPLY_ENABLED", "0") == "1" and mode not in {"LOW_RISK", "FULL"}:
             errors.append("AgentGigs auto-apply requires AUTONOMOUS_MODE=LOW_RISK or FULL")
 
+        if os.getenv("SANDBOX_CODING_ENABLED", "0") == "1":
+            sandbox_token = os.getenv("SANDBOX_TOKEN_SECRET", "")
+            broker_secret = os.getenv("SANDBOX_BROKER_SECRET", "")
+            if _placeholder(sandbox_token) or len(sandbox_token.encode()) < 32:
+                errors.append("SANDBOX_TOKEN_SECRET must contain at least 32 non-placeholder bytes when coding sandboxes are enabled")
+            if _placeholder(broker_secret) or len(broker_secret.encode()) < 32:
+                errors.append("SANDBOX_BROKER_SECRET must contain at least 32 non-placeholder bytes when coding sandboxes are enabled")
+            if not os.getenv("GENX_API_KEY", "").strip():
+                errors.append("GENX_API_KEY is required when coding sandboxes are enabled")
+
         if errors:
             raise CommandError("Production preflight failed: " + "; ".join(errors))
         self.stdout.write(self.style.SUCCESS(f"production preflight passed mode={mode}"))

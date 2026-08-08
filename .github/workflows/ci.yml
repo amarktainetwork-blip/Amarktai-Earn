@@ -37,7 +37,7 @@ env:
 jobs:
   integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:17-alpine
@@ -74,7 +74,7 @@ jobs:
       - run: python manage.py migrate --noinput
       - run: python manage.py healthcheck
       - run: python -m unittest discover -s tests -p 'test_*_stdlib.py' -q
-      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration -v 2
+      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration -v 2
       - name: Production configuration preflight
         env:
           AMARKTAI_ENV: production
@@ -90,6 +90,15 @@ jobs:
         env:
           CADDY_EMAIL: ci@example.test
         run: cp .env.example .env && docker compose config --quiet
+      - name: Build coding sandbox images and prove isolation surface
+        run: |
+          docker build -t amarktai-earn-sandbox:phase8c -f sandbox/Dockerfile .
+          docker build -t amarktai-earn-sandbox-broker:phase8c -f sandbox/broker.Dockerfile .
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --pids-limit 64 --memory 512m --cpus 0.5 --user 10001:10001 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m --tmpfs /home/sandbox:rw,nosuid,nodev,size=64m \
+            amarktai-earn-sandbox:phase8c /bin/bash -lc 'test "$(id -u)" = 10001 && test ! -e /var/run/docker.sock && aider --version && aider --help >/dev/null && openhands --help >/dev/null'
+          test "$(docker image inspect -f '{{.Config.User}}' amarktai-earn-sandbox-broker:phase8c)" = "10002:10002"
       - name: Build production image and prove secrets are excluded
         run: |
           docker build -t amarktai-earn-ci .
