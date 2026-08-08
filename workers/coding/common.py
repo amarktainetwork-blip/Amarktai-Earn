@@ -7,8 +7,10 @@ from typing import Any
 
 from control.models import Job
 from control.services.admission import AdmissionDenied, require_admission
+from control.services.dependencies import DependencyPreparationError, DependencyRequest, prepare_dependencies
 from control.sandbox_tokens import issue_sandbox_token
 from sandbox_broker.client import SandboxBrokerClient, SandboxBrokerError
+from planning.models import RepositorySnapshot
 from workers.genx_support import GenXWorkerError, select_specialist
 
 
@@ -43,6 +45,30 @@ def _job_budget(job_id) -> Decimal:
     return budget
 
 
+def _dependency_cache(request, broker: SandboxBrokerClient) -> str:
+    raw = request.inputs.get("dependency_request")
+    if not isinstance(raw, dict):
+        return ""
+    try:
+        dependency = DependencyRequest(
+            ecosystem=str(raw["ecosystem"]), manifest_path=str(raw["manifest_path"]), manifest_hash=str(raw["manifest_hash"]),
+        )
+        snapshot = RepositorySnapshot.objects.get(pk=request.inputs["repository_snapshot_id"], job_id=request.job_id)
+        _row, cache_key = prepare_dependencies(job=Job.objects.get(pk=request.job_id), snapshot=snapshot, request=dependency, broker=broker)
+        return cache_key
+    except (KeyError, RepositorySnapshot.DoesNotExist, DependencyPreparationError) as exc:
+        raise CodingWorkerError("safe dependency preparation failed") from exc
+
+
+def _dependency_storage_estimate(request) -> int:
+    if not isinstance(request.inputs.get("dependency_request"), dict):
+        return 0
+    try:
+        return max(1024 * 1024, int(os.getenv("DEPENDENCY_MAX_CACHE_BYTES", "536870912")))
+    except ValueError:
+        return 536870912
+
+
 def run_ai_coding_sandbox(request, *, agent: str) -> dict[str, Any]:
     if os.getenv("SANDBOX_CODING_ENABLED", "0") != "1":
         raise CodingWorkerError("coding sandboxes are disabled")
@@ -64,8 +90,10 @@ def run_ai_coding_sandbox(request, *, agent: str) -> dict[str, Any]:
         ttl_seconds=int(os.getenv("SANDBOX_TOKEN_TTL_SECONDS", "1800")),
     )
     try:
-        require_admission(purpose="SANDBOX", job=Job.objects.get(pk=request.job_id), operation=str(request.inputs.get("operation") or ""))
-        return configured_broker().run({
+        require_admission(purpose="SANDBOX", job=Job.objects.get(pk=request.job_id), operation=str(request.inputs.get("operation") or ""), expected_storage_bytes=_dependency_storage_estimate(request))
+        broker = configured_broker()
+        dependency_cache_key = _dependency_cache(request, broker)
+        return broker.run({
             "agent": agent,
             "snapshot_rel": _repo_relative(source),
             "task": task,
@@ -76,6 +104,7 @@ def run_ai_coding_sandbox(request, *, agent: str) -> dict[str, Any]:
             "worker_id": request.worker_id,
             "execution_id": request.execution_id,
             "attempt": request.attempt,
+            "dependency_cache_key": dependency_cache_key,
         })
     except (SandboxBrokerError, AdmissionDenied) as exc:
         raise CodingWorkerError(str(exc)) from exc
@@ -89,8 +118,10 @@ def run_ci_sandbox(request) -> dict[str, Any]:
     if not source or not test_command:
         raise CodingWorkerError("CI request is missing repository or explicit test command")
     try:
-        require_admission(purpose="SANDBOX", job=Job.objects.get(pk=request.job_id), operation=str(request.inputs.get("operation") or ""))
-        return configured_broker().run({
+        require_admission(purpose="SANDBOX", job=Job.objects.get(pk=request.job_id), operation=str(request.inputs.get("operation") or ""), expected_storage_bytes=_dependency_storage_estimate(request))
+        broker = configured_broker()
+        dependency_cache_key = _dependency_cache(request, broker)
+        return broker.run({
             "agent": "ci",
             "snapshot_rel": _repo_relative(source),
             "task": str(request.inputs.get("instructions") or "Run the configured test command."),
@@ -99,6 +130,7 @@ def run_ci_sandbox(request) -> dict[str, Any]:
             "worker_id": request.worker_id,
             "execution_id": request.execution_id,
             "attempt": request.attempt,
+            "dependency_cache_key": dependency_cache_key,
         })
     except (SandboxBrokerError, AdmissionDenied) as exc:
         raise CodingWorkerError(str(exc)) from exc

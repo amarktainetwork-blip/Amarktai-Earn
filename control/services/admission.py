@@ -249,6 +249,9 @@ def decide_admission(
                 reasons.append("WORKER_DISABLED")
             if not spec.qa_profile:
                 reasons.append("QA_PROFILE_NOT_REGISTERED")
+            for command in spec.runtime_commands:
+                if not shutil.which(command):
+                    reasons.append(f"{command.upper()}_RUNTIME_UNAVAILABLE")
             if spec.worker_class in {"code_small", "code_heavy", "ci_testing"} and os.getenv("SANDBOX_CODING_ENABLED", "0") != "1":
                 reasons.append("CODING_SANDBOX_DISABLED")
 

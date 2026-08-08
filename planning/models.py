@@ -84,3 +84,31 @@ class RepositorySnapshot(Timestamped):
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.STAGED)
     error_code = models.CharField(max_length=120, blank=True)
     verified_at = models.DateTimeField(null=True, blank=True)
+
+
+class DependencyPreparation(Timestamped):
+    class Status(models.TextChoices):
+        REQUESTED = "REQUESTED"
+        READY = "READY"
+        BLOCKED = "BLOCKED"
+        FAILED = "FAILED"
+
+    job = models.ForeignKey("control.Job", on_delete=models.CASCADE, related_name="dependency_preparations")
+    repository_snapshot = models.ForeignKey(RepositorySnapshot, on_delete=models.CASCADE, related_name="dependency_preparations")
+    ecosystem = models.CharField(max_length=20)
+    manifest_path = models.CharField(max_length=255)
+    manifest_hash = models.CharField(max_length=64)
+    cache_key = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.REQUESTED)
+    file_count = models.PositiveIntegerField(default=0)
+    total_bytes = models.PositiveBigIntegerField(default=0)
+    reason_codes = models.JSONField(default=list)
+    details = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["repository_snapshot", "ecosystem", "manifest_hash"],
+                name="uniq_dependency_snapshot_manifest",
+            )
+        ]

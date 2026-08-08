@@ -72,6 +72,8 @@ class Command(BaseCommand):
                 errors.append("SANDBOX_BROKER_SECRET must contain at least 32 non-placeholder bytes when coding sandboxes are enabled")
             if not os.getenv("GENX_API_KEY", "").strip():
                 errors.append("GENX_API_KEY is required when coding sandboxes are enabled")
+        if os.getenv("DEPENDENCY_PREPARATION_ENABLED", "0") == "1" and os.getenv("SANDBOX_CODING_ENABLED", "0") != "1":
+            errors.append("dependency preparation requires SANDBOX_CODING_ENABLED=1")
 
         if errors:
             raise CommandError("Production preflight failed: " + "; ".join(errors))

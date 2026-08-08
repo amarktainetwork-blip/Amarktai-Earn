@@ -98,7 +98,16 @@ def execute_registered_job(
     if expected_worker_class and spec.worker_class != expected_worker_class:
         raise ExecutionError(f"operation {operation!r} belongs to {spec.worker_class!r}, not {expected_worker_class!r}")
     try:
-        require_admission(purpose="WORKPLAN_EXECUTION", job=job, operation=operation)
+        expected_storage = 0
+        if spec.worker_class == "media":
+            try:
+                expected_storage = max(1, int(os.getenv("MEDIA_MAX_OUTPUT_BYTES", str(150 * 1024 * 1024))))
+            except ValueError:
+                expected_storage = 150 * 1024 * 1024
+        require_admission(
+            purpose="MEDIA" if spec.worker_class == "media" else "WORKPLAN_EXECUTION",
+            job=job, operation=operation, expected_storage_bytes=expected_storage,
+        )
     except AdmissionDenied as exc:
         raise ExecutionError(str(exc)) from exc
 

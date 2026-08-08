@@ -21,6 +21,9 @@ class SandboxBrokerClient:
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._post("/run", payload)
 
+    def prepare(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._post("/prepare", payload)
+
     def cleanup(self, *, max_age_seconds: int = 1800) -> dict[str, int]:
         return self._post("/cleanup", {"max_age_seconds": max_age_seconds})
 

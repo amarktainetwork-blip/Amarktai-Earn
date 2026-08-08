@@ -6,5 +6,6 @@ RUN apt-get update \
 RUN useradd --uid 10002 --create-home --shell /usr/sbin/nologin broker
 WORKDIR /app
 COPY sandbox_broker /app/sandbox_broker
+COPY scripts/dependency-prep-smoke.py /app/scripts/dependency-prep-smoke.py
 USER 10002:10002
 CMD ["python", "-m", "sandbox_broker.server"]

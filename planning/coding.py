@@ -5,6 +5,7 @@ from django.db import transaction
 
 from control.models import AuditEvent, Job
 from control.services.github_repos import GitHubRepositoryError, ensure_repository_snapshot, repository_ref
+from control.services.dependencies import inspect_dependency_request
 from planning.models import RepositorySnapshot, WorkPlan
 from workers.registry import WorkerRegistryError, operation_spec
 
@@ -151,6 +152,12 @@ def prepare_coding_plan(job_id, *, stage_repository: bool = True, session=None) 
     ):
         return _set_plan(job, reasons=["REPOSITORY_NOT_STAGED"])
 
+    dependency_request, dependency_reasons = inspect_dependency_request(snapshot)
+    if dependency_reasons:
+        return _set_plan(job, reasons=dependency_reasons)
+    if dependency_request and os.getenv("DEPENDENCY_PREPARATION_ENABLED", "0") != "1":
+        return _set_plan(job, reasons=["DEPENDENCY_PREPARATION_DISABLED"])
+
     spec = {
         "operation": operation,
         "repository_path": snapshot.path,
@@ -160,6 +167,12 @@ def prepare_coding_plan(job_id, *, stage_repository: bool = True, session=None) 
         "instructions": "\n".join(_instruction_parts(job)),
         "test_command": test_command,
     }
+    if dependency_request:
+        spec["dependency_request"] = {
+            "ecosystem": dependency_request.ecosystem,
+            "manifest_path": dependency_request.manifest_path,
+            "manifest_hash": dependency_request.manifest_hash,
+        }
     return _set_plan(job, operation=operation, input_spec=spec)
 
 

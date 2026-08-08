@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import import_module
+import shutil
 
 
 class WorkerRegistryError(RuntimeError):
@@ -18,6 +19,7 @@ class WorkerSpec:
     description: str
     input_suffixes: tuple[str, ...] = ()
     requires_genx: bool = False
+    runtime_commands: tuple[str, ...] = ()
 
     def build(self):
         module_name, attr = self.factory.rsplit(".", 1)
@@ -74,6 +76,20 @@ _SPECS: tuple[WorkerSpec, ...] = (
         description="Audio/video transcription using a live GenX transcription-capable model",
         input_suffixes=(".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm"),
         requires_genx=True,
+    ),
+    WorkerSpec(
+        worker_class="media",
+        version="1.0.0",
+        factory="workers.media.worker.MediaWorker",
+        operations=(
+            "image_resize", "image_center_crop", "image_convert", "image_compress", "image_thumbnail",
+            "media_trim", "media_transcode", "media_extract_audio",
+        ),
+        qa_profile="media",
+        description="Bounded deterministic image, audio, and video transformations",
+        input_suffixes=(".jpg", ".jpeg", ".png", ".webp", ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm"),
+        requires_genx=False,
+        runtime_commands=("ffmpeg", "ffprobe"),
     ),
     WorkerSpec(
         worker_class="code_small",
@@ -153,6 +169,8 @@ def registry_manifest() -> list[dict[str, object]]:
             "description": spec.description,
             "input_suffixes": list(spec.input_suffixes),
             "requires_genx": spec.requires_genx,
+            "runtime_commands": list(spec.runtime_commands),
+            "runtime_available": all(shutil.which(command) for command in spec.runtime_commands),
         }
         for spec in _SPECS
     ]
