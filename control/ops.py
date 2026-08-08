@@ -6,7 +6,7 @@ from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, F, Q, Sum
 from django.utils import timezone
 
 from planning.models import DependencyPreparation, WorkPlan
@@ -21,9 +21,12 @@ from .models import (
     AuthThrottle,
     Artifact,
     AuditEvent,
+    CapacitySnapshot,
     Execution,
     GenXAccountSnapshot,
     GenXCall,
+    GrowthEvaluation,
+    GrowthTarget,
     Job,
     Claim,
     LedgerEntry,
@@ -31,17 +34,23 @@ from .models import (
     MarketplaceCredential,
     ModelStat,
     Node,
+    OpportunityDecision,
     OwnerSecurityProfile,
     Payout,
+    PerformanceAggregate,
+    PricingStrategy,
     QAResult,
     RecoveryCode,
     Revision,
     ReauthenticationGrant,
+    ReputationSnapshot,
     ResourceSnapshot,
     ServiceHeartbeat,
+    ProgramScopeVersion,
     RefreshSession,
     SystemSetting,
     Submission,
+    SyntheticDatasetRun,
     TreasuryBalance,
     Worker,
 )
@@ -75,6 +84,10 @@ def _dec(value):
     return str(value)
 
 
+def _money(value) -> str:
+    return f"{Decimal(value or 0):.2f}"
+
+
 def _valid_runtime_secret(name: str) -> bool:
     value = os.getenv(name, "")
     lowered = value.casefold()
@@ -101,11 +114,15 @@ def _disk_row(label: str, path: str) -> dict:
 
 def overview_snapshot() -> dict:
     today = timezone.localdate()
+    now = timezone.now()
     earned = Payout.objects.filter(
         state__in=[Payout.State.EARNED, Payout.State.PAYOUT_PENDING, Payout.State.SETTLED],
         earned_at__date=today,
     ).aggregate(v=Sum("net"))["v"] or Decimal("0")
     settled = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__date=today).aggregate(v=Sum("net"))["v"] or Decimal("0")
+    settled_7d = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__gte=now - timedelta(days=7)).aggregate(v=Sum("net"))["v"] or Decimal("0")
+    settled_30d = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__gte=now - timedelta(days=30)).aggregate(v=Sum("net"))["v"] or Decimal("0")
+    settled_gross_30d = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__gte=now - timedelta(days=30)).aggregate(v=Sum("gross"))["v"] or Decimal("0")
     pending = Payout.objects.filter(state=Payout.State.PAYOUT_PENDING).aggregate(v=Sum("net"))["v"] or Decimal("0")
     genx_used = GenXCall.objects.filter(created_at__date=today).aggregate(v=Sum("credits"))["v"] or Decimal("0")
     latest_genx = GenXAccountSnapshot.objects.order_by("-created_at").first()
@@ -116,12 +133,37 @@ def overview_snapshot() -> dict:
         for model in (Application, Bid, Claim, Submission, GenXCall)
     )
     resource = ResourceSnapshot.objects.order_by("-created_at").first()
+    capacity = CapacitySnapshot.objects.order_by("-created_at").first()
+    growth = GrowthEvaluation.objects.order_by("-created_at").first()
+    exposure = Job.objects.filter(
+        state__in=[Job.State.CLAIMED, Job.State.AWARDED, Job.State.EXECUTING, Job.State.SUBMITTED, Job.State.ACCEPTED],
+    ).aggregate(v=Sum("reward"))["v"] or Decimal("0")
+    expected_profit = OpportunityDecision.objects.filter(
+        allowed=True, created_at__gte=now - timedelta(hours=24),
+    ).aggregate(v=Sum("risk_adjusted_profit"))["v"] or Decimal("0")
+    blocked_profitable = OpportunityDecision.objects.filter(
+        allowed=False, expected_cash_profit__gt=0, created_at__gte=now - timedelta(hours=24),
+    ).count()
+    genx_cost_30d = GenXCall.objects.filter(created_at__gte=now - timedelta(days=30)).aggregate(v=Sum("cost_equivalent"))["v"] or Decimal("0")
+    recorded_net_profit_30d = settled_30d - genx_cost_30d
+    recorded_net_margin_30d = None if settled_gross_30d <= 0 else (recorded_net_profit_30d / settled_gross_30d * 100).quantize(Decimal("0.01"))
     return {
         "section": "overview",
         "cards": [
-            {"label": "NET EARNED TODAY", "value": f"${earned}", "truth": "accepted/pending/settled earnings"},
-            {"label": "SETTLED TODAY", "value": f"${settled}", "truth": "received cash only"},
-            {"label": "PENDING PAYOUT", "value": f"${pending}", "truth": "not received cash"},
+            {"label": "EARNED/PENDING/SETTLED EXPOSURE TODAY", "value": f"${_money(earned)}", "truth": "mixed lifecycle exposure; only the SETTLED cards are received cash"},
+            {"label": "SETTLED TODAY", "value": f"${_money(settled)}", "truth": "received cash only"},
+            {"label": "SETTLED 7D", "value": f"${_money(settled_7d)}", "truth": "reconciled received cash only"},
+            {"label": "SETTLED 30D", "value": f"${_money(settled_30d)}", "truth": "reconciled received cash only"},
+            {"label": "PENDING PAYOUT", "value": f"${_money(pending)}", "truth": "not received cash"},
+            {"label": "AWARDED/ACCEPTED EXPOSURE", "value": f"${_money(exposure)}", "truth": "contract value at risk; not received cash"},
+            {"label": "EXPECTED PROFIT 24H", "value": f"${_money(expected_profit)}", "truth": "modelled allowed opportunities; not revenue"},
+            {"label": "RECORDED GENX COST 30D", "value": f"${_money(genx_cost_30d)}", "truth": "persisted cost equivalent"},
+            {"label": "RECORDED NET PROFIT 30D", "value": f"${_money(recorded_net_profit_30d)}", "truth": "settled net cash less recorded GenX cost"},
+            {"label": "RECORDED NET MARGIN 30D", "value": "INSUFFICIENT_DATA" if recorded_net_margin_30d is None else f"{recorded_net_margin_30d}%", "truth": "settled net cash less recorded GenX cost divided by settled gross"},
+            {"label": "TARGET STATUS", "value": growth.status if growth else "INSUFFICIENT_DATA", "truth": ", ".join(growth.reason_codes) if growth else "no persisted evaluation"},
+            {"label": "PRODUCTIVE UTILIZATION", "value": f"{(capacity.utilization * 100):.2f}%" if capacity else "NO SNAPSHOT", "truth": capacity.utilization_state if capacity else "no persisted capacity snapshot"},
+            {"label": "AVOIDABLE IDLE", "value": f"{capacity.avoidable_idle_minutes} min" if capacity else "NO SNAPSHOT", "truth": capacity.idle_reason if capacity else "no persisted capacity snapshot"},
+            {"label": "BLOCKED PROFITABLE OPPORTUNITIES 24H", "value": blocked_profitable, "truth": "persisted economic decisions with positive expected cash profit"},
             {"label": "ACTIVE PAID JOBS", "value": Job.objects.filter(state__in=[Job.State.CLAIMED, Job.State.AWARDED, Job.State.EXECUTING]).count()},
             {"label": "ACTIVE AGENTS", "value": Worker.objects.exclude(status__in=["OFFLINE", "READY"]).count()},
             {"label": "OPEN ALERTS", "value": open_alerts},
@@ -318,6 +360,12 @@ def markets_snapshot() -> dict:
             "jobs_total": Job.objects.filter(marketplace=market).count(),
             "opportunities_seen_24h": Job.objects.filter(marketplace=market, created_at__gte=timezone.now() - timedelta(hours=24)).count(),
             "applications_total": Application.objects.filter(job__marketplace=market).count(),
+            "awards_total": Job.objects.filter(
+                marketplace=market,
+                state__in=[Job.State.AWARDED, Job.State.EXECUTING, Job.State.SUBMITTED, Job.State.ACCEPTED, Job.State.PAYOUT_PENDING, Job.State.SETTLED],
+            ).count(),
+            "settlements_total": Payout.objects.filter(job__marketplace=market, state=Payout.State.SETTLED).count(),
+            "settled_net": _money(Payout.objects.filter(job__marketplace=market, state=Payout.State.SETTLED).aggregate(v=Sum("net"))["v"] or Decimal("0")),
             "unknown_remote_state": Application.objects.filter(job__marketplace=market, status="UNKNOWN_REMOTE_STATE").count(),
             "latest_preflight": "ALLOWED" if preflight and preflight.allowed else "BLOCKED" if preflight else "NO DECISION",
             "latest_preflight_reasons": preflight.reason_codes if preflight else [],
@@ -436,11 +484,54 @@ def performance_snapshot() -> dict:
         "profit": _dec(row.profit),
         "avg_latency_ms": 0 if not row.attempts else round(row.total_latency_ms / row.attempts),
     } for row in ModelStat.objects.order_by("-attempts")[:50]]
+    profitability = [{
+        "dimension": row.dimension_type,
+        "key": row.dimension_key,
+        "growth_stage": row.growth_stage,
+        "sample_count": row.sample_count,
+        "settled_profit": _dec(row.settled_profit),
+        "gross_payout": _dec(row.gross_payout),
+        "platform_fees": _dec(row.platform_fees),
+        "genx_cost": _dec(row.genx_cost),
+        "direct_cost": _dec(row.direct_cost),
+        "profit_per_minute": _dec(row.profit_per_execution_minute),
+        "profit_per_genx_credit": _dec(row.profit_per_genx_credit),
+        "qa_rate": _dec(row.qa_first_pass_rate),
+        "revision_rate": _dec(row.revision_rate),
+        "settlement_latency_seconds": row.time_to_settlement_seconds,
+        "reputation_delta": _dec(row.reputation_delta),
+        "window_end": _dt(row.window_end),
+    } for row in PerformanceAggregate.objects.order_by("-window_end", "dimension_type", "dimension_key")[:100]]
+    growth = GrowthEvaluation.objects.order_by("-created_at").first()
+    capacity = CapacitySnapshot.objects.order_by("-created_at").first()
+    targets = [{"key": row.key, "target": _dec(row.target_value), "unit": row.unit, "period": row.period} for row in GrowthTarget.objects.filter(enabled=True).order_by("key")]
+    reputations = [{
+        "source": row.source, "market": row.marketplace.slug, "capability": row.capability,
+        "rating": _dec(row.rating), "rating_count": row.rating_count, "completed_jobs": row.completed_jobs,
+        "revision_rate": _dec(row.revision_rate), "on_time_rate": _dec(row.on_time_rate), "observed": _dt(row.observed_at),
+    } for row in ReputationSnapshot.objects.select_related("marketplace").order_by("-observed_at")[:50]]
+    execution_rows = [{"kind": "execution", "worker_class": row["worker__worker_class"] or "unassigned", "status": row["status"], "count": row["count"]} for row in grouped]
+    model_rows = [{"kind": "genx_model", **row} for row in models]
+    reputation_rows = [{"kind": "reputation", **row} for row in reputations]
     return {
         "section": "performance",
-        "rows": [{"worker_class": row["worker__worker_class"] or "unassigned", "status": row["status"], "count": row["count"]} for row in grouped],
-        "secondary_rows": models,
-        "meta": {"window": "7d", "qa_total": qa_total, "qa_pass": qa_pass, "qa_pass_rate": None if qa_total == 0 else round((qa_pass / qa_total) * 100, 2)},
+        "cards": [
+            {"label": "GROWTH STATUS", "value": growth.status if growth else "INSUFFICIENT_DATA", "truth": ", ".join(growth.reason_codes) if growth else "no persisted evaluation"},
+            {"label": "PRODUCTIVE UTILIZATION", "value": f"{(capacity.utilization * 100):.2f}%" if capacity else "NO SNAPSHOT", "truth": capacity.utilization_state if capacity else "no persisted capacity snapshot"},
+            {"label": "WAITING PROFITABLE WORK", "value": capacity.profitable_eligible_waiting if capacity else 0},
+            {"label": "AVOIDABLE IDLE", "value": f"{capacity.avoidable_idle_minutes} min" if capacity else "NO SNAPSHOT"},
+            {"label": "FOREGONE EXPECTED PROFIT", "value": f"${capacity.estimated_foregone_profit}" if capacity else "$0", "truth": "modelled opportunity cost; not revenue"},
+            {"label": "QA PASS RATE 7D", "value": "INSUFFICIENT_DATA" if qa_total == 0 else f"{round((qa_pass / qa_total) * 100, 2)}%"},
+        ],
+        "rows": profitability,
+        "secondary_rows": [*execution_rows, *model_rows, *reputation_rows],
+        "meta": {
+            "window": "7d execution / persisted aggregate windows", "qa_total": qa_total, "qa_pass": qa_pass,
+            "qa_pass_rate": None if qa_total == 0 else round((qa_pass / qa_total) * 100, 2),
+            "growth_metrics": growth.metrics if growth else {}, "growth_targets": targets,
+            "growth_stages": sorted(set(row["growth_stage"] for row in profitability)),
+            "capacity_idle_reason": capacity.idle_reason if capacity else "NO_SNAPSHOT",
+        },
     }
 
 
@@ -465,7 +556,43 @@ def alerts_snapshot(limit: int = 200) -> dict:
         "message": row.message,
         "acknowledged": _dt(row.acknowledged_at),
         "resolved": _dt(row.resolved_at),
+        "source": "persisted",
     } for row in Alert.objects.order_by("-created_at")[:limit]]
+    now = timezone.now()
+    derived = []
+
+    def add(alert_type, severity, message, evidence):
+        derived.append({"created": _dt(now), "severity": severity, "type": alert_type, "status": "DERIVED", "message": message, "evidence": evidence, "source": "database-derived"})
+
+    capacity = CapacitySnapshot.objects.order_by("-created_at").first()
+    if capacity and capacity.avoidable_idle_minutes > 0 and capacity.profitable_eligible_waiting > 0:
+        add("AVOIDABLE_IDLE", "WARNING", "Productive capacity is idle while profitable eligible work is waiting.", {"minutes": _dec(capacity.avoidable_idle_minutes), "waiting": capacity.profitable_eligible_waiting})
+    growth = GrowthEvaluation.objects.order_by("-created_at").first()
+    if growth and growth.status == "BEHIND":
+        add("GROWTH_TARGET_BEHIND", "WARNING", "The latest persisted growth evaluation is behind target.", {"reason_codes": growth.reason_codes})
+    for market in Marketplace.objects.filter(Q(payout_ready=False) | Q(south_africa_verified=False))[:20]:
+        add("PAYOUT_BLOCKER", "WARNING", f"{market.slug} is not payout-ready for the configured owner context.", {"payout_ready": market.payout_ready, "south_africa_verified": market.south_africa_verified})
+    for market in Marketplace.objects.filter(health_snapshot__auth_ok=False)[:20]:
+        add("MARKET_AUTH_FAILURE", "ERROR", f"{market.slug} latest health snapshot reports failed authentication.", {"market": market.slug})
+    failed_bids = Bid.objects.filter(status__in=["FAILED", "REJECTED"]).values("job__marketplace__slug").annotate(count=Count("id")).filter(count__gte=3)
+    for row in failed_bids:
+        add("REPEATED_BID_FAILURE", "WARNING", f"Repeated bid failures recorded for {row['job__marketplace__slug']}.", {"count": row["count"]})
+    for strategy in PricingStrategy.objects.filter(offered_price__lt=F("minimum_profitable_price")):
+        add("UNUSUALLY_LOW_PRICING", "ERROR", "A persisted offer is below its minimum profitable price.", {"strategy_id": str(strategy.id)})
+    degraded = PerformanceAggregate.objects.filter(sample_count__gte=3).filter(Q(qa_first_pass_rate__lt=Decimal("0.80")) | Q(revision_rate__gt=Decimal("0.20")))[:20]
+    for row in degraded:
+        alert_type = "QA_DEGRADATION" if row.qa_first_pass_rate < Decimal("0.80") else "HIGH_REVISION_RATE"
+        add(alert_type, "WARNING", f"{row.dimension_type} {row.dimension_key} is outside reviewed quality thresholds.", {"qa_rate": _dec(row.qa_first_pass_rate), "revision_rate": _dec(row.revision_rate)})
+    latest_synthetic = SyntheticDatasetRun.objects.order_by("-created_at").first()
+    if latest_synthetic and latest_synthetic.qa_rejection_rate > Decimal("0.20"):
+        add("SYNTHETIC_DATA_QA_DEGRADATION", "WARNING", "Latest synthetic-data run rejected more than 20% of generated records.", {"run_id": latest_synthetic.id, "rejection_rate": _dec(latest_synthetic.qa_rejection_rate)})
+    expiring = ProgramScopeVersion.objects.filter(active=True, expires_at__gt=now, expires_at__lte=now + timedelta(days=7)).select_related("program")
+    for scope in expiring:
+        add("SAFETY_SCOPE_EXPIRY", "WARNING", f"Authorized safety scope for {scope.program.name} expires within seven days.", {"scope_version": scope.version, "expires_at": _dt(scope.expires_at)})
+    resource = ResourceSnapshot.objects.order_by("-created_at").first()
+    if resource and (not resource.healthy or resource.blocker_codes):
+        add("RESOURCE_CONSTRAINT", "ERROR", "Latest resource snapshot contains admission blockers.", {"reason_codes": resource.blocker_codes})
+    rows = [*derived, *rows][:limit]
     return {"section": "alerts", "rows": rows}
 
 

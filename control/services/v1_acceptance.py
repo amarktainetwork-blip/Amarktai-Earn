@@ -47,6 +47,23 @@ def _ci_gate(identifier: str, title: str, evidence: str, *, ci_proven: bool) -> 
     )
 
 
+def _contract_gate(identifier: str, title: str, evidence: str, *, ci_proven: bool, markers: tuple[tuple[str, str], ...]) -> AcceptanceCriterion:
+    missing = []
+    for relative, marker in markers:
+        try:
+            present = marker in _source_text(relative)
+        except OSError:
+            present = False
+        if not present:
+            missing.append(f"{relative}:{marker}")
+    if missing:
+        return _criterion(
+            identifier, title, "FAIL", "SOURCE", "Expanded V1 contract markers are missing: " + ", ".join(missing),
+            "Restore the missing implementation and its deterministic/integration proof before freezing V1.",
+        )
+    return _ci_gate(identifier, title, evidence, ci_proven=ci_proven)
+
+
 def _source_text(relative: str) -> str:
     return (Path(settings.BASE_DIR) / relative).read_text(encoding="utf-8")
 
@@ -59,6 +76,15 @@ def _safe_defaults() -> AcceptanceCriterion:
         "SANDBOX_CODING_ENABLED": "0",
         "AGENTGIGS_MAX_GENX_CREDITS": "0",
         "DEPENDENCY_PREPARATION_ENABLED": "0",
+        "DEALWORK_AUTO_ACQUIRE_ENABLED": "0",
+        "CALLBOARD_AUTO_ACQUIRE_ENABLED": "0",
+        "TASKBOUNTY_AUTO_ACQUIRE_ENABLED": "0",
+        "OPIRE_AUTO_ACQUIRE_ENABLED": "0",
+        "ALGORA_AUTO_ACQUIRE_ENABLED": "0",
+        "SYNTHETIC_SPECULATIVE_INVENTORY_ENABLED": "0",
+        "SAFETY_BOUNTY_EXECUTION_ENABLED": "0",
+        "REPUTATION_INVESTMENT_ENABLED": "0",
+        "REPUTATION_INVESTMENT_DAILY_LIMIT": "0",
     }
     values = {}
     for raw in _source_text(".env.example").splitlines():
@@ -68,7 +94,7 @@ def _safe_defaults() -> AcceptanceCriterion:
     mismatches = [f"{key}={values.get(key)!r}" for key, value in expected.items() if values.get(key) != value]
     if mismatches:
         return _criterion("safe_defaults", "Conservative production defaults", "FAIL", "SOURCE", "Unsafe or missing defaults: " + ", ".join(mismatches), "Restore fail-closed defaults before deployment.")
-    return _criterion("safe_defaults", "Conservative production defaults", "PASS", "SOURCE", "Autonomy, auto-apply, coding, dependency preparation, and GenX spend are disabled by default.")
+    return _criterion("safe_defaults", "Conservative production defaults", "PASS", "SOURCE", "Autonomy, market acquisition, coding, dependency preparation, GenX spend, speculative synthetic inventory, safety execution, and reputation-loss budget are disabled by default.")
 
 
 def _money_truth() -> AcceptanceCriterion:
@@ -206,10 +232,55 @@ def build_acceptance_report(*, ci_proven: bool = False) -> dict:
         _postgres_redis(ci_proven=ci_proven),
         _resource_governor(ci_proven=ci_proven),
         _ci_gate("acquisition_gates", "Autonomy, capability preflight, economics, and global locks", "CI proved OFF/SHADOW/LOW_RISK/FULL semantics, separate market opt-in, exact registry preflight, profitability gates, and fencing locks.", ci_proven=ci_proven),
+        _contract_gate(
+            "growth_governor", "Persisted Growth Governor, targets, and stages",
+            "CI proved migration-backed targets/evaluations, AHEAD/ON_TRACK/BEHIND/INSUFFICIENT_DATA evaluation, and BOOTSTRAP/ESTABLISH/PROFIT/SCALE classification without converting targets into revenue claims.",
+            ci_proven=ci_proven, markers=(("control/services/profit_brain.py", "evaluate_growth_targets"), ("control/models.py", "class GrowthEvaluation"), ("tests/test_profit_brain_integration.py", "test_growth")),
+        ),
+        _contract_gate(
+            "utilization_economics", "Utilization-aware economics and no-avoidable-idle invariant",
+            "CI proved capacity persistence, idle micro-profit acceptance, busy opportunity-cost preference, resource reservation, and avoidable-idle accounting.",
+            ci_proven=ci_proven, markers=(("control/services/profit_brain.py", "capture_capacity"), ("control/services/profit_brain.py", "BETTER_COMMITTED_WORK_HAS_PRIORITY"), ("tests/test_profit_brain_integration.py", "avoidable_idle")),
+        ),
+        _contract_gate(
+            "adaptive_economic_learning", "Bounded pricing, exploration, reputation, and learning",
+            "CI proved persisted adaptive pricing, bounded exploration allocation, conservative reputation signals, rolling performance aggregates, and disabled-by-default reputation-loss investment.",
+            ci_proven=ci_proven, markers=(("control/services/profit_brain.py", "recommend_price"), ("control/services/profit_brain.py", "record_reputation_snapshot"), ("control/models.py", "class StrategyAdjustment")),
+        ),
+        _contract_gate(
+            "multifile_composite", "Safe multi-file ingestion and composite DAG execution",
+            "CI proved file-count/size/path/type limits, hashes and deduplication, immutable manifests, dependency ordering, step-specific worker execution, QA gates, and bounded repair.",
+            ci_proven=ci_proven, markers=(("planning/services.py", "rebuild_asset_manifest"), ("planning/services.py", "_build_composite_plan"), ("tests/test_multifile_composite_integration.py", "test_explicit_dag")),
+        ),
         _worker_registry(ci_proven=ci_proven),
+        _contract_gate(
+            "expanded_worker_qa", "Expanded worker catalogue and independent QA",
+            "CI executed the expanded deterministic worker catalogue and reopened deliverables through operation-specific QA profiles.",
+            ci_proven=ci_proven, markers=(("workers/registry.py", "advanced_structured_data"), ("workers/qa/runtime.py", "defensive_review"), ("tests/test_expanded_workers_integration.py", "Expanded")),
+        ),
+        _contract_gate(
+            "synthetic_data_factory", "Commissioned-first Synthetic Data Factory",
+            "CI proved schema-driven generation, validation, privacy/provenance checks, deduplication, deterministic splits, dataset cards, persisted economics, and reopen QA; speculative inventory remains disabled by default.",
+            ci_proven=ci_proven, markers=(("workers/synthetic_data/worker.py", "SYNTHETIC_INVENTORY_NOT_EXPLICITLY_AUTHORIZED"), ("control/services/synthetic_data.py", "persist_synthetic_dataset_run"), ("tests/test_synthetic_safety_integration.py", "test_commissioned_synthetic")),
+        ),
+        _contract_gate(
+            "authorized_safety_research", "Authorized bounded AI-safety research lane",
+            "CI proved NO SCOPE = NO TESTING, exact-current-target and immediate reauthorization gates, local-fixture-only bounded execution, prohibited-technique rejection, independent reproduction, duplicate checks, and draft-only submission truth.",
+            ci_proven=ci_proven, markers=(("control/services/safety_research.py", "NO_SCOPE_NO_TESTING"), ("control/services/safety_research.py", "SAFETY_ATTEMPT_REAUTHORIZATION_FAILED"), ("tests/test_synthetic_safety_integration.py", "test_authorization_is_rechecked")),
+        ),
+        _contract_gate(
+            "multi_market_adapters", "Multi-market adapter contracts and payout fail-closed truth",
+            "CI proved AgentGigs plus Dealwork, Callboard, TaskBounty, Opire, and Algora source/adapter contracts with mocked externals, explicit policy/payout blockers, disabled acquisition, and prohibited crypto payout-route rejection.",
+            ci_proven=ci_proven, markers=(("control/services/markets.py", "DealworkAdapter"), ("control/services/markets.py", "AlgoraAdapter"), ("tests/test_multi_market_adapters_integration.py", "payout")),
+        ),
         _ci_gate("qa_repair", "Independent QA and bounded repair", "CI proved independent QA records, bounded repair attempts, and fail-closed submission gating.", ci_proven=ci_proven),
         _ci_gate("lifecycle_logic", "Submission, revision, payout, and ledger lifecycle logic", "CI proved idempotent lifecycle transitions and that only reconciled SETTLED payouts become received cash.", ci_proven=ci_proven),
         _dashboard_contract(ci_proven=ci_proven),
+        _contract_gate(
+            "dashboard_economic_truth", "Expanded dashboard economic, utilization, market, and alert truth",
+            "CI proved settled-only cash cards, expected/exposure labels, persisted growth/utilization/profitability data, complete worker and market truth, derived safety/synthetic/resource alerts, and secret redaction.",
+            ci_proven=ci_proven, markers=(("control/ops.py", "BLOCKED PROFITABLE OPPORTUNITIES 24H"), ("control/ops.py", "SAFETY_SCOPE_EXPIRY"), ("tests/test_ops_dashboard_integration.py", "sensitive")),
+        ),
         _ci_gate("watchdog_recovery", "Watchdog, reconciliation, and retention", "CI proved stale-state recovery, safe retry classification, unknown-remote reconciliation, cleanup exclusions, and audit records.", ci_proven=ci_proven),
         _sandbox_contract(ci_proven=ci_proven),
         _ci_gate("media_runtime", "Bounded deterministic media runtime", "CI built the FFmpeg/Pillow production image and proved image/audio output plus independent QA and output bounds.", ci_proven=ci_proven),
@@ -218,14 +289,14 @@ def build_acceptance_report(*, ci_proven: bool = False) -> dict:
         _criterion("public_https", "Public HTTPS at earn.amarktai.co.za", "EXTERNAL_PROOF_REQUIRED", "PRODUCTION", "Repository and Caddy configuration cannot prove public DNS/TLS reachability.", "Deploy to Webdock, verify DNS, TLS certificate, security headers, and owner-only access from outside the VPS."),
         _criterion("actual_reboot", "Actual Webdock reboot recovery", "EXTERNAL_PROOF_REQUIRED", "PRODUCTION", "CI proves restart configuration and reconciliation logic, not a physical VPS reboot.", "Perform a controlled Webdock reboot and retain service, heartbeat, queue, and reconciliation evidence."),
         _criterion("live_genx", "Live GenX credentials and budgeted call", "EXTERNAL_PROOF_REQUIRED", "PRODUCTION", "No live credential or billable call is exercised by CI.", "Configure the production GenX key, sync the live catalog, execute one capped call, and reconcile actual credits."),
-        _criterion("live_market_account", "Live AgentGigs authentication, policy, KYC, and payout readiness", "EXTERNAL_PROOF_REQUIRED", "PRODUCTION", "Marketplace onboarding and South African payout eligibility require the real account.", "Complete account verification/KYC, confirm current automation policy, and persist payout-ready evidence without exposing credentials."),
+        _criterion("live_market_account", "Live market authentication, policy, KYC, and payout readiness", "EXTERNAL_PROOF_REQUIRED", "PRODUCTION", "AgentGigs, Dealwork, Callboard, TaskBounty, Opire, and Algora integrations use deterministic CI fixtures; live availability, policies, account access, and South African payout eligibility require external evidence.", "For each market retained for production, verify the current official integration surface and automation policy, authenticate the real account where supported, complete KYC, and persist South African payout evidence without exposing credentials."),
         _criterion("live_opportunity", "Real opportunity discovery and acquisition", "EXTERNAL_PROOF_REQUIRED", "PRODUCTION", "CI uses deterministic fixtures and never performs a live irreversible marketplace mutation.", "Begin in SHADOW, validate real discovered opportunities, then explicitly enable LOW_RISK and the separate market switch for a funded eligible job."),
         _criterion("settled_cash", "Real execution, remote submission, approval, payout, and SETTLED cash", "EXTERNAL_PROOF_REQUIRED", "PRODUCTION", "Code and CI cannot manufacture a funded job or received cash.", "Complete one real funded job through remote submission, approval, payout reconciliation, and bank/rail-confirmed SETTLED posting."),
     ]
     counts = {status: sum(1 for row in criteria if row.status == status) for status in sorted(VALID_STATUSES)}
     overall = "FAIL" if counts["FAIL"] else "BLOCKED" if counts["BLOCKED"] else "EXTERNAL_PROOF_REQUIRED" if counts["EXTERNAL_PROOF_REQUIRED"] else "PASS"
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": timezone.now().isoformat(),
         "ci_proven_context": ci_proven,
         "overall_status": overall,

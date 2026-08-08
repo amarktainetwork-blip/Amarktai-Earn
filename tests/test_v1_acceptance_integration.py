@@ -24,7 +24,7 @@ class V1AcceptanceIntegrationTests(TestCase):
     def test_report_is_machine_readable_and_never_promotes_external_proof(self):
         with patch("control.services.v1_acceptance.redis.Redis.from_url", return_value=self.redis_client):
             report = build_acceptance_report(ci_proven=True)
-        self.assertEqual(report["schema_version"], 1)
+        self.assertEqual(report["schema_version"], 2)
         self.assertTrue(report["criteria"])
         self.assertFalse([row for row in report["criteria"] if row["status"] not in VALID_STATUSES])
         self.assertFalse([row for row in report["criteria"] if row["status"] == "FAIL"])
