@@ -509,6 +509,155 @@ class AcquisitionPreflight(Timestamped):
     details = models.JSONField(default=dict)
 
 
+class GrowthTarget(Timestamped):
+    key = models.CharField(max_length=80, unique=True)
+    period = models.CharField(max_length=24, default="DAILY")
+    target_value = models.DecimalField(max_digits=18, decimal_places=4)
+    unit = models.CharField(max_length=32)
+    enabled = models.BooleanField(default=True)
+    details = models.JSONField(default=dict)
+
+
+class GrowthEvaluation(Timestamped):
+    status = models.CharField(max_length=32)
+    window_start = models.DateTimeField()
+    window_end = models.DateTimeField()
+    reason_codes = models.JSONField(default=list)
+    metrics = models.JSONField(default=dict)
+    targets = models.JSONField(default=dict)
+    adjustments = models.JSONField(default=list)
+
+
+class PerformanceAggregate(Timestamped):
+    dimension_type = models.CharField(max_length=24)
+    dimension_key = models.CharField(max_length=240)
+    marketplace = models.ForeignKey(Marketplace, null=True, blank=True, on_delete=models.SET_NULL)
+    capability = models.CharField(max_length=80, blank=True)
+    operation = models.CharField(max_length=80, blank=True)
+    worker_class = models.CharField(max_length=80, blank=True)
+    worker_version = models.CharField(max_length=40, blank=True)
+    strategy_key = models.CharField(max_length=120, blank=True)
+    growth_stage = models.CharField(max_length=16, default="BOOTSTRAP")
+    window_start = models.DateTimeField()
+    window_end = models.DateTimeField()
+    jobs_discovered = models.PositiveIntegerField(default=0)
+    jobs_attempted = models.PositiveIntegerField(default=0)
+    jobs_awarded = models.PositiveIntegerField(default=0)
+    jobs_completed = models.PositiveIntegerField(default=0)
+    qa_first_pass_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    repair_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    revision_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    on_time_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    acceptance_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    settlement_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    gross_payout = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    platform_fees = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    genx_cost = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    direct_cost = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    expected_cost = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    actual_cost = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    settled_profit = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    runtime_seconds = models.PositiveBigIntegerField(default=0)
+    time_to_award_seconds = models.PositiveBigIntegerField(default=0)
+    time_to_acceptance_seconds = models.PositiveBigIntegerField(default=0)
+    time_to_settlement_seconds = models.PositiveBigIntegerField(default=0)
+    profit_per_execution_minute = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    profit_per_genx_credit = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    reputation_delta = models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
+    sample_count = models.PositiveIntegerField(default=0)
+    details = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dimension_type", "dimension_key", "window_start", "window_end"],
+                name="uniq_performance_dimension_window",
+            )
+        ]
+
+
+class ReputationSnapshot(Timestamped):
+    marketplace = models.ForeignKey(Marketplace, on_delete=models.CASCADE, related_name="reputation_snapshots")
+    capability = models.CharField(max_length=80, blank=True)
+    rating = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
+    rating_count = models.PositiveIntegerField(default=0)
+    completed_jobs = models.PositiveIntegerField(default=0)
+    revision_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    on_time_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    source = models.CharField(max_length=120)
+    observed_at = models.DateTimeField(default=timezone.now)
+    details = models.JSONField(default=dict)
+
+
+class CapacitySnapshot(Timestamped):
+    node_id = models.CharField(max_length=120, default="VPS1")
+    productive_slots = models.PositiveIntegerField(default=0)
+    active_slots = models.PositiveIntegerField(default=0)
+    available_slots = models.PositiveIntegerField(default=0)
+    reserved_slots = models.PositiveIntegerField(default=0)
+    utilization = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    utilization_state = models.CharField(max_length=24)
+    profitable_eligible_waiting = models.PositiveIntegerField(default=0)
+    avoidable_idle_minutes = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    unavoidable_idle_minutes = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    estimated_foregone_profit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    idle_reason = models.CharField(max_length=120, blank=True)
+    details = models.JSONField(default=dict)
+
+
+class PricingStrategy(Timestamped):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    marketplace = models.ForeignKey(Marketplace, on_delete=models.CASCADE, related_name="pricing_strategies")
+    capability = models.CharField(max_length=80)
+    operation = models.CharField(max_length=80)
+    growth_stage = models.CharField(max_length=16)
+    utilization_state = models.CharField(max_length=24)
+    minimum_profitable_price = models.DecimalField(max_digits=14, decimal_places=2)
+    advertised_budget = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    competitive_price = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    offered_price = models.DecimalField(max_digits=14, decimal_places=2)
+    desired_margin = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    exploration = models.BooleanField(default=False)
+    adjustment_fraction = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    outcome = models.CharField(max_length=32, default="PENDING")
+    reason_codes = models.JSONField(default=list)
+    details = models.JSONField(default=dict)
+
+
+class OpportunityDecision(Timestamped):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name="opportunity_decisions")
+    preflight = models.ForeignKey(AcquisitionPreflight, null=True, blank=True, on_delete=models.SET_NULL)
+    capacity = models.ForeignKey(CapacitySnapshot, null=True, blank=True, on_delete=models.SET_NULL)
+    pricing_strategy = models.ForeignKey(PricingStrategy, null=True, blank=True, on_delete=models.SET_NULL)
+    growth_stage = models.CharField(max_length=16)
+    utilization_state = models.CharField(max_length=24)
+    allowed = models.BooleanField(default=False)
+    exploration = models.BooleanField(default=False)
+    reputation_investment = models.BooleanField(default=False)
+    expected_cash_profit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    risk_adjusted_profit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    reputation_contribution = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    learning_contribution = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    opportunity_cost = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    resource_minutes = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    time_to_cash_hours = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    reason_codes = models.JSONField(default=list)
+    details = models.JSONField(default=dict)
+
+
+class StrategyAdjustment(Timestamped):
+    scope_type = models.CharField(max_length=24)
+    scope_key = models.CharField(max_length=240)
+    growth_stage = models.CharField(max_length=16)
+    adjustment_type = models.CharField(max_length=80)
+    previous_value = models.JSONField(default=dict)
+    proposed_value = models.JSONField(default=dict)
+    reason_codes = models.JSONField(default=list)
+    bounded = models.BooleanField(default=True)
+    applied = models.BooleanField(default=False)
+
+
 class ServiceHeartbeat(Timestamped):
     service = models.CharField(max_length=80, unique=True)
     node_id = models.CharField(max_length=120, default="VPS1")

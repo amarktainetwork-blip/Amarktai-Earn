@@ -16,7 +16,7 @@ class MigrationContractTests(unittest.TestCase):
             path.read_text(encoding="utf-8")
             for path in sorted(MIGRATIONS.glob("[0-9][0-9][0-9][0-9]_*.py"))
         )
-        created = set(re.findall(r'name="([A-Za-z0-9_]+)"', migration_text))
+        created = set(re.findall(r"name=['\"]([A-Za-z0-9_]+)['\"]", migration_text))
         self.assertEqual(models - created, set())
 
     def test_job_score_migration_persists_profit_rate_fields(self):

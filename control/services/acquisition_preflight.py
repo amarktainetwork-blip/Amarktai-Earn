@@ -9,6 +9,7 @@ from control.models import AcquisitionPreflight, AuditEvent, GenXAccountSnapshot
 from control.services.admission import decide_admission
 from control.services.autonomy import acquisition_autonomy
 from control.services.workload_policy import evaluate_job
+from control.services.profit_brain import capture_capacity, evaluate_opportunity, persist_opportunity_decision
 from workers.registry import WorkerRegistryError, operation_spec
 from django.utils import timezone
 
@@ -150,8 +151,6 @@ def run_acquisition_preflight(job, *, persist: bool = True):
     if genx_cost + operational_cost > _decimal_env("MAX_EXECUTION_COST_PER_JOB_USD", "3.00"):
         reasons.append("EXECUTION_COST_ABOVE_MAXIMUM")
     expected_net = (expected_gross - fee - genx_cost - operational_cost).quantize(CENT, rounding=ROUND_HALF_UP)
-    if expected_net < _decimal_env("MIN_EXPECTED_PROFIT_USD", "1.00"):
-        reasons.append("EXPECTED_NET_BELOW_MINIMUM")
     economics_confidence = Decimal(str(getattr(score, "p_accept", 0) or 0)) * Decimal(str(getattr(score, "p_payment", 0) or 0))
     confidence = min(inference_confidence, economics_confidence).quantize(Decimal("0.00001"))
     if confidence < _decimal_env("MIN_ACQUISITION_CONFIDENCE", "0.75"):
@@ -162,6 +161,9 @@ def run_acquisition_preflight(job, *, persist: bool = True):
         expected_storage_bytes=_expected_storage_bytes(job), persist=persist,
     )
     reasons.extend(admission.reason_codes)
+    capacity = capture_capacity(persist=persist)
+    economic = evaluate_opportunity(job, capacity=capacity, capability=spec.worker_class if spec else operation)
+    reasons.extend(economic.reason_codes)
     reasons = list(dict.fromkeys(reasons))
     eligible = not [reason for reason in reasons if reason not in {"AUTONOMY_OFF", "AUTONOMY_SHADOW_ONLY", "ACQUISITION_SWITCH_DISABLED"}]
     allowed = eligible and autonomy.may_acquire
@@ -183,6 +185,13 @@ def run_acquisition_preflight(job, *, persist: bool = True):
             "enabled_operations": sorted(enabled_operations),
             "expected_storage_bytes": _expected_storage_bytes(job),
             "resource_decision_id": str(getattr(admission, "id", "")),
+            "capacity_snapshot_id": str(getattr(capacity, "id", "")),
+            "growth_stage": economic.growth_stage.value,
+            "utilization_state": economic.utilization_state.value,
+            "risk_adjusted_profit": str(economic.risk_adjusted_profit),
+            "opportunity_cost": str(economic.opportunity_cost),
+            "exploration": economic.exploration,
+            "reputation_investment": economic.reputation_investment,
         },
     }
     if persist:
@@ -192,6 +201,10 @@ def run_acquisition_preflight(job, *, persist: bool = True):
             event_type="job.acquisition_preflight_allowed" if allowed else "job.acquisition_preflight_blocked",
             actor="acquisition-preflight",
             metadata={"job_id": str(job.id), "preflight_id": str(result.id), "operation": operation, "reason_codes": reasons},
+        )
+        persist_opportunity_decision(
+            job, economic, capacity=capacity, preflight=result,
+            allowed=result.allowed, reason_codes=reasons,
         )
         return result
     return type("PreflightResult", (), values)()
