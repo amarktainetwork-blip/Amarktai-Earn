@@ -2,6 +2,7 @@ import hashlib
 import uuid
 from datetime import timedelta
 import jwt
+from django.db import transaction
 from django.conf import settings
 from django.utils import timezone
 from .models import RefreshSession
@@ -53,20 +54,33 @@ def rotate_refresh(token: str):
     payload = decode_token(token, "refresh")
     jti = uuid.UUID(payload["jti"])
     family = uuid.UUID(payload["family"])
-    try:
-        session = RefreshSession.objects.select_for_update().get(jti=jti)
-    except RefreshSession.DoesNotExist as exc:
-        raise jwt.InvalidTokenError("unknown refresh session") from exc
-    if session.revoked_at or session.replaced_by_jti:
-        RefreshSession.objects.filter(family_id=family, revoked_at__isnull=True).update(revoked_at=timezone.now())
+    reuse_detected = False
+    expired = False
+    result = None
+    # Own the transaction here. In particular, family revocation on replay must
+    # commit before the caller receives an InvalidTokenError; otherwise an outer
+    # atomic block would roll back the security response that the error triggered.
+    with transaction.atomic():
+        try:
+            session = RefreshSession.objects.select_for_update().get(jti=jti)
+        except RefreshSession.DoesNotExist as exc:
+            raise jwt.InvalidTokenError("unknown refresh session") from exc
+        if session.revoked_at or session.replaced_by_jti:
+            RefreshSession.objects.filter(family_id=family, revoked_at__isnull=True).update(revoked_at=timezone.now())
+            reuse_detected = True
+        elif session.expires_at <= timezone.now():
+            expired = True
+        else:
+            new_token, new_session = issue_refresh(session.user, family_id=family)
+            session.revoked_at = timezone.now()
+            session.replaced_by_jti = new_session.jti
+            session.save(update_fields=["revoked_at", "replaced_by_jti", "updated_at"])
+            result = (issue_access(session.user), new_token, new_session)
+    if reuse_detected:
         raise jwt.InvalidTokenError("refresh token reuse detected")
-    if session.expires_at <= timezone.now():
+    if expired:
         raise jwt.ExpiredSignatureError("refresh expired")
-    new_token, new_session = issue_refresh(session.user, family_id=family)
-    session.revoked_at = timezone.now()
-    session.replaced_by_jti = new_session.jti
-    session.save(update_fields=["revoked_at", "replaced_by_jti", "updated_at"])
-    return issue_access(session.user), new_token, new_session
+    return result
 
 
 def revoke_refresh(token: str) -> None:

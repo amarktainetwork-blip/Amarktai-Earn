@@ -1,0 +1,81 @@
+name: Amarktai Earn CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+  AMARKTAI_ENV: test
+  DJANGO_SECRET_KEY: ci-django-secret-key-not-production-2026
+  DJANGO_DEBUG: "0"
+  DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+  DJANGO_CSRF_TRUSTED_ORIGINS: http://testserver
+  DJANGO_DB_ENGINE: postgres
+  POSTGRES_DB: amarktai_earn_ci
+  POSTGRES_USER: amarktai_ci
+  POSTGRES_PASSWORD: ci-postgres-password
+  POSTGRES_HOST: 127.0.0.1
+  POSTGRES_PORT: "5432"
+  REDIS_URL: redis://127.0.0.1:6379/0
+  COOKIE_SECURE: "0"
+  JWT_ISSUER: amarktai-earn-ci
+  JWT_AUDIENCE: amarktai-earn-owner-ci
+  JWT_ACTIVE_KID: v1
+  JWT_SIGNING_KEYS_JSON: '{"v1":"ci-signing-key-with-more-than-sixty-four-characters-000000000000000000"}'
+  FIELD_ENCRYPTION_ACTIVE_KID: v1
+  FIELD_ENCRYPTION_KEYS_JSON: '{"v1":"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="}'
+  AGENTGIGS_WEBHOOK_SECRET: integration-webhook-secret
+  AUTONOMOUS_MODE: OFF
+  AGENTGIGS_AUTO_APPLY_ENABLED: "0"
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: amarktai_earn_ci
+          POSTGRES_USER: amarktai_ci
+          POSTGRES_PASSWORD: ci-postgres-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U amarktai_ci -d amarktai_earn_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip && pip install -r requirements-prod.txt
+      - run: python -m compileall -q .
+      - run: python manage.py check
+      - run: python manage.py makemigrations --check --dry-run
+      - run: python manage.py migrate --noinput
+      - run: python manage.py healthcheck
+      - run: python -m unittest discover -s tests -p 'test_*_stdlib.py' -q
+      - run: python manage.py test tests.test_django_integration -v 2
+      - name: Compose configuration parses
+        env:
+          CADDY_EMAIL: ci@example.test
+        run: cp .env.example .env && docker compose config --quiet

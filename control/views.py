@@ -114,8 +114,7 @@ def refresh_tokens(request):
     if not token:
         return JsonResponse({"error": "refresh_required"}, status=401)
     try:
-        with transaction.atomic():
-            access, refresh, _ = rotate_refresh(token)
+        access, refresh, _ = rotate_refresh(token)
     except jwt.PyJWTError:
         response = JsonResponse({"error": "invalid_refresh"}, status=401)
         _clear_auth_cookies(response)
