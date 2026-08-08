@@ -228,6 +228,8 @@ class GenXGateway:
             metadata=metadata,
         )
         if not created:
+            # Never replay a request key automatically. A RESERVED/SUBMITTING call may
+            # represent a process crash after the remote request was accepted.
             return call
 
         started = time.monotonic()
@@ -277,6 +279,7 @@ class GenXGateway:
         tools: list | None = None,
         preferred_model: str | None = None,
     ) -> tuple[GenXCall, dict[str, Any]]:
+        """Run one documented GenX stateful session message with controller-side budget truth."""
         selected = self.select_model(task_class=task_class, category="text", preferred_model=preferred_model)
         job = Job.objects.select_related("marketplace").get(pk=job_id)
         metadata = {
