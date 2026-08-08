@@ -34,6 +34,7 @@ class DependencyMediaContracts(unittest.TestCase):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("ffmpeg", dockerfile)
+        self.assertIn("PYTHONPATH=/app", dockerfile)
         self.assertIn("media-smoke.py", workflow)
         self.assertIn("dependency-prep-smoke.py", workflow)
         self.assertIn("docker-cli", (ROOT / "sandbox/broker.Dockerfile").read_text(encoding="utf-8"))
