@@ -32,6 +32,15 @@ from control.services.acquisition_preflight import run_acquisition_preflight
 from control.services.autonomy import acquisition_autonomy
 from control.services.finance import record_payout_state
 from control.services.jobs import acquisition_decision, ingest_opportunity, score_and_persist, transition_job
+from control.services.profit_brain import (
+    UtilizationState,
+    capture_capacity,
+    current_growth_stage,
+    discovery_limit,
+    persist_pricing_strategy,
+    recommend_price,
+    refresh_profit_intelligence,
+)
 from markets.agentgigs.client import AgentGigsAdapter, AgentGigsError
 from markets.agentgigs.webhooks import AgentGigsWebhook
 
@@ -192,8 +201,40 @@ def score_open_jobs(limit: int = 100) -> dict:
         marketplace=market,
         state__in=[Job.State.DISCOVERED, Job.State.EXPECTED],
     ).order_by("-updated_at")[: max(1, min(int(limit), 500))]
+    capacity = capture_capacity(persist=True)
     for job in jobs:
-        offer = recommended_offer(job)
+        raw = job.normalized_payload if isinstance(job.normalized_payload, dict) else {}
+        operation = str(raw.get("operation") or "unclassified")
+        capability = operation
+        stage = current_growth_stage(market, capability)
+        advertised = _budget_usd(raw, "budget_max") or job.reward
+        competitive = _budget_usd(raw, "competitive_price") or recommended_offer(job)
+        expected_genx = _decimal_env("AGENTGIGS_EXPECTED_GENX_COST_USD", "0.25")
+        expected_external = _decimal_env("AGENTGIGS_EXPECTED_EXTERNAL_COST_USD", "0")
+        expected_local = _decimal_env("EXPECTED_OPERATIONAL_COST_PER_JOB_USD", "0.10")
+        attempts = Application.objects.filter(job__marketplace=market).count()
+        wins = Application.objects.filter(job__marketplace=market, status__in=["AWARDED", "ACCEPTED"]).count()
+        historical_win_rate = None if attempts < 5 else Decimal(wins) / Decimal(attempts)
+        recommendation = recommend_price(
+            total_expected_cost=expected_genx + expected_external + expected_local,
+            advertised_budget=advertised,
+            competitive_price=competitive,
+            fee_rate=market.fee_rate,
+            utilization_state=UtilizationState(capacity.utilization_state),
+            growth_stage=stage,
+            historical_win_rate=historical_win_rate,
+        )
+        offer = recommendation.offered_price
+        pricing = persist_pricing_strategy(
+            job,
+            capability=capability,
+            operation=operation,
+            recommendation=recommendation,
+            capacity=capacity,
+            stage=stage,
+            advertised_budget=advertised,
+            competitive_price=competitive,
+        )
         fee = (offer * market.fee_rate).quantize(CENT, rounding=ROUND_HALF_UP)
         economics = EconomicsInput(
             gross_reward=offer,
@@ -201,8 +242,9 @@ def score_open_jobs(limit: int = 100) -> dict:
             p_acquire=_decimal_env("AGENTGIGS_P_ACQUIRE_PRIOR", "0.15"),
             p_accept=_decimal_env("AGENTGIGS_P_ACCEPT_PRIOR", "0.85"),
             p_payment=_decimal_env("AGENTGIGS_P_PAYMENT_PRIOR", "0.98"),
-            expected_genx_cost=_decimal_env("AGENTGIGS_EXPECTED_GENX_COST_USD", "0.25"),
-            expected_external_cost=_decimal_env("AGENTGIGS_EXPECTED_EXTERNAL_COST_USD", "0"),
+            expected_genx_cost=expected_genx,
+            expected_external_cost=expected_external,
+            expected_compute_cost=expected_local,
             estimated_worker_minutes=_decimal_env("AGENTGIGS_ESTIMATED_MINUTES_PRIOR", "60"),
         )
         reasons = ["PRIOR_BASED_SCORE"]
@@ -217,6 +259,10 @@ def score_open_jobs(limit: int = 100) -> dict:
             recommended_offer=offer,
         )
         preflight = run_acquisition_preflight(job)
+        latest_decision = job.opportunity_decisions.order_by("-created_at").first()
+        if latest_decision:
+            latest_decision.pricing_strategy = pricing
+            latest_decision.save(update_fields=["pricing_strategy", "updated_at"])
         reasons.extend(preflight.reason_codes)
         decision = "APPLY" if preflight.allowed else "WATCH"
         job.jobscore.decision = decision
@@ -311,6 +357,10 @@ def sync_applications(adapter: AgentGigsAdapter | None = None) -> dict:
         if changed:
             app.save(update_fields=[*changed, "updated_at"])
             updated += 1
+        decision = job.opportunity_decisions.select_related("pricing_strategy").exclude(pricing_strategy=None).order_by("-created_at").first()
+        if decision and decision.pricing_strategy and status in {"FUNDED", "ACCEPTED", "REJECTED", "DECLINED", "EXPIRED"}:
+            decision.pricing_strategy.outcome = "WON" if status in {"FUNDED", "ACCEPTED"} else "LOST"
+            decision.pricing_strategy.save(update_fields=["outcome", "updated_at"])
         if status == "FUNDED" and job.state == Job.State.EXPECTED:
             transition_job(job.id, Job.State.AWARDED, actor="agentgigs-sync", metadata={"application_id": remote_id})
             awarded += 1
@@ -554,9 +604,12 @@ def run_cycle(adapter: AgentGigsAdapter | None = None, limit: int = 100) -> dict
         except AgentGigsError:
             active["failed"] += 1
 
-    market = sync_market(adapter, discover_limit=limit)
-    scoring = score_open_jobs(limit=limit)
+    capacity = capture_capacity(persist=True)
+    responsive_limit = discovery_limit(limit, UtilizationState(capacity.utilization_state))
+    market = sync_market(adapter, discover_limit=responsive_limit)
+    scoring = score_open_jobs(limit=responsive_limit)
     acquisition = attempt_profitable_applications(adapter)
+    intelligence = refresh_profit_intelligence()
     return {
         "webhooks": webhooks,
         "applications": applications,
@@ -564,4 +617,5 @@ def run_cycle(adapter: AgentGigsAdapter | None = None, limit: int = 100) -> dict
         "market": market,
         "scoring": scoring,
         "acquisition": acquisition,
+        "profit_intelligence": intelligence,
     }

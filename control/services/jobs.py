@@ -1,7 +1,7 @@
 import os
 from decimal import Decimal, ROUND_CEILING
 from django.db import transaction
-from control.acquisition import AcquisitionThresholds, MarketGate, ScoreGate, acquisition_gate
+from control.acquisition import AcquisitionThresholds, GateDecision
 from control.economics import EconomicsInput, score_job
 from control.job_state import assert_transition
 from control.models import AuditEvent, Job, JobScore, Marketplace
@@ -74,20 +74,23 @@ def score_and_persist(
 
 def acquisition_decision(job: Job):
     score = job.jobscore
-    return acquisition_gate(
-        MarketGate(
-            enabled=job.marketplace.enabled,
-            status=job.marketplace.status,
-            payout_ready=job.marketplace.payout_ready,
-            south_africa_verified=job.marketplace.south_africa_verified,
-        ),
-        ScoreGate(
-            expected_profit=score.expected_profit,
-            expected_profit_per_minute=score.expected_profit_per_minute,
-            expected_genx_cost=score.expected_genx_cost,
-        ),
-        _thresholds(),
-    )
+    from control.services.profit_brain import evaluate_opportunity
+
+    reasons = []
+    market = job.marketplace
+    if not market.enabled:
+        reasons.append("MARKET_DISABLED")
+    if market.status != Marketplace.Status.LIVE:
+        reasons.append(f"MARKET_{market.status}")
+    if not market.payout_ready:
+        reasons.append("PAYOUT_NOT_READY")
+    if not market.south_africa_verified:
+        reasons.append("SOUTH_AFRICA_NOT_VERIFIED")
+    if score.expected_genx_cost > _thresholds().max_genx_cost:
+        reasons.append("GENX_BUDGET_TOO_HIGH")
+    economic = evaluate_opportunity(job)
+    reasons.extend(economic.reason_codes)
+    return GateDecision(allowed=not reasons, reason_codes=tuple(dict.fromkeys(reasons)))
 
 
 @transaction.atomic
