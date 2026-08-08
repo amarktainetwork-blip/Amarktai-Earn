@@ -42,3 +42,17 @@ def submit_agentgigs_job_task(job_id, notes: str = "Completed and independently 
 
     submission = submit_qa_passed_job(adapter=configured_adapter(), job_id=job_id, notes=notes)
     return {"submission_id": submission.id, "status": submission.status}
+
+
+def execute_work_plan_task(plan_id: int):
+    from planning.services import execute_work_plan
+
+    plan = execute_work_plan(plan_id)
+    return {"plan_id": plan.id, "status": plan.status, "execution_attempts": plan.execution_attempts, "repair_attempts": plan.repair_attempts}
+
+
+def submit_work_plan_task(plan_id: int):
+    from planning.services import submit_work_plan
+
+    plan = submit_work_plan(plan_id)
+    return {"plan_id": plan.id, "status": plan.status}
