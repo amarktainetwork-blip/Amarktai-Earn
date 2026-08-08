@@ -1,4 +1,4 @@
-.PHONY: dev test check migrate up down logs bootstrap-owner genx-sync genx-reconcile
+.PHONY: dev test check migrate up down logs bootstrap-owner genx-sync genx-reconcile agentgigs-sync agentgigs-webhook agentgigs-watch-once
 
 dev:
 	DJANGO_DB_ENGINE=sqlite DJANGO_DEBUG=1 python manage.py runserver
@@ -29,3 +29,12 @@ genx-sync:
 
 genx-reconcile:
 	python manage.py reconcile_genx
+
+agentgigs-sync:
+	python manage.py sync_agentgigs
+
+agentgigs-webhook:
+	python manage.py register_agentgigs_webhook
+
+agentgigs-watch-once:
+	python manage.py run_agentgigs_watcher --once

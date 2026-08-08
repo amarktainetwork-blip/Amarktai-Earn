@@ -30,6 +30,7 @@ from .models import (
     TreasuryBalance,
     Worker,
     WorkerVersion,
+    WebhookEvent,
 )
 
 admin.site.register([
@@ -62,5 +63,6 @@ admin.site.register([
     TreasuryBalance,
     Alert,
     SystemSetting,
+    WebhookEvent,
     AuditEvent,
 ])

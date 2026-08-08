@@ -44,6 +44,7 @@ def score_and_persist(
     decision: str = "WATCH",
     reason_codes: list[str] | None = None,
     max_genx_credits: Decimal = Decimal("0"),
+    recommended_offer: Decimal | None = None,
 ) -> JobScore:
     result = score_job(economics)
     score, _ = JobScore.objects.update_or_create(
@@ -60,6 +61,7 @@ def score_and_persist(
             "expected_profit_per_genx_credit": result.expected_profit_per_genx_credit,
             "expected_minutes": max(1, int(economics.estimated_worker_minutes.to_integral_value(rounding=ROUND_CEILING))),
             "max_genx_credits": max_genx_credits,
+            "recommended_offer": recommended_offer,
             "decision": decision,
             "reason_codes": reason_codes or [],
         },

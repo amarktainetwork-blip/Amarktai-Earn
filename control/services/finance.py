@@ -49,8 +49,8 @@ def _recompute_treasury(job: Job, currency: str) -> TreasuryBalance:
 
 
 def _validate_job_money_state(job: Job, current_payout_state: str | None, target_state: str) -> None:
-    if current_payout_state is None and target_state == Payout.State.EARNED and job.state != Job.State.SUBMITTED:
-        raise ValueError(f"job must be SUBMITTED before earnings can be recorded, got {job.state}")
+    if current_payout_state is None and target_state == Payout.State.EARNED and job.state not in {Job.State.SUBMITTED, Job.State.ACCEPTED}:
+        raise ValueError(f"job must be SUBMITTED or ACCEPTED before earnings can be recorded, got {job.state}")
     if target_state == Payout.State.PAYOUT_PENDING and job.state not in {Job.State.ACCEPTED, Job.State.PAYOUT_PENDING}:
         raise ValueError(f"job must be ACCEPTED before payout can be pending, got {job.state}")
     if target_state == Payout.State.SETTLED and job.state not in {Job.State.ACCEPTED, Job.State.PAYOUT_PENDING, Job.State.SETTLED}:
