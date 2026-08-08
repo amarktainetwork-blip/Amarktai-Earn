@@ -81,9 +81,9 @@ class ExpandedV1FreezeIntegrationTests(TestCase):
 
     def test_overview_separates_cash_exposure_expected_profit_and_utilization(self):
         cards = {row["label"]: row for row in snapshot("overview", owner=self.owner)["cards"]}
-        self.assertEqual(cards["SETTLED TODAY"]["value"], "$45")
-        self.assertEqual(cards["SETTLED 7D"]["value"], "$45")
-        self.assertEqual(cards["AWARDED/ACCEPTED EXPOSURE"]["value"], "$75")
+        self.assertEqual(cards["SETTLED TODAY"]["value"], "$45.00")
+        self.assertEqual(cards["SETTLED 7D"]["value"], "$45.00")
+        self.assertEqual(cards["AWARDED/ACCEPTED EXPOSURE"]["value"], "$75.00")
         self.assertIn("not received cash", cards["AWARDED/ACCEPTED EXPOSURE"]["truth"])
         self.assertEqual(cards["RECORDED NET MARGIN 30D"]["value"], "90.00%")
         self.assertEqual(cards["TARGET STATUS"]["value"], "BEHIND")
@@ -99,7 +99,7 @@ class ExpandedV1FreezeIntegrationTests(TestCase):
         market = snapshot("markets", owner=self.owner)["rows"][0]
         self.assertEqual(market["awards_total"], 2)
         self.assertEqual(market["settlements_total"], 1)
-        self.assertEqual(market["settled_net"], "45")
+        self.assertEqual(market["settled_net"], "45.00")
         self.assertIn("PAYOUT_NOT_READY", market["blockers"])
 
     def test_alerts_derive_actionable_truth_without_exposing_secrets(self):

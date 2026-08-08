@@ -84,6 +84,10 @@ def _dec(value):
     return str(value)
 
 
+def _money(value) -> str:
+    return f"{Decimal(value or 0):.2f}"
+
+
 def _valid_runtime_secret(name: str) -> bool:
     value = os.getenv(name, "")
     lowered = value.casefold()
@@ -146,15 +150,15 @@ def overview_snapshot() -> dict:
     return {
         "section": "overview",
         "cards": [
-            {"label": "EARNED/PENDING/SETTLED EXPOSURE TODAY", "value": f"${earned}", "truth": "mixed lifecycle exposure; only the SETTLED cards are received cash"},
-            {"label": "SETTLED TODAY", "value": f"${settled}", "truth": "received cash only"},
-            {"label": "SETTLED 7D", "value": f"${settled_7d}", "truth": "reconciled received cash only"},
-            {"label": "SETTLED 30D", "value": f"${settled_30d}", "truth": "reconciled received cash only"},
-            {"label": "PENDING PAYOUT", "value": f"${pending}", "truth": "not received cash"},
-            {"label": "AWARDED/ACCEPTED EXPOSURE", "value": f"${exposure}", "truth": "contract value at risk; not received cash"},
-            {"label": "EXPECTED PROFIT 24H", "value": f"${expected_profit}", "truth": "modelled allowed opportunities; not revenue"},
-            {"label": "RECORDED GENX COST 30D", "value": f"${genx_cost_30d}", "truth": "persisted cost equivalent"},
-            {"label": "RECORDED NET PROFIT 30D", "value": f"${recorded_net_profit_30d}", "truth": "settled net cash less recorded GenX cost"},
+            {"label": "EARNED/PENDING/SETTLED EXPOSURE TODAY", "value": f"${_money(earned)}", "truth": "mixed lifecycle exposure; only the SETTLED cards are received cash"},
+            {"label": "SETTLED TODAY", "value": f"${_money(settled)}", "truth": "received cash only"},
+            {"label": "SETTLED 7D", "value": f"${_money(settled_7d)}", "truth": "reconciled received cash only"},
+            {"label": "SETTLED 30D", "value": f"${_money(settled_30d)}", "truth": "reconciled received cash only"},
+            {"label": "PENDING PAYOUT", "value": f"${_money(pending)}", "truth": "not received cash"},
+            {"label": "AWARDED/ACCEPTED EXPOSURE", "value": f"${_money(exposure)}", "truth": "contract value at risk; not received cash"},
+            {"label": "EXPECTED PROFIT 24H", "value": f"${_money(expected_profit)}", "truth": "modelled allowed opportunities; not revenue"},
+            {"label": "RECORDED GENX COST 30D", "value": f"${_money(genx_cost_30d)}", "truth": "persisted cost equivalent"},
+            {"label": "RECORDED NET PROFIT 30D", "value": f"${_money(recorded_net_profit_30d)}", "truth": "settled net cash less recorded GenX cost"},
             {"label": "RECORDED NET MARGIN 30D", "value": "INSUFFICIENT_DATA" if recorded_net_margin_30d is None else f"{recorded_net_margin_30d}%", "truth": "settled net cash less recorded GenX cost divided by settled gross"},
             {"label": "TARGET STATUS", "value": growth.status if growth else "INSUFFICIENT_DATA", "truth": ", ".join(growth.reason_codes) if growth else "no persisted evaluation"},
             {"label": "PRODUCTIVE UTILIZATION", "value": f"{(capacity.utilization * 100):.2f}%" if capacity else "NO SNAPSHOT", "truth": capacity.utilization_state if capacity else "no persisted capacity snapshot"},
@@ -361,7 +365,7 @@ def markets_snapshot() -> dict:
                 state__in=[Job.State.AWARDED, Job.State.EXECUTING, Job.State.SUBMITTED, Job.State.ACCEPTED, Job.State.PAYOUT_PENDING, Job.State.SETTLED],
             ).count(),
             "settlements_total": Payout.objects.filter(job__marketplace=market, state=Payout.State.SETTLED).count(),
-            "settled_net": _dec(Payout.objects.filter(job__marketplace=market, state=Payout.State.SETTLED).aggregate(v=Sum("net"))["v"] or Decimal("0")),
+            "settled_net": _money(Payout.objects.filter(job__marketplace=market, state=Payout.State.SETTLED).aggregate(v=Sum("net"))["v"] or Decimal("0")),
             "unknown_remote_state": Application.objects.filter(job__marketplace=market, status="UNKNOWN_REMOTE_STATE").count(),
             "latest_preflight": "ALLOWED" if preflight and preflight.allowed else "BLOCKED" if preflight else "NO DECISION",
             "latest_preflight_reasons": preflight.reason_codes if preflight else [],
