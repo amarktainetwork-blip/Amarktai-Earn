@@ -16,6 +16,7 @@ from control.services.locks import JobLockUnavailable, acquire_job_lock, release
 from workers.base import WorkRequest
 from workers.qa.runtime import run_qa
 from workers.registry import WorkerRegistryError, operation_spec
+from control.services.workload_policy import require_allowed
 
 
 class ExecutionError(RuntimeError):
@@ -84,6 +85,10 @@ def execute_registered_job(
         permitted_states.add(Job.State.EXECUTING)
     if job.state not in permitted_states:
         raise ExecutionError(f"job must be acquired before execution, got {job.state}")
+    try:
+        require_allowed(job)
+    except ValueError as exc:
+        raise ExecutionError(str(exc)) from exc
 
     operation = str(inputs.get("operation") or "")
     try:

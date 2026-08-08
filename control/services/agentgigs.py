@@ -28,6 +28,8 @@ from control.models import (
 )
 from control.secrets import decrypt_secret
 from control.services.acquisition_runtime import AcquisitionError, acquire_profitable_job
+from control.services.acquisition_preflight import run_acquisition_preflight
+from control.services.autonomy import acquisition_autonomy
 from control.services.finance import record_payout_state
 from control.services.jobs import acquisition_decision, ingest_opportunity, score_and_persist, transition_job
 from markets.agentgigs.client import AgentGigsAdapter, AgentGigsError
@@ -174,14 +176,8 @@ def recommended_offer(job: Job) -> Decimal:
     return (minimum + ((maximum - minimum) * position)).quantize(CENT, rounding=ROUND_HALF_UP)
 
 
-def _execution_category_supported(job: Job) -> bool:
-    configured = os.getenv("AGENTGIGS_EXECUTABLE_CATEGORIES", "Data Analysis")
-    allowed = {item.strip().casefold() for item in configured.split(",") if item.strip()}
-    return job.task_class.strip().casefold() in allowed
-
-
 def _auto_apply_enabled() -> bool:
-    return os.getenv("AUTONOMOUS_MODE", "OFF").upper() == "ON" and os.getenv("AGENTGIGS_AUTO_APPLY_ENABLED", "0") == "1"
+    return acquisition_autonomy(switch_enabled=os.getenv("AGENTGIGS_AUTO_APPLY_ENABLED", "0") == "1").may_acquire
 
 
 def score_open_jobs(limit: int = 100) -> dict:
@@ -209,21 +205,23 @@ def score_open_jobs(limit: int = 100) -> dict:
             expected_external_cost=_decimal_env("AGENTGIGS_EXPECTED_EXTERNAL_COST_USD", "0"),
             estimated_worker_minutes=_decimal_env("AGENTGIGS_ESTIMATED_MINUTES_PRIOR", "60"),
         )
-        can_execute = _execution_category_supported(job)
         reasons = ["PRIOR_BASED_SCORE"]
-        if not can_execute:
-            reasons.append("WORKER_CAPABILITY_NOT_LIVE")
         if not _auto_apply_enabled():
             reasons.append("AUTO_APPLY_DISABLED")
-        decision = "APPLY" if can_execute and _auto_apply_enabled() else "WATCH"
         score_and_persist(
             job,
             economics,
-            decision=decision,
+            decision="WATCH",
             reason_codes=reasons,
             max_genx_credits=_decimal_env("AGENTGIGS_MAX_GENX_CREDITS", "0"),
             recommended_offer=offer,
         )
+        preflight = run_acquisition_preflight(job)
+        reasons.extend(preflight.reason_codes)
+        decision = "APPLY" if preflight.allowed else "WATCH"
+        job.jobscore.decision = decision
+        job.jobscore.reason_codes = list(dict.fromkeys(reasons))
+        job.jobscore.save(update_fields=["decision", "reason_codes", "updated_at"])
         scored += 1
         if decision == "APPLY":
             apply_ready += 1
@@ -253,7 +251,8 @@ def attempt_profitable_applications(adapter: AgentGigsAdapter | None = None, lim
     for job in jobs:
         attempted += 1
         gate = acquisition_decision(job)
-        if not gate.allowed or not _execution_category_supported(job):
+        preflight = run_acquisition_preflight(job)
+        if not gate.allowed or not preflight.allowed:
             blocked += 1
             continue
         offer = job.jobscore.recommended_offer or recommended_offer(job)

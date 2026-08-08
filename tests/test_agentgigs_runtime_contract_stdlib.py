@@ -21,10 +21,13 @@ class AgentGigsRuntimeContractTests(unittest.TestCase):
 
     def test_scoring_is_prior_based_and_auto_apply_requires_two_switches(self):
         text = (ROOT / "control/services/agentgigs.py").read_text(encoding="utf-8")
+        autonomy = (ROOT / "control/services/autonomy.py").read_text(encoding="utf-8")
         self.assertIn("PRIOR_BASED_SCORE", text)
-        self.assertIn('AUTONOMOUS_MODE', text)
+        self.assertIn('acquisition_autonomy', text)
         self.assertIn('AGENTGIGS_AUTO_APPLY_ENABLED', text)
-        self.assertIn('WORKER_CAPABILITY_NOT_LIVE', text)
+        self.assertIn('run_acquisition_preflight', text)
+        self.assertIn('AUTONOMOUS_MODE', autonomy)
+        self.assertNotIn('== "ON"', text + autonomy)
         self.assertIn('recommended_offer', text)
 
     def test_watcher_prioritizes_webhooks_before_new_discovery(self):

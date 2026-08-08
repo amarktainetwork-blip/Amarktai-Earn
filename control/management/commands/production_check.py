@@ -53,6 +53,9 @@ class Command(BaseCommand):
         backup_passphrase = os.getenv("BACKUP_PASSPHRASE", "")
         if _placeholder(backup_passphrase) or len(backup_passphrase) < 32:
             errors.append("BACKUP_PASSPHRASE must be a non-placeholder secret of at least 32 characters")
+        throttle_pepper = os.getenv("AUTH_THROTTLE_PEPPER", "")
+        if _placeholder(throttle_pepper) or len(throttle_pepper.encode()) < 32:
+            errors.append("AUTH_THROTTLE_PEPPER must contain at least 32 non-placeholder bytes")
 
         mode = os.getenv("AUTONOMOUS_MODE", "OFF").upper()
         if mode not in VALID_AUTONOMY_MODES:

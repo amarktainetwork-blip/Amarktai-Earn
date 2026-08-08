@@ -35,6 +35,25 @@ class LoginChallenge(Timestamped):
     attempts = models.PositiveSmallIntegerField(default=0)
 
 
+class AuthThrottle(Timestamped):
+    key_hash = models.CharField(max_length=64, unique=True)
+    scope = models.CharField(max_length=40)
+    failure_count = models.PositiveIntegerField(default=0)
+    window_started_at = models.DateTimeField(default=timezone.now)
+    last_failure_at = models.DateTimeField(null=True, blank=True)
+    locked_until = models.DateTimeField(null=True, blank=True)
+
+
+class ReauthenticationGrant(Timestamped):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    token_hash = models.CharField(max_length=64, unique=True)
+    allowed_actions = models.JSONField(default=list)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+
 class RefreshSession(Timestamped):
     jti = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     family_id = models.UUIDField(default=uuid.uuid4, db_index=True)
@@ -469,6 +488,24 @@ class AdmissionDecision(Timestamped):
     operation = models.CharField(max_length=80, blank=True)
     allowed = models.BooleanField(default=False)
     reason_codes = models.JSONField(default=list)
+    details = models.JSONField(default=dict)
+
+
+class AcquisitionPreflight(Timestamped):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name="acquisition_preflights")
+    autonomy_mode = models.CharField(max_length=16)
+    operation = models.CharField(max_length=80, blank=True)
+    worker_class = models.CharField(max_length=80, blank=True)
+    eligible = models.BooleanField(default=False)
+    allowed = models.BooleanField(default=False)
+    reason_codes = models.JSONField(default=list)
+    expected_gross = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    marketplace_fee = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    genx_cost = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    operational_cost = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    expected_net = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    confidence = models.DecimalField(max_digits=6, decimal_places=5, default=0)
     details = models.JSONField(default=dict)
 
 
