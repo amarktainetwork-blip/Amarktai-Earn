@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import include, path
-from control import views
+from control import views, webhooks
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -13,4 +13,5 @@ urlpatterns = [
     path("api/auth/refresh", views.refresh_tokens, name="refresh_tokens"),
     path("api/auth/logout", views.logout_view, name="logout"),
     path("api/overview", views.overview_api, name="overview_api"),
+    path("webhooks/agentgigs/", webhooks.agentgigs_webhook, name="agentgigs_webhook"),
 ]

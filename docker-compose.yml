@@ -45,13 +45,26 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    command: sh -lc 'rq worker --url "$$REDIS_URL" p0_revenue_protection p1_instant_claim p2_auto_accept p3_assigned p4_high_ev p5_microjobs p6_bounties p7_background'
+    command: sh -lc 'rq worker --with-scheduler --url "$$REDIS_URL" p0_revenue_protection p1_instant_claim p2_auto_accept p3_assigned p4_high_ev p5_microjobs p6_bounties p7_background'
     volumes:
       - artifacts:/var/lib/amarktai-earn/artifacts
       - job_data:/var/lib/amarktai-earn/jobs
       - repo_cache:/var/lib/amarktai-earn/repos
       - app_cache:/var/lib/amarktai-earn/cache
       - logs:/var/lib/amarktai-earn/logs
+      - uploads:/var/lib/amarktai-earn/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [internal]
+
+  watcher:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: sh -lc 'if [ "$$AGENTGIGS_WATCHER_ENABLED" = "1" ]; then exec python manage.py run_agentgigs_watcher; else exec sleep infinity; fi'
     depends_on:
       postgres:
         condition: service_healthy

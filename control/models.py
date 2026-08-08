@@ -178,6 +178,7 @@ class JobScore(Timestamped):
     expected_profit_per_genx_credit = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
     expected_minutes = models.PositiveIntegerField()
     max_genx_credits = models.DecimalField(max_digits=16, decimal_places=4, default=0)
+    recommended_offer = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     decision = models.CharField(max_length=32, default="WATCH")
     reason_codes = models.JSONField(default=list)
     score_version = models.CharField(max_length=32, default="v1")
@@ -373,6 +374,16 @@ class Revision(Timestamped):
     job = models.ForeignKey(Job, on_delete=models.CASCADE)
     message = models.TextField()
     status = models.CharField(max_length=32, default="REQUIRED")
+    source_event_key = models.CharField(max_length=64, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["job", "source_event_key"],
+                condition=~models.Q(source_event_key=""),
+                name="uniq_job_revision_source_event",
+            )
+        ]
 
 
 class Payout(Timestamped):
@@ -435,6 +446,20 @@ class SystemSetting(Timestamped):
     key = models.CharField(max_length=160, unique=True)
     value = models.JSONField(default=dict)
     sensitive = models.BooleanField(default=False)
+
+
+class WebhookEvent(Timestamped):
+    marketplace = models.ForeignKey(Marketplace, on_delete=models.CASCADE, related_name="webhook_events")
+    event_key = models.CharField(max_length=64, unique=True)
+    event_type = models.CharField(max_length=120)
+    external_job_id = models.CharField(max_length=255, blank=True, db_index=True)
+    occurred_at_remote = models.CharField(max_length=80, blank=True)
+    payload = models.JSONField(default=dict)
+    status = models.CharField(max_length=32, default="RECEIVED")
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    error_code = models.CharField(max_length=120, blank=True)
 
 
 class AuditEvent(models.Model):

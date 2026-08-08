@@ -21,8 +21,8 @@ def _ensure_no_active_attempt(job: Job, action: str) -> None:
         raise AcquisitionError("claim already exists or may have been submitted remotely")
     if action == "BID" and Bid.objects.filter(job=job, status__in=["SUBMITTING", "SUBMITTED", "ACCEPTED"]).exists():
         raise AcquisitionError("bid already exists or may have been submitted remotely")
-    if action == "APPLY" and Application.objects.filter(job=job, status__in=["SUBMITTING", "SUBMITTED", "ACCEPTED"]).exists():
-        raise AcquisitionError("application already exists or may have been submitted remotely")
+    if action == "APPLY" and Application.objects.filter(job=job).exists():
+        raise AcquisitionError("application already exists for this job; duplicate applications are not permitted")
 
 
 def acquire_profitable_job(
@@ -85,7 +85,7 @@ def acquire_profitable_job(
                 status="SUBMITTING",
             )
             response = adapter.apply(opportunity, offered_price, message)
-            remote_reference = str(response.get("id") or response.get("application_id") or response.get("contract_id") or "") if isinstance(response, dict) else ""
+            remote_reference = str(response.get("id") or response.get("application_id") or response.get("applicationId") or response.get("contract_id") or "") if isinstance(response, dict) else ""
             attempt.remote_reference = remote_reference
             attempt.status = "SUBMITTED"
             attempt.save(update_fields=["remote_reference", "status", "updated_at"])
