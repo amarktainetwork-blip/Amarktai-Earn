@@ -13,11 +13,14 @@ class WorkPlanContractTests(unittest.TestCase):
         self.assertIn('INPUT_ASSET_NOT_STAGED', text)
         self.assertIn('MULTIPLE_INPUT_ASSETS_AMBIGUOUS', text)
 
-    def test_worker_route_uses_operation_not_market_category(self):
-        text = (ROOT / "control/services/execution.py").read_text(encoding="utf-8")
-        self.assertIn("SAFE_STRUCTURED_OPERATIONS", text)
-        self.assertNotIn("SAFE_STRUCTURED_TASKS", text)
-        self.assertIn("allow_repair", text)
+    def test_worker_route_uses_registry_operation_not_market_category(self):
+        execution = (ROOT / "control/services/execution.py").read_text(encoding="utf-8")
+        registry = (ROOT / "workers/registry.py").read_text(encoding="utf-8")
+        self.assertIn("operation_spec(operation)", execution)
+        self.assertIn("expected_worker_class", execution)
+        self.assertNotIn("SAFE_STRUCTURED_TASKS", execution)
+        self.assertIn('operations=("json_to_csv", "csv_normalize")', registry)
+        self.assertIn("allow_repair", execution)
 
     def test_repair_is_bounded_and_submission_requires_qa(self):
         planning = (ROOT / "planning/services.py").read_text(encoding="utf-8")

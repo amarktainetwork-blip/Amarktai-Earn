@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from control.models import AuditEvent, Job, Submission
 from planning.models import JobAsset, WorkPlan
+from workers.registry import WorkerRegistryError, operation_spec
 
 
 class PlanningError(RuntimeError):
@@ -62,6 +63,8 @@ def stage_local_job_asset(*, job_id, path: str, source: str = "upload", external
             asset.save()
         else:
             asset = JobAsset.objects.create(job=job, external_id="", **defaults)
+    # A new verified input is an explicit operator/adapter action, so it may
+    # reopen a previously failed/blocked plan for deterministic re-planning.
     WorkPlan.objects.filter(job=job, status__in=[WorkPlan.Status.FAILED, WorkPlan.Status.BLOCKED]).update(
         status=WorkPlan.Status.BLOCKED,
         reason_codes=["INPUT_ASSET_CHANGED_REPLAN_REQUIRED"],
@@ -128,7 +131,14 @@ def plan_awarded_job(job_id) -> WorkPlan:
         if operation:
             input_spec = {"operation": operation, "source": assets[0].path, "asset_id": assets[0].id}
 
-    plan.worker_class = "structured_data" if operation else ""
+    if operation:
+        try:
+            plan.worker_class = operation_spec(operation).worker_class
+        except WorkerRegistryError:
+            plan.worker_class = ""
+            reasons.append("WORKER_OPERATION_NOT_REGISTERED")
+    else:
+        plan.worker_class = ""
     plan.operation = operation
     plan.input_spec = input_spec
     plan.status = WorkPlan.Status.READY if operation and not reasons else WorkPlan.Status.BLOCKED
@@ -229,7 +239,7 @@ def dispatch_awarded_jobs(*, marketplace_slug: str | None = None, limit: int = 5
 
 
 def execute_work_plan(plan_id: int) -> WorkPlan:
-    from control.services.execution import execute_structured_data_job
+    from control.services.execution import execute_registered_job
 
     with transaction.atomic():
         plan = WorkPlan.objects.select_for_update().select_related("job", "job__marketplace").get(pk=plan_id)
@@ -249,14 +259,16 @@ def execute_work_plan(plan_id: int) -> WorkPlan:
         plan.save(update_fields=["execution_attempts", "repair_attempts", "status", "last_error_code", "updated_at"])
         job_id = plan.job_id
         inputs = dict(plan.input_spec)
-        worker_id = f"structured-data-{str(job_id)[:8]}"
+        worker_id = f"{plan.worker_class}-{str(job_id)[:8]}"
+        worker_class = plan.worker_class
 
     try:
-        execution = execute_structured_data_job(
+        execution = execute_registered_job(
             job_id=job_id,
             worker_id=worker_id,
             inputs=inputs,
             allow_repair=repair,
+            expected_worker_class=worker_class,
         )
     except Exception as exc:
         WorkPlan.objects.filter(pk=plan_id).update(status=WorkPlan.Status.FAILED, last_error_code=exc.__class__.__name__[:120])

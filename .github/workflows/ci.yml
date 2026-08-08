@@ -74,7 +74,7 @@ jobs:
       - run: python manage.py migrate --noinput
       - run: python manage.py healthcheck
       - run: python -m unittest discover -s tests -p 'test_*_stdlib.py' -q
-      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration -v 2
+      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration -v 2
       - name: Production configuration preflight
         env:
           AMARKTAI_ENV: production
