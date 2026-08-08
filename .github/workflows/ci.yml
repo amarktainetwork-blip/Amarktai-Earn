@@ -37,7 +37,7 @@ env:
 jobs:
   integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17-alpine
@@ -75,7 +75,61 @@ jobs:
       - run: python manage.py healthcheck
       - run: python -m unittest discover -s tests -p 'test_*_stdlib.py' -q
       - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration -v 2
+      - name: Production configuration preflight
+        env:
+          AMARKTAI_ENV: production
+          DJANGO_SECRET_KEY: ci-production-django-secret-key-with-more-than-fifty-random-characters-2026
+          DJANGO_ALLOWED_HOSTS: earn.amarktai.co.za
+          DJANGO_CSRF_TRUSTED_ORIGINS: https://earn.amarktai.co.za
+          COOKIE_SECURE: "1"
+          POSTGRES_PASSWORD: ci-production-postgres-password-2026
+          BACKUP_PASSPHRASE: ci-production-backup-passphrase-with-more-than-thirty-two-characters
+          AUTONOMOUS_MODE: SHADOW
+        run: python manage.py production_check
       - name: Compose configuration parses
         env:
           CADDY_EMAIL: ci@example.test
         run: cp .env.example .env && docker compose config --quiet
+      - name: Build production image and prove secrets are excluded
+        run: |
+          docker build -t amarktai-earn-ci .
+          docker run --rm amarktai-earn-ci sh -lc 'test ! -e /app/.env && command -v pg_dump && command -v pg_restore && command -v gpg'
+      - name: Encrypted PostgreSQL backup and restore proof
+        run: |
+          set -euo pipefail
+          volume=amarktai_ci_backups_${GITHUB_RUN_ID}
+          restore_db=amarktai_restore_ci
+          cleanup() {
+            docker run --rm --network host -e PGPASSWORD=ci-postgres-password postgres:17-alpine \
+              psql -h 127.0.0.1 -U amarktai_ci -d postgres -c "DROP DATABASE IF EXISTS ${restore_db};" >/dev/null 2>&1 || true
+            docker volume rm -f "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker volume create "$volume" >/dev/null
+          docker run --rm --user 0:0 \
+            -v "$volume":/var/lib/amarktai-earn/backups \
+            amarktai-earn-ci /app/scripts/init-volumes.sh
+          docker run --rm --network host \
+            -e POSTGRES_DB=amarktai_earn_ci \
+            -e POSTGRES_USER=amarktai_ci \
+            -e POSTGRES_PASSWORD=ci-postgres-password \
+            -e POSTGRES_HOST=127.0.0.1 \
+            -e POSTGRES_PORT=5432 \
+            -e BACKUP_PASSPHRASE=ci-backup-passphrase-with-more-than-thirty-two-characters \
+            -v "$volume":/var/lib/amarktai-earn/backups \
+            amarktai-earn-ci /app/scripts/backup.sh
+          docker run --rm --network host -e PGPASSWORD=ci-postgres-password postgres:17-alpine \
+            psql -h 127.0.0.1 -U amarktai_ci -d postgres -v ON_ERROR_STOP=1 \
+            -c "DROP DATABASE IF EXISTS ${restore_db};" -c "CREATE DATABASE ${restore_db};"
+          docker run --rm --network host \
+            -e POSTGRES_DB="$restore_db" \
+            -e POSTGRES_USER=amarktai_ci \
+            -e POSTGRES_PASSWORD=ci-postgres-password \
+            -e POSTGRES_HOST=127.0.0.1 \
+            -e POSTGRES_PORT=5432 \
+            -e BACKUP_PASSPHRASE=ci-backup-passphrase-with-more-than-thirty-two-characters \
+            -v "$volume":/var/lib/amarktai-earn/backups \
+            amarktai-earn-ci sh -lc 'latest=$(ls -1t /var/lib/amarktai-earn/backups/*.dump.gpg | head -1); exec /app/scripts/restore.sh "$latest"'
+          count=$(docker run --rm --network host -e PGPASSWORD=ci-postgres-password postgres:17-alpine \
+            psql -h 127.0.0.1 -U amarktai_ci -d "$restore_db" -Atc 'SELECT COUNT(*) FROM django_migrations;')
+          test "$count" -gt 0
