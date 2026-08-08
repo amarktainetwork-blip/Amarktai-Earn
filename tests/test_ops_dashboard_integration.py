@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from control.jwt_auth import issue_access
 from control.models import (
-    AcquisitionPreflight, Application, Artifact, Execution, GenXCall, Job, Marketplace,
+    AcquisitionPreflight, Application, Artifact, Bid, Claim, Execution, GenXCall, GenXModelCatalog, Job, Marketplace,
     MarketPolicyVersion, OwnerSecurityProfile, QAResult, Revision, Submission, SystemSetting, Worker,
 )
 from control.ops import snapshot
@@ -109,6 +109,53 @@ class OperationsDashboardIntegrationTests(TestCase):
         self.assertTrue(structured["production_enabled"])
         self.assertFalse(coding["production_enabled"])
         self.assertIn("CODING_SANDBOX_DISABLED", coding["enablement_reason_codes"])
+
+    def test_agents_require_sandbox_secrets_and_worker_specific_genx_capability(self):
+        GenXModelCatalog.objects.create(
+            model_id="translation-specialist",
+            category="translation",
+            provider="test",
+            active=True,
+            model_payload={"capabilities": ["translation"]},
+        )
+        environment = {
+            "SANDBOX_CODING_ENABLED": "1",
+            "SANDBOX_BROKER_SECRET": "short",
+            "SANDBOX_TOKEN_SECRET": "short",
+            "GENX_API_KEY": "configured",
+        }
+        with patch.dict("os.environ", environment, clear=False):
+            agents = snapshot("agents", owner=self.user)["rows"]
+        localization = next(row for row in agents if row["worker_class"] == "localization")
+        transcription = next(row for row in agents if row["worker_class"] == "transcription")
+        coding = next(row for row in agents if row["worker_class"] == "code_small")
+        ci_testing = next(row for row in agents if row["worker_class"] == "ci_testing")
+        self.assertTrue(localization["production_enabled"])
+        self.assertFalse(transcription["production_enabled"])
+        self.assertIn("GENX_CAPABILITY_UNAVAILABLE", transcription["enablement_reason_codes"])
+        self.assertIn("SANDBOX_BROKER_SECRET_INVALID", coding["enablement_reason_codes"])
+        self.assertIn("SANDBOX_TOKEN_SECRET_INVALID", coding["enablement_reason_codes"])
+        self.assertIn("SANDBOX_BROKER_SECRET_INVALID", ci_testing["enablement_reason_codes"])
+        self.assertNotIn("SANDBOX_TOKEN_SECRET_INVALID", ci_testing["enablement_reason_codes"])
+
+    def test_overview_counts_every_ambiguous_external_mutation(self):
+        Application.objects.create(job=self.job, status="UNKNOWN_REMOTE_STATE")
+        Bid.objects.create(job=self.job, amount="10.00", status="UNKNOWN_REMOTE_STATE")
+        Claim.objects.create(job=self.job, status="UNKNOWN_REMOTE_STATE")
+        Submission.objects.create(job=self.job, status="UNKNOWN_REMOTE_STATE")
+        GenXCall.objects.create(
+            request_key="ops-genx-unknown",
+            job=self.job,
+            worker=self.worker,
+            model="dynamic-model",
+            task_class="data",
+            status="UNKNOWN_REMOTE_STATE",
+            estimated_credits="1",
+            max_allowed_credits="2",
+        )
+        overview = snapshot("overview", owner=self.user)
+        card = next(row for row in overview["cards"] if row["label"] == "UNKNOWN REMOTE STATE")
+        self.assertEqual(card["value"], 5)
 
     def test_sensitive_settings_are_never_returned(self):
         SystemSetting.objects.create(key="secret-example", value={"token": "must-not-leak"}, sensitive=True)

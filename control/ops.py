@@ -11,19 +11,21 @@ from django.utils import timezone
 
 from planning.models import DependencyPreparation, WorkPlan
 from workers.registry import registry_manifest
+from workers.genx_support import catalog_supports
 from .models import (
     Alert,
     AdmissionDecision,
     AcquisitionPreflight,
     Application,
+    Bid,
     AuthThrottle,
     Artifact,
     AuditEvent,
     Execution,
     GenXAccountSnapshot,
     GenXCall,
-    GenXModelCatalog,
     Job,
+    Claim,
     LedgerEntry,
     Marketplace,
     MarketplaceCredential,
@@ -73,6 +75,12 @@ def _dec(value):
     return str(value)
 
 
+def _valid_runtime_secret(name: str) -> bool:
+    value = os.getenv(name, "")
+    lowered = value.casefold()
+    return len(value.encode()) >= 32 and not any(marker in lowered for marker in ("replace", "change-me", "dev-only"))
+
+
 def _disk_row(label: str, path: str) -> dict:
     candidate = Path(path)
     try:
@@ -103,7 +111,10 @@ def overview_snapshot() -> dict:
     latest_genx = GenXAccountSnapshot.objects.order_by("-created_at").first()
     open_alerts = Alert.objects.filter(status="OPEN").count()
     blocked_acquisitions = AcquisitionPreflight.objects.filter(allowed=False, created_at__gte=timezone.now() - timedelta(hours=24)).count()
-    unknown_remote = Application.objects.filter(status="UNKNOWN_REMOTE_STATE").count() + GenXCall.objects.filter(status="UNKNOWN_REMOTE_STATE").count()
+    unknown_remote = sum(
+        model.objects.filter(status="UNKNOWN_REMOTE_STATE").count()
+        for model in (Application, Bid, Claim, Submission, GenXCall)
+    )
     resource = ResourceSnapshot.objects.order_by("-created_at").first()
     return {
         "section": "overview",
@@ -171,7 +182,14 @@ def live_work_snapshot(limit: int = 100) -> dict:
 def agents_snapshot() -> dict:
     runtime = {row.id: row for row in Worker.objects.select_related("current_job").order_by("worker_class", "id")}
     manifest = registry_manifest()
-    genx_catalog_ready = GenXModelCatalog.objects.filter(active=True).exists()
+    genx_requirements = {
+        "documents": ((), "text"),
+        "research": ((), "text"),
+        "localization": (("translation", "translate", "localization"), "text"),
+        "transcription": (("transcription", "transcribe", "speech to text"), None),
+        "code_small": (("code", "coding", "software"), "text"),
+        "code_heavy": (("code", "coding", "software"), "text"),
+    }
     rows = []
     for spec in manifest:
         reasons = []
@@ -180,12 +198,22 @@ def agents_snapshot() -> dict:
             reasons.append("WORKER_DISABLED")
         if not spec["runtime_available"]:
             reasons.append("RUNTIME_UNAVAILABLE")
-        if spec["worker_class"] in {"code_small", "code_heavy", "ci_testing"} and os.getenv("SANDBOX_CODING_ENABLED", "0") != "1":
-            reasons.append("CODING_SANDBOX_DISABLED")
+        sandbox_worker = spec["worker_class"] in {"code_small", "code_heavy", "ci_testing"}
+        coding_worker = spec["worker_class"] in {"code_small", "code_heavy"}
+        if sandbox_worker:
+            if os.getenv("SANDBOX_CODING_ENABLED", "0") != "1":
+                reasons.append("CODING_SANDBOX_DISABLED")
+            else:
+                if not _valid_runtime_secret("SANDBOX_BROKER_SECRET"):
+                    reasons.append("SANDBOX_BROKER_SECRET_INVALID")
+                if coding_worker and not _valid_runtime_secret("SANDBOX_TOKEN_SECRET"):
+                    reasons.append("SANDBOX_TOKEN_SECRET_INVALID")
         if spec["requires_genx"] and not os.getenv("GENX_API_KEY", "").strip():
             reasons.append("GENX_NOT_CONFIGURED")
-        elif spec["requires_genx"] and not genx_catalog_ready:
-            reasons.append("GENX_CATALOG_EMPTY")
+        elif spec["requires_genx"]:
+            keywords, fallback_category = genx_requirements[spec["worker_class"]]
+            if not catalog_supports(*keywords, fallback_category=fallback_category):
+                reasons.append("GENX_CAPABILITY_UNAVAILABLE")
         enablement = {"production_enabled": not reasons, "enablement_reason_codes": reasons}
         matching = [worker for worker in runtime.values() if worker.worker_class == spec["worker_class"]]
         if not matching:

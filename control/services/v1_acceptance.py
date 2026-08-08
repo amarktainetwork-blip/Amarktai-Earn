@@ -6,7 +6,6 @@ from pathlib import Path
 
 import redis
 from django.conf import settings
-from django.contrib.auth import get_user_model
 from django.db import DatabaseError, connection
 from django.utils import timezone
 
@@ -86,13 +85,20 @@ def _money_truth() -> AcceptanceCriterion:
 
 def _owner_state() -> AcceptanceCriterion:
     try:
-        owner_ids = get_user_model().objects.filter(is_active=True, is_staff=True).values_list("id", flat=True)
-        enrolled = OwnerSecurityProfile.objects.filter(user_id__in=owner_ids, totp_confirmed_at__isnull=False).exists()
+        profiles = OwnerSecurityProfile.objects.filter(
+            user__is_active=True,
+            user__is_staff=True,
+            totp_confirmed_at__isnull=False,
+        ).select_related("user")
+        enrolled = any(
+            profile.user.has_usable_password() and bool(profile.totp_secret_encrypted.strip())
+            for profile in profiles
+        )
     except DatabaseError:
         return _criterion("owner_login", "Owner login and MFA enrollment", "BLOCKED", "RUNTIME_CONFIG", "The owner security tables are unavailable.", "Apply migrations in the target environment, then bootstrap the owner.")
     if enrolled:
-        return _criterion("owner_login", "Owner login and MFA enrollment", "PASS", "RUNTIME_CONFIG", "An active staff owner with confirmed TOTP is present.")
-    return _criterion("owner_login", "Owner login and MFA enrollment", "BLOCKED", "RUNTIME_CONFIG", "No active staff owner with confirmed TOTP is present in this database.", "Run bootstrap_owner interactively in the target environment and retain recovery codes securely.")
+        return _criterion("owner_login", "Owner login and MFA enrollment", "PASS", "RUNTIME_CONFIG", "An active staff owner with a usable password and configured, confirmed TOTP is present.")
+    return _criterion("owner_login", "Owner login and MFA enrollment", "BLOCKED", "RUNTIME_CONFIG", "No active staff owner with a usable password and configured, confirmed TOTP is present in this database.", "Run bootstrap_owner interactively in the target environment and retain recovery codes securely.")
 
 
 def _postgres_redis(*, ci_proven: bool) -> AcceptanceCriterion:

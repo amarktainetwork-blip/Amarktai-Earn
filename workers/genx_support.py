@@ -45,6 +45,18 @@ def _searchable_model_text(row: GenXModelCatalog) -> str:
     ).casefold()
 
 
+def catalog_supports(*keywords: str, fallback_category: str | None = None) -> bool:
+    """Return whether the active catalog can satisfy a worker's actual routing contract."""
+    rows = list(GenXModelCatalog.objects.filter(active=True))
+    wanted = tuple(word.casefold() for word in keywords if word)
+    if wanted and any(any(word in _searchable_model_text(row) for word in wanted) for row in rows):
+        return True
+    return bool(
+        fallback_category
+        and any(row.category.casefold() == fallback_category.casefold() for row in rows)
+    )
+
+
 def select_specialist(*keywords: str, fallback_category: str | None = None) -> GenXModelCatalog:
     rows = list(GenXModelCatalog.objects.filter(active=True))
     wanted = tuple(word.casefold() for word in keywords if word)

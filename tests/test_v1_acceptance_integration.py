@@ -57,3 +57,14 @@ class V1AcceptanceIntegrationTests(TestCase):
             result = _owner_state()
         self.assertEqual(result.status, "BLOCKED")
         self.assertIn("migrations", result.operator_action.casefold())
+
+    def test_owner_requires_usable_password_and_configured_totp_secret(self):
+        OwnerSecurityProfile.objects.all().delete()
+        get_user_model().objects.all().delete()
+        owner = get_user_model().objects.create_user(username="incomplete-owner", is_staff=True)
+        owner.set_unusable_password()
+        owner.save(update_fields=["password"])
+        OwnerSecurityProfile.objects.create(user=owner, totp_secret_encrypted="", totp_confirmed_at=timezone.now())
+        result = _owner_state()
+        self.assertEqual(result.status, "BLOCKED")
+        self.assertIn("usable password", result.evidence)
