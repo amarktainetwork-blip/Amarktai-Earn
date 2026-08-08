@@ -25,10 +25,15 @@ class DependencyMediaContracts(unittest.TestCase):
 
     def test_media_processes_never_shell_concatenate_job_values(self):
         worker = (ROOT / "workers/media/worker.py").read_text(encoding="utf-8")
-        self.assertIn("subprocess.run(args", worker)
+        self.assertIn("subprocess.run(", worker)
         self.assertNotIn("shell=True", worker)
-        for marker in ("MEDIA_MAX_SOURCE_BYTES", "MEDIA_MAX_OUTPUT_BYTES", "MEDIA_MAX_PIXELS", "MEDIA_MAX_DURATION_SECONDS", "MEDIA_PROCESS_TIMEOUT_SECONDS", "-nostdin"):
+        for marker in ("MEDIA_MAX_SOURCE_BYTES", "MEDIA_MAX_OUTPUT_BYTES", "MEDIA_MAX_PIXELS", "MEDIA_MAX_DURATION_SECONDS", "MEDIA_PROCESS_TIMEOUT_SECONDS", "-nostdin", '"-fs"', "RLIMIT_FSIZE", "_remove_output(target)"):
             self.assertIn(marker, worker)
+
+    def test_prepared_python_packages_are_visible_to_all_sandbox_runs(self):
+        broker = (ROOT / "sandbox_broker/server.py").read_text(encoding="utf-8")
+        for marker in ("--target /cache/site-packages", "PYTHONPATH=/opt/amarktai-dependencies/site-packages", "_dependency_runtime_args(dependency_volume)"):
+            self.assertIn(marker, broker)
 
     def test_production_image_contains_ffmpeg_and_media_smoke(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")

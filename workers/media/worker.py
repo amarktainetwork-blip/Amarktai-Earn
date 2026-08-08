@@ -9,6 +9,11 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows development hosts
+    resource = None
+
 from workers.base import WorkRequest, WorkResult, Worker
 
 
@@ -134,6 +139,13 @@ def _check_output(target: Path) -> None:
         raise MediaWorkerError("media output is empty or exceeds configured bounds")
 
 
+def _remove_output(target: Path) -> None:
+    try:
+        target.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _ffmpeg(request: WorkRequest, source: Path, operation: str) -> WorkResult:
     probe = _probe(source)
     request.workspace.mkdir(parents=True, exist_ok=True)
@@ -143,7 +155,7 @@ def _ffmpeg(request: WorkRequest, source: Path, operation: str) -> WorkResult:
         raise MediaWorkerError("requested media output format is unsupported")
     target = request.workspace / ("media-output" + target_suffix)
     args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
-    expected_duration = None
+    expected_duration = probe["duration_seconds"]
     if operation == "media_trim":
         start, end = float(request.inputs["start_seconds"]), float(request.inputs["end_seconds"])
         if start < 0 or end <= start or end > probe["duration_seconds"]:
@@ -157,12 +169,27 @@ def _ffmpeg(request: WorkRequest, source: Path, operation: str) -> WorkResult:
         args += ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"]
     elif output_format == "webm":
         args += ["-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "6", "-c:a", "libopus"]
-    args += [str(target)]
-    result = subprocess.run(args, capture_output=True, text=True, timeout=_int_env("MEDIA_PROCESS_TIMEOUT_SECONDS", 600), check=False)
-    if result.returncode != 0:
-        raise MediaWorkerError("ffmpeg transformation failed")
-    _check_output(target)
-    output_probe = _probe(target)
+    maximum_output = _int_env("MEDIA_MAX_OUTPUT_BYTES", 150 * 1024 * 1024)
+    args += ["-fs", str(maximum_output), str(target)]
+    run_options = {}
+    if resource is not None:
+        def impose_file_limit():
+            resource.setrlimit(resource.RLIMIT_FSIZE, (maximum_output, maximum_output))
+        run_options["preexec_fn"] = impose_file_limit
+    try:
+        result = subprocess.run(
+            args, capture_output=True, text=True,
+            timeout=_int_env("MEDIA_PROCESS_TIMEOUT_SECONDS", 600), check=False, **run_options,
+        )
+        if result.returncode != 0:
+            raise MediaWorkerError("ffmpeg transformation failed")
+        _check_output(target)
+        output_probe = _probe(target)
+        if abs(output_probe["duration_seconds"] - expected_duration) > 1.0:
+            raise MediaWorkerError("ffmpeg output duration is incomplete")
+    except Exception:
+        _remove_output(target)
+        raise
     return WorkResult(ok=True, artifacts=[target], evidence={
         "operation": operation, "media_kind": "av", "expected_format": output_format,
         "expected_duration_seconds": expected_duration,

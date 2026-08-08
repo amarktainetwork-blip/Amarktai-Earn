@@ -23,8 +23,10 @@ class DependencyRequest:
     manifest_hash: str
 
 
-_HASH = re.compile(r"--hash=sha256:[0-9a-fA-F]{64}")
-_PIN = re.compile(r"^[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?==[^\s;]+")
+_PINNED_HASHED = re.compile(
+    r"[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?==[^\s;]+"
+    r"(?:\s+--hash=sha256:[0-9a-fA-F]{64})+"
+)
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -34,9 +36,14 @@ def _inside(path: Path, root: Path) -> bool:
 
 def _bounded(path: Path) -> bytes:
     maximum = max(1024, min(int(os.getenv("DEPENDENCY_MAX_MANIFEST_BYTES", "1048576")), 8 * 1024 * 1024))
-    if not path.is_file() or path.is_symlink() or path.stat().st_size > maximum:
-        raise DependencyPreparationError("dependency manifest missing, linked, or too large")
-    return path.read_bytes()
+    if not path.is_file() or path.is_symlink():
+        raise DependencyPreparationError("DEPENDENCY_MANIFEST_INVALID")
+    if path.stat().st_size > maximum:
+        raise DependencyPreparationError("DEPENDENCY_MANIFEST_TOO_LARGE")
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise DependencyPreparationError("DEPENDENCY_MANIFEST_INVALID") from exc
 
 
 def _python_lock_valid(raw: bytes) -> bool:
@@ -44,15 +51,21 @@ def _python_lock_valid(raw: bytes) -> bool:
         lines = raw.decode("utf-8").splitlines()
     except UnicodeDecodeError:
         return False
-    requirements = []
+    requirements: list[str] = []
+    current = ""
     for line in lines:
         stripped = line.strip()
-        if not stripped or stripped.startswith("#") or stripped.startswith("--hash="):
+        if not stripped or stripped.startswith("#"):
             continue
-        if stripped.startswith(("-r", "--requirement", "-e", "--editable", "--index", "--extra-index", "--find-links")):
-            return False
-        requirements.append(stripped)
-    return bool(requirements) and all(_PIN.match(line) and _HASH.search(line) for line in requirements)
+        continued = stripped.endswith("\\")
+        fragment = stripped[:-1].rstrip() if continued else stripped
+        current = f"{current} {fragment}".strip()
+        if not continued:
+            requirements.append(current)
+            current = ""
+    if current:
+        return False
+    return bool(requirements) and all(_PINNED_HASHED.fullmatch(line) for line in requirements)
 
 
 def inspect_dependency_request(snapshot: RepositorySnapshot) -> tuple[DependencyRequest | None, list[str]]:
@@ -68,14 +81,20 @@ def inspect_dependency_request(snapshot: RepositorySnapshot) -> tuple[Dependency
     if requirements.exists() and (package.exists() or package_lock.exists()):
         return None, ["MULTIPLE_DEPENDENCY_ECOSYSTEMS_UNSUPPORTED"]
     if requirements.exists():
-        raw = _bounded(requirements)
+        try:
+            raw = _bounded(requirements)
+        except DependencyPreparationError as exc:
+            return None, [str(exc)]
         if not _python_lock_valid(raw):
             return None, ["PYTHON_REQUIREMENTS_NOT_HASH_LOCKED"]
         return DependencyRequest("python", "requirements.txt", hashlib.sha256(raw).hexdigest()), []
     if package.exists() or package_lock.exists():
         if not package.is_file() or not package_lock.is_file() or package.is_symlink() or package_lock.is_symlink():
             return None, ["NODE_LOCKFILE_REQUIRED"]
-        package_raw, lock_raw = _bounded(package), _bounded(package_lock)
+        try:
+            package_raw, lock_raw = _bounded(package), _bounded(package_lock)
+        except DependencyPreparationError as exc:
+            return None, [str(exc)]
         try:
             package_data, lock_data = json.loads(package_raw), json.loads(lock_raw)
         except (UnicodeDecodeError, json.JSONDecodeError):

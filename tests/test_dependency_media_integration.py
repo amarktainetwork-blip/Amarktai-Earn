@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
@@ -52,7 +53,10 @@ class DependencyPreparationIntegrationTests(TestCase):
 
     def test_python_requires_pins_and_hashes(self):
         digest = "1" * 64
-        (self.path / "requirements.txt").write_text(f"requests==2.32.5 --hash=sha256:{digest}\n", encoding="utf-8")
+        (self.path / "requirements.txt").write_text(
+            f"requests==2.32.5 \\\n    --hash=sha256:{digest}\n",
+            encoding="utf-8",
+        )
         request, reasons = inspect_dependency_request(self.snapshot)
         self.assertEqual((request.ecosystem, request.manifest_path), ("python", "requirements.txt"))
         self.assertEqual(reasons, [])
@@ -60,6 +64,13 @@ class DependencyPreparationIntegrationTests(TestCase):
         request, reasons = inspect_dependency_request(self.snapshot)
         self.assertIsNone(request)
         self.assertIn("PYTHON_REQUIREMENTS_NOT_HASH_LOCKED", reasons)
+
+    def test_oversize_manifest_becomes_a_stable_plan_blocker(self):
+        (self.path / "requirements.txt").write_bytes(b"x" * 1025)
+        with patch.dict(os.environ, {"DEPENDENCY_MAX_MANIFEST_BYTES": "1024"}, clear=False):
+            request, reasons = inspect_dependency_request(self.snapshot)
+        self.assertIsNone(request)
+        self.assertEqual(reasons, ["DEPENDENCY_MANIFEST_TOO_LARGE"])
 
     def test_node_lock_v3_is_prepared_and_persisted_without_credentials(self):
         package = json.dumps({"name": "demo", "version": "1.0.0"}, separators=(",", ":")).encode()
@@ -152,6 +163,26 @@ class MediaWorkerIntegrationTests(TestCase):
                 "operation": "image_resize", "source": str(source), "width": 10, "height": 10, "output_format": "PNG",
             }))
         self.assertFalse(result.ok)
+
+    def test_ffmpeg_failure_removes_partial_output_and_sets_write_limit(self):
+        source = self.uploads / "source.wav"
+        source.write_bytes(b"valid-enough-for-mocked-probe")
+        workspace = self.jobs / "bounded-ffmpeg"
+
+        def fail_after_partial_write(args, **_kwargs):
+            Path(args[-1]).write_bytes(b"x" * 2048)
+            return SimpleNamespace(returncode=1, stdout="", stderr="bounded")
+
+        with patch.dict(os.environ, {"MEDIA_MAX_OUTPUT_BYTES": "1024"}, clear=False), \
+                patch("workers.media.worker._probe", return_value={"duration_seconds": 1.0}), \
+                patch("workers.media.worker.subprocess.run", side_effect=fail_after_partial_write) as runner:
+            result = MediaWorker().execute(WorkRequest(job_id="bounded", workspace=workspace, inputs={
+                "operation": "media_transcode", "source": str(source), "output_format": "wav",
+            }))
+        self.assertFalse(result.ok)
+        self.assertFalse((workspace / "media-output.wav").exists())
+        args = runner.call_args.args[0]
+        self.assertEqual(args[args.index("-fs") + 1], "1024")
 
     def test_registry_exposes_real_media_worker_and_qa(self):
         manifest = {row["worker_class"]: row for row in registry_manifest()}

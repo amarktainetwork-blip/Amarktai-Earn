@@ -60,6 +60,18 @@ def _security_args(*, network: str, volume_name: str, memory: str, cpus: str, pi
     return args
 
 
+def _dependency_runtime_args(dependency_volume: str) -> list[str]:
+    if not dependency_volume:
+        return []
+    return [
+        "-e", "PIP_NO_INDEX=1",
+        "-e", "PIP_FIND_LINKS=/opt/amarktai-dependencies/wheels",
+        "-e", "PYTHONPATH=/opt/amarktai-dependencies/site-packages",
+        "-e", "NODE_PATH=/opt/amarktai-dependencies/node_modules",
+        "-e", "PATH=/opt/amarktai-dependencies/node_modules/.bin:/usr/local/bin:/usr/bin:/bin",
+    ]
+
+
 def _dependency_stats(volume_name: str, image: str) -> tuple[int, int, bool]:
     result = _run([
         "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
@@ -156,7 +168,7 @@ def _prepare_dependencies(payload: dict[str, Any]) -> dict[str, Any]:
             "-e", f"SNAPSHOT_REL={snapshot_rel}", image, "/bin/bash", "-lc",
         ]
         if ecosystem == "python":
-            command = 'mkdir -p /cache/wheels && pip download --disable-pip-version-check --no-deps --require-hashes --only-binary=:all: -r "/src/$SNAPSHOT_REL/requirements.txt" -d /cache/wheels && touch /cache/.ready'
+            command = 'mkdir -p /cache/wheels /cache/site-packages && pip download --disable-pip-version-check --no-deps --require-hashes --only-binary=:all: -r "/src/$SNAPSHOT_REL/requirements.txt" -d /cache/wheels && pip install --disable-pip-version-check --no-index --no-deps --require-hashes --only-binary=:all: --find-links /cache/wheels --target /cache/site-packages -r "/src/$SNAPSHOT_REL/requirements.txt" && touch /cache/.ready'
         else:
             command = 'mkdir -p /tmp/work && cp "/src/$SNAPSHOT_REL/package.json" "/src/$SNAPSHOT_REL/package-lock.json" /tmp/work/ && cd /tmp/work && npm ci --ignore-scripts --no-audit --no-fund --cache /cache/npm-cache && mkdir -p node_modules && mv node_modules /cache/node_modules && touch /cache/.ready'
         _run([*base, command], timeout=60)
@@ -283,8 +295,7 @@ def run_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
         network = "none" if agent == "ci" else llm_network
         args = ["docker", "run", *_security_args(network=network, volume_name=volume_name, memory=memory, cpus=cpus, pids=pids, dependency_volume=dependency_volume)]
         args += ["-e", f"AMARKTAI_AGENT={agent}", "-e", f"AMARKTAI_TASK={task}", "-e", f"AMARKTAI_TEST_COMMAND={test_command}"]
-        if dependency_volume:
-            args += ["-e", "PIP_NO_INDEX=1", "-e", "PIP_FIND_LINKS=/opt/amarktai-dependencies/wheels", "-e", "NODE_PATH=/opt/amarktai-dependencies/node_modules", "-e", "PATH=/opt/amarktai-dependencies/node_modules/.bin:/usr/local/bin:/usr/bin:/bin"]
+        args += _dependency_runtime_args(dependency_volume)
         if agent in {"aider", "openhands"}:
             args += [
                 "-e", f"LLM_API_KEY={scoped_token}",
@@ -313,7 +324,7 @@ def run_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
         else:
             test_result = _run([
                 "docker", "run", *_security_args(network="none", volume_name=volume_name, memory=memory, cpus=cpus, pids=pids, dependency_volume=dependency_volume),
-                "-e", f"AMARKTAI_TEST_COMMAND={test_command}", image,
+                *_dependency_runtime_args(dependency_volume), "-e", f"AMARKTAI_TEST_COMMAND={test_command}", image,
                 "/bin/bash", "-lc", 'cd /workspace && /bin/bash -lc "$AMARKTAI_TEST_COMMAND"',
             ], timeout=timeout, check=False)
             test_exit = test_result.returncode
