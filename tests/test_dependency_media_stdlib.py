@@ -36,6 +36,7 @@ class DependencyMediaContracts(unittest.TestCase):
         self.assertIn("ffmpeg", dockerfile)
         self.assertIn("media-smoke.py", workflow)
         self.assertIn("dependency-prep-smoke.py", workflow)
+        self.assertIn("command -v docker.io", (ROOT / "sandbox/broker.Dockerfile").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
