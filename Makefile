@@ -1,4 +1,4 @@
-.PHONY: dev test check migrate up down logs bootstrap-owner genx-sync genx-reconcile agentgigs-sync agentgigs-webhook agentgigs-watch-once
+.PHONY: stage-job-asset dev test check migrate up down logs bootstrap-owner genx-sync genx-reconcile agentgigs-sync agentgigs-webhook agentgigs-watch-once
 
 dev:
 	DJANGO_DB_ENGINE=sqlite DJANGO_DEBUG=1 python manage.py runserver
@@ -38,3 +38,7 @@ agentgigs-webhook:
 
 agentgigs-watch-once:
 	python manage.py run_agentgigs_watcher --once
+
+# Usage: make stage-job-asset JOB=<uuid> PATH=/var/lib/amarktai-earn/uploads/file
+stage-job-asset:
+	python manage.py stage_job_asset --job "$(JOB)" --path "$(PATH)"

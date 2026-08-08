@@ -21,14 +21,7 @@ class ExecutionError(RuntimeError):
     pass
 
 
-SAFE_STRUCTURED_TASKS = {
-    "structured_data",
-    "data",
-    "csv",
-    "json",
-    "spreadsheet",
-    "conversion",
-}
+SAFE_STRUCTURED_OPERATIONS = {"json_to_csv", "csv_normalize"}
 
 
 def _sha256(path: Path) -> str:
@@ -67,13 +60,17 @@ def _validated_inputs(inputs: dict, workspace_root: Path, upload_root: Path) -> 
     return clean
 
 
-def execute_structured_data_job(*, job_id, worker_id: str, inputs: dict, node_id: str = "VPS1", workspace_root: str | None = None) -> Execution:
+def execute_structured_data_job(*, job_id, worker_id: str, inputs: dict, node_id: str = "VPS1", workspace_root: str | None = None, allow_repair: bool = False) -> Execution:
     """First production worker path: acquired structured-data job -> execution -> artifact -> independent deterministic QA."""
     job = Job.objects.select_related("marketplace").get(pk=job_id)
-    if job.state not in {Job.State.CLAIMED, Job.State.AWARDED}:
+    permitted_states = {Job.State.CLAIMED, Job.State.AWARDED}
+    if allow_repair:
+        permitted_states.add(Job.State.EXECUTING)
+    if job.state not in permitted_states:
         raise ExecutionError(f"job must be acquired before execution, got {job.state}")
-    if job.task_class.lower() not in SAFE_STRUCTURED_TASKS:
-        raise ExecutionError("this execution path only permits structured-data task classes")
+    operation = str(inputs.get("operation") or "")
+    if operation not in SAFE_STRUCTURED_OPERATIONS:
+        raise ExecutionError("unsupported structured-data operation")
 
     root = Path(workspace_root or os.getenv("AMARKTAI_JOB_ROOT", "/var/lib/amarktai-earn/jobs"))
     upload_root = Path(os.getenv("AMARKTAI_UPLOAD_ROOT", "/var/lib/amarktai-earn/uploads"))
@@ -108,8 +105,6 @@ def execute_structured_data_job(*, job_id, worker_id: str, inputs: dict, node_id
             transition_job(job.id, Job.State.EXECUTING, actor=worker_id, metadata={"execution_id": execution.id})
 
         result = StructuredDataWorker().execute(WorkRequest(job_id=str(job.id), workspace=Path(execution.workspace), inputs=clean_inputs))
-
-        # Revalidate ownership before publishing output after potentially long file processing.
         lock = renew_job_lock(job.id, node_id=node_id, fencing_token=lock.fencing_token, lease_seconds=lease_seconds)
         if not result.ok:
             Execution.objects.filter(pk=execution.pk).update(
