@@ -13,7 +13,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 from .jwt_auth import issue_access, issue_refresh, rotate_refresh, revoke_refresh
-from .models import AuditEvent, Job, LoginChallenge, OwnerSecurityProfile, Payout, RecoveryCode
+from .models import AuditEvent, GenXAccountSnapshot, GenXCall, Job, LoginChallenge, OwnerSecurityProfile, Payout, RecoveryCode, Worker
 from .secrets import decrypt_secret
 
 User = get_user_model()
@@ -138,14 +138,23 @@ def overview_api(request):
     if not getattr(request, "owner", None):
         return JsonResponse({"error": "unauthorized"}, status=401)
     today = timezone.localdate()
-    earned = Payout.objects.filter(state=Payout.State.EARNED, updated_at__date=today).aggregate(v=Sum("net"))["v"] or 0
+    earned = Payout.objects.filter(
+        state__in=[Payout.State.EARNED, Payout.State.PAYOUT_PENDING, Payout.State.SETTLED],
+        earned_at__date=today,
+    ).aggregate(v=Sum("net"))["v"] or 0
     settled = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__date=today).aggregate(v=Sum("net"))["v"] or 0
     pending = Payout.objects.filter(state=Payout.State.PAYOUT_PENDING).aggregate(v=Sum("net"))["v"] or 0
+    genx_used = GenXCall.objects.filter(created_at__date=today).aggregate(v=Sum("credits"))["v"] or 0
+    latest_genx = GenXAccountSnapshot.objects.order_by("-created_at").first()
+    active_agents = Worker.objects.exclude(status__in=["OFFLINE", "READY"]).count()
     return JsonResponse({
         "autonomous_mode": __import__("os").getenv("AUTONOMOUS_MODE", "OFF"),
         "net_earned_today": str(earned),
         "settled_today": str(settled),
         "pending_payout": str(pending),
         "active_paid_jobs": Job.objects.filter(state__in=[Job.State.CLAIMED, Job.State.AWARDED, Job.State.EXECUTING]).count(),
-        "revenue_truth": "Only SETTLED is received cash; expected values are not counted as settled.",
+        "active_agents": active_agents,
+        "genx_balance": None if latest_genx is None or latest_genx.available_credits is None else str(latest_genx.available_credits),
+        "genx_used_today": str(genx_used),
+        "revenue_truth": "Accepted earnings and pending payout are not received cash. Only SETTLED is received cash; expected opportunity values are never counted here.",
     })

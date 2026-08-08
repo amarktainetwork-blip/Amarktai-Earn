@@ -7,6 +7,13 @@ Primary deployment: one Webdock VPS, expandable into one centrally controlled mu
 
 This README is the primary source of truth. Supporting documents may explain implementation details, but they may not redefine the product, revenue model, security boundaries, money states, or deployment architecture described here.
 
+### Current verified implementation status — 2026-08-08
+
+The repository has moved beyond the bootstrap/controller-only stage but is **not yet production-operational or earning-capable**. The verified code foundation now includes Docker/Caddy/PostgreSQL/Redis configuration, Django owner control plane, JWT/TOTP/recovery-code authentication code, additive database migrations, deterministic economic scoring and acquisition gates, transactional global job leases with fencing tokens, expanded market/execution/treasury/runtime entities, one AgentGigs adapter in payout-blocked mode, a controller-owned GenX catalog/budget/reconciliation gateway, one real structured-data execution path with persisted artifacts and independent deterministic CSV QA, append-only payout/ledger state handling, encrypted backup/restore scripts, and an initial truth-only operations dashboard.
+
+Deterministic validation in the build environment currently passes 25/25 tests plus syntax and whitespace checks. Django/PostgreSQL/Redis integration and live GenX calls still require a runtime with the production dependencies/credentials, so none of those are falsely marked live-proven. Live marketplace payout onboarding, a fully payout-ready market vertical, repair/submission/revision loops, broader worker coverage, sandbox execution, scheduler/watchers, resource/storage governors, watchdog recovery, and the first real end-to-end paid completion are still required.
+
+
 ## 1. What Amarktai Earn is
 
 Amarktai Earn is a private owner-only autonomous digital-work operating system. It discovers legitimate paid digital work, evaluates expected profit, acquires only permitted and economically justified work, executes it, independently QA-checks it, repairs failures, submits deliverables, handles routine revisions, tracks acceptance and payouts, and learns which markets, task classes, workers, and GenX models produce the best settled net profit.
@@ -26,95 +33,95 @@ Milestones are targets, not guarantees:
 5. $100–$133/day cluster-wide;
 6. approximately $3,000–$4,000/month net after ordinary system expenses when economics support it.
 
-No estimate may be presented as received cash. Only the `SETTLED` state is actual received money.
+Only `SETTLED` is received cash. `EXPECTED`, `CLAIMED`, `AWARDED`, `SUBMITTED`, `ACCEPTED/EARNED`, and `PAYOUT_PENDING` are separate economic states and must never be displayed as settled revenue.
 
 ## 3. Architecture
 
 VPS1 is the permanent logical hub and owns the dashboard, PostgreSQL, Redis, scheduler, Money Brain, marketplace gateways, GenX gateway, GitHub gateway, Treasury, global job locks, node registry, central reporting, and security control plane.
 
-External opportunities enter through VPS1 only:
+External work is normalized into one internal job contract. The control plane makes deterministic economic/policy decisions before workers are allowed to spend GenX credits or external resources.
 
-`Marketplace -> VPS1 gateway -> normalize -> policy gate -> economic score -> global lock -> scheduler -> worker -> independent QA -> repair if needed -> submit -> revision/payment watchers -> ledger/dashboard`
+Logical flow:
 
-Future worker VPSs execute assigned work but do not independently poll marketplaces and do not receive broad marketplace, GenX, GitHub, or treasury master credentials.
+`Market adapters -> Normalizer -> Policy + payout gate -> Economic scorer -> Global lease -> Scheduler -> Worker -> Independent QA -> Repair if needed -> Submission -> Revision watcher -> Payout watcher -> Ledger -> Learning`
+
+The first node may expose many logical agents while running only the workers that currently have work. Additional VPSs join as worker nodes; they do not become independent competing brains.
 
 ## 4. Webdock restrictions
 
-The Webdock deployment excludes completely:
+The following are excluded from this repository and deployment:
 
-- cryptocurrency mining, blockchain nodes, validators, staking, testnets, DePIN compute/storage;
-- bandwidth resale, residential proxies, traffic exchanges, packet sharing, Tor, torrenting;
-- network scanning, automated vulnerability scanning, unauthorised security testing, DDoS/stress testing;
+- cryptocurrency mining, validators, nodes, staking or testnets;
+- DePIN/decentralised compute or storage;
+- bandwidth resale, packet sharing, proxies or traffic exchanges;
+- Tor/torrenting;
+- network scanning, unauthorised security testing, DDoS/stress testing;
 - sustained heavy third-party scraping;
-- prohibited local neural-network training or inference;
-- spam, unsolicited bulk messaging, fake traffic, ad-click automation, survey manipulation;
-- fake marketplace accounts, fake identity/address workarounds, deceptive affiliate systems;
-- any workload that risks the Webdock account.
+- prohibited local neural-network inference/training;
+- spam, unsolicited bulk messaging or ad-click automation;
+- survey manipulation, fake marketplace accounts/traffic, deceptive affiliate systems;
+- any workload that threatens the hosting account.
 
-Incompatible future business lines belong in a separate repository and compliant host. Disabled crypto modules are intentionally absent here.
+A future incompatible business belongs in a different repository on a host that explicitly permits it. No dormant crypto/DePIN modules are shipped here.
 
 ## 5. Technology stack
 
-V1 uses:
+- Python 3.12+
+- Django 5.2
+- PostgreSQL
+- Redis + RQ
+- Caddy
+- Docker / Docker Compose
+- Pydantic / PydanticAI where structured agent decisions add value
+- official MCP Python SDK for MCP marketplaces
+- Aider for smaller repository work
+- OpenHands SDK for heavier repository work
+- pandas / Polars / DuckDB / openpyxl for structured-data jobs
+- FFmpeg for profitable permitted media manipulation
+- Playwright/Browser Use only as an explicitly permitted fallback
+- GenX Router for remote AI inference
 
-- Python 3.12;
-- Django control plane/dashboard;
-- PostgreSQL as economic source of truth;
-- Redis + RQ for prioritized durable work queues;
-- Docker for isolated disposable job execution;
-- Caddy for TLS/reverse proxy;
-- Argon2id password hashing;
-- JWT access/refresh session architecture;
-- TOTP and one-time recovery codes;
-- Pydantic/PydanticAI for typed decision orchestration where AI decisions are needed;
-- official MCP Python SDK where a marketplace exposes MCP;
-- Aider for small/medium coding jobs;
-- OpenHands Software Agent SDK for heavy coding jobs;
-- pandas/Polars/DuckDB/openpyxl/jq for deterministic data tasks;
-- FFmpeg for permitted light media manipulation;
-- Playwright/Browser Use only as an explicitly permitted fallback when no API/MCP exists and no security/CAPTCHA circumvention is required.
-
-Dependencies must be actively maintained, appropriately licensed, and security reviewed before production promotion.
+Dependencies must be maintained, appropriately licensed, security reviewed, and economically justified.
 
 ## 6. Revenue engines
 
-Priority is economic and global:
+Priority is economic, not cosmetic:
 
-- **P0 Revenue protection:** revisions, failed-submission repair, payment clarification, deadlines, final QA.
-- **P1 Instant claim:** profitable work that can be claimed deterministically.
+- **P0 Revenue protection:** revisions, maintainer/requester feedback, submission repair, payout clarification, deadlines, final QA.
+- **P1 Instant claim:** claim profitable work immediately where a marketplace explicitly allows it.
 - **P2 Instant accept:** profitable work where a documented threshold guarantees acceptance.
-- **P3 Assigned/inbound:** work already assigned to registered Amarktai agents/services.
-- **P4 High-EV limited competition:** selective applications/bids.
-- **P5 Profitable microjobs:** short structured tasks with low cost and strong machine verification.
-- **P6 Medium jobs:** research, localisation, compliance, data, docs, coding, testing.
-- **P7 Bounty upside:** higher-value coding/reward work, not treated as the daily floor.
+- **P3 Assigned/inbound:** already-awarded work or service orders.
+- **P4 High-value low-competition:** selective applications/bids.
+- **P5 Profitable microjobs:** small structured, fast, machine-verifiable work with low AI cost.
+- **P6 Medium jobs:** research, localisation, compliance, data, documentation, coding/testing.
+- **P7 Bounties:** upside rather than the daily floor.
 
-When paid work is scarce, useful capacity performs `INVESTMENT` work such as template improvement, model benchmarking, loss analysis, market discovery, cache preparation, and reputation analysis. Investment is never counted as revenue.
+Quiet time becomes `INVESTMENT`, never fake revenue: market discovery, reusable templates, dependency/repo caching, model benchmarking, loss analysis, skill improvement, test-template work, and stale-workspace cleanup.
 
 ## 7. Market adapters
 
-Initial intended markets are Dealwork, Toku, Callboard, AgentGigs, TaskBounty, and Opire. Every adapter sits behind `markets.base.MarketAdapter` and advertises capability flags rather than pretending all marketplaces support the same lifecycle.
+Every marketplace lives behind a common interface with capability flags for health, payout readiness, discovery, normalize, claim, bid, apply, messages, submission, status, and payout.
 
-A market can only acquire work after verification of:
+Initial candidates from the governing specification:
 
-1. current existence and active supply;
-2. official API/MCP automation support;
-3. policy permission for autonomous agents;
-4. legitimate payout mechanism;
-5. successful South African payout onboarding;
-6. Webdock compatibility;
-7. viable expected economics;
-8. known commission/withdrawal rules.
+- Dealwork
+- Toku
+- Callboard
+- AgentGigs
+- TaskBounty
+- Opire
 
-Failure states include `WATCH_ONLY`, `PAYOUT_BLOCKED`, `POLICY_DISABLED`, and `UNPROFITABLE`. Market count is never a KPI.
+None is enabled merely because its name is in this list. Before autonomous acquisition, the current official policy/API/MCP, actual supply, account auth, payout flow, South African eligibility, expected economics and Webdock compatibility must be verified.
 
 Current implementation note: the AgentGigs adapter is present because its public API documents autonomous browsing, applying, delivery, messaging, and payout workflows. Acquisition remains disabled by default until real account authentication, Stripe Connect onboarding, and South African payout readiness are proven.
 
 ## 8. Agent architecture
 
-Logical specialists include:
+Core logical roles:
 
-- Money Brain / Global Scheduler / Policy Agent / Market Discovery / GenX Cost Controller / Reputation / Treasury / Node Manager;
+- Money Brain / Global Scheduler;
+- Market Discovery / Policy / GenX Cost Controller;
+- Treasury / Reputation / Node Manager;
 - marketplace scouts;
 - Structured Data, Research, Documents, Localisation, Transcription, Small Code, Heavy Code, CI/Testing, Media;
 - deterministic QA, AI QA, Repair, Revision, Submission.
@@ -131,10 +138,15 @@ Gateway responsibilities:
 - `GET /api/v1/account/credits` for wallet state;
 - `GET /api/v1/account/pricing` for tier-adjusted pricing;
 - `POST /api/v1/generate` and job status endpoints for asynchronous generation;
-- per-request metadata for node, worker, job, market, and task class;
-- per-job budget enforcement;
-- actual model/usage/latency/status/cost recording;
-- profitability calculations by model/task/worker/market.
+- persisted model/pricing catalog and account-credit snapshots;
+- per-request metadata for node, worker, job, market, task class, requested model and maximum credits;
+- explicit call-level and job-level credit reservation before remote submission;
+- request-key replay protection; ambiguous network/timeout outcomes remain `UNKNOWN_REMOTE_STATE` until reconciled;
+- actual model/usage/latency/status/result recording when GenX returns it;
+- model routing using historical profit-per-credit/acceptance before weak price hints; known loss-making history does not outrank unproven alternatives;
+- profitability statistics by model/task, with wider worker/market attribution added as settled outcomes accumulate.
+
+`python manage.py sync_genx_catalog` refreshes the live catalog/pricing/credit snapshot. `python manage.py reconcile_genx` polls already-submitted remote job IDs and never replays an uncertain request merely because the controller lost the response.
 
 The model-routing objective is accepted/settled economic return per GenX cost, not the largest model available. Deterministic local code must be preferred whenever AI is unnecessary.
 
@@ -189,11 +201,11 @@ Ephemeral workspaces, temp clones, intermediate media, tests, and disposable con
 
 ## 15. Database architecture
 
-PostgreSQL is the source of truth. Initial implemented entities include owner security, refresh sessions, recovery codes, login challenges, marketplaces, market candidates, jobs, job scores, locks, workers, GenX calls, QA checks, submissions, revisions, payouts, ledger entries, and audit events.
+PostgreSQL is the source of truth. Implemented migration-backed entities now include owner security, refresh sessions, recovery codes, login challenges, marketplaces, encrypted marketplace credentials, market policy versions and health snapshots, payout accounts, market candidates, jobs, job scores, locks, applications, bids, claims, job messages, nodes, workers and worker versions, executions, artifacts, GenX model catalog/account snapshots/calls/model statistics, QA checks, submissions, revisions, payouts, ledger entries, treasury balances, alerts, system settings, and audit events.
 
-The target schema also covers marketplace credentials/policies/health, payout accounts, applications/bids/claims/messages, execution versions, nodes, artifacts, treasury balances, alerts, model statistics, and system settings as the vertical slices are completed.
+The runtime keeps the original normalized marketplace payload on each job and all material acquisition/execution/payment state changes are persisted rather than inferred from logs. Further tables may be added only when a real vertical requires them; schema-by-hand production changes are prohibited.
 
-All production schema changes use migrations.
+All production schema changes use migrations. `0001` remains immutable history and later capabilities are added through `0002+` migrations.
 
 ## 16. Job lifecycle
 
@@ -247,77 +259,83 @@ Historical truth comes from ledger entries and external reconciliations, not mut
 
 ## 22. South African payout considerations
 
-A market cannot acquire paid work until real payout onboarding succeeds for the owner/operator in South Africa. “Uses Stripe Connect” does not itself prove eligibility.
+Every market stores explicit payout readiness and South African verification flags. A marketplace can remain `WATCH_ONLY` while discovery works, but autonomous acquisition remains blocked until payout onboarding succeeds.
 
-No fake foreign address, identity, company, or entity may be created to bypass payment restrictions. For future Amarktai-controlled payments, Paystack may be evaluated as a South African rail; Wise Business may be used legitimately for supported treasury/FX receiving. Neither replaces the marketplace’s own required payout onboarding.
+Never invent foreign addresses/entities or bypass payment-platform restrictions. Marketplace payout rails are dictated by each platform; Amarktai cannot replace them from its own code. Paystack/Wise may be used later for Amarktai-controlled treasury flows where legally suitable, but do not substitute for required marketplace onboarding.
 
 ## 23. VPS deployment
 
-Production services:
+Initial target is VPS1:
 
-- Caddy;
-- Django web/API;
-- PostgreSQL;
-- Redis;
-- RQ worker pools/scheduler;
-- market watchers;
-- Money Brain;
-- GenX Gateway;
-- GitHub Gateway;
-- sandbox broker;
-- payment watcher;
-- node controller.
+- 8 vCPU;
+- 10 GB RAM;
+- 100 GB disk;
+- 1 Gbit networking.
 
-The initial Compose file provides isolated internal networking and persistent volumes. Production bootstrap additionally configures host firewall/SSH/fail2ban, secrets, migrations, owner creation, Caddy DNS/TLS readiness, and smoke tests.
+Core containers/services: Caddy, Django/Gunicorn, PostgreSQL, Redis/RQ, controller/watchers, worker pool. Heavy untrusted execution later runs only through the sandbox broker.
+
+Production deployment keeps only required ports public and uses persistent volumes for database/Redis and `/var/lib/amarktai-earn/*` data classes.
 
 ## 24. Backup/restore
 
-Daily minimum encrypted backups cover PostgreSQL, configuration/economic history, audit records, and required encrypted credential metadata. Disposable workspaces/repositories are not backed up unnecessarily.
-
 `scripts/backup.sh` and `scripts/restore.sh` provide the starting encrypted database workflow. Restore must be tested before production acceptance. When meaningful revenue exists, add an offsite encrypted backup and test restore at least weekly.
+
+Backups never go into Git. Retention prevents backup files filling the disk.
 
 ## 25. Monitoring
 
-Monitor service health, worker heartbeats, queue length, CPU, RAM, disk, load, DB/Redis availability, market auth/payout state, GenX balance/cost anomalies, retries, controller health, and backup recency.
+Monitor controller/API/worker/market/GenX health, queue depth, job duration, acceptance, payout aging, CPU, RAM, disk, error rates, auth/security events, and true idle. Alert on economics/security/availability events that require intervention.
 
-Logs are structured JSON in production and include timestamp, node, worker, market, job, event type, severity, and correlation ID with automatic secret redaction.
+Health must distinguish a single broken marketplace from overall system failure.
 
 ## 26. Self-healing
 
-A deterministic watchdog—not an LLM—restarts crashed services/workers, detects stuck jobs, releases expired locks, retries transient APIs with backoff, circuit-breaks broken markets, bounds repair loops, cleans abandoned containers/workspaces, pauses heavy work under resource pressure, and resumes safely after reboot.
+A deterministic watchdog, independent of AI availability, will restart crashed workers/services, release expired leases, detect stuck jobs, back off rate limits, circuit-break failing markets, prevent infinite repair loops, remove abandoned containers/workspaces, pause heavy jobs under resource pressure and resume cleanly after reboot.
 
-One broken marketplace credential must never stop the system.
+A marketplace auth failure must isolate that market instead of stopping the rest of Amarktai Earn.
 
 ## 27. Multi-VPS scaling
 
-All nodes run the same versioned Amarktai Earn release. VPS1 remains the logical hub. Secondary nodes enroll with one-time tokens and mTLS, receive a constrained role profile, heartbeat, and become schedulable.
+The database lease/fencing-token mechanism exists from V1 so later VPSs cannot bid/claim/execute the same opportunity accidentally. VPS1 remains the central control/economic authority; workers communicate through authenticated internal gateways and queues.
 
-Scale only when measured positive economics and capacity pressure justify the incremental VPS cost. The future dashboard should calculate lost positive expected value due to capacity.
+Node records include hostname, release version, role, health, resource telemetry and heartbeat. New nodes start in worker roles and receive no master marketplace/GenX/payout credentials.
 
 ## 28. Versioning/upgrades
 
-Release images are versioned (`amarktai-earn:1.x.y`). Upgrade flow is build -> tests -> canary -> one secondary node -> verify -> rolling fleet -> automatic rollback on failed health.
+Every worker/controller release is versioned. Deploy migrations before dependent code, retain rollback/recovery capability, expose version/health on nodes, and progressively roll worker versions rather than updating an entire future cluster blindly.
 
-Nodes report release version and health. New nodes always join using the current tested release rather than old copies.
+Third-party dependencies are pinned by compatible ranges initially and will gain lockfiles/image digest pinning before production acceptance.
 
 ## 29. Two-day V1 build plan
 
 **Day 1:** repository/README, Compose, Django/PostgreSQL/Redis/Caddy, owner auth, database/economic schema, GenX gateway, market interface + first verified adapter, initial dashboard.
-**Day 2:** deterministic data/research/document/localisation workers, Aider/OpenHands coding workers, QA/repair/revision/submission, payout/Treasury, remaining viable market watchers, watchdog/resource/storage governance, shadow-mode run, then conservative low-risk autonomous acquisition.
 
-Vertical slices take precedence over six half-built integrations.
+**Day 2:** complete first real market vertical, worker execution + QA/repair + submission, scheduler/watchers, payout reconciliation/ledger, sandbox broker, storage/resource governor, watchdog, end-to-end smoke tests, VPS TLS deployment and shadow-mode verification.
+
+The two-day plan is an execution target, not permission to skip production acceptance criteria.
 
 ## 30. 14-day optimisation plan
 
-Days 1–3: prove a real autonomous acquisition and paid completion; collect GenX and marketplace friction data.
-Days 4–7: improve instant-claim latency, deterministic microtask templates, QA, bid thresholds, and model economics.
-Days 8–14: reallocate toward proven task/market/model lanes. If rolling economics are poor, redesign the economics rather than adding servers.
+1. collect real acquisition/acceptance/payment/model data;
+2. optimize thresholds per task/market;
+3. expand deterministic worker templates;
+4. add the next payout-ready market;
+5. improve model routing from real revenue/credit data;
+6. tune concurrency and caches;
+7. reduce artifact/log storage;
+8. improve revision response and reputation;
+9. add verified market discovery candidates;
+10. introduce paid QA/review only where genuinely available.
 
 ## 31. 30/60/90-day growth plan
 
-**30 days:** multiple proven task classes, robust payout reconciliation, stable worker QA, cost-aware GenX routing, measurable market statistics.
-**60 days:** add a second node only if profitable queue pressure and positive incremental economics are demonstrated; add specialized worker profiles and automated capacity recommendations.
-**90 days:** diversify profitable market/task lanes, strengthen controller failover, expand paid QA/review opportunities, and approach cluster targets only when settled evidence supports them.
+**30 days:** stabilize the most profitable task/market pairs, target rolling $20–$30/day, eliminate unprofitable categories.
+
+**60 days:** expand profitable service/inbound lanes, mature worker templates and model statistics, approach $50/day if external supply supports it.
+
+**90 days:** add nodes only where capacity is a proven bottleneck, expand verified markets, target $100–$133/day cluster-wide when actual demand/economics justify it.
+
+Targets are never transformed into fake forecasts or displayed as settled revenue.
 
 ## 32. Long-term upgrade plan
 
@@ -399,6 +417,6 @@ Amarktai-Earn/
 
 ## Current build state
 
-The bootstrap establishes the real application skeleton, secure owner-auth primitives, database/economic models, persistent Compose topology, encrypted field-secret primitive, GenX Router client, AgentGigs read-only/discovery+apply+submit adapter skeleton, initial owner login/overview UI, backup/restore scripts, and economics tests. It does **not** claim live earnings or a live payout-ready market until credentials/KYC/payout proof exists.
+The current `main` target now contains the controller foundation plus the next runtime layer: migration-backed economic/runtime entities, global acquisition leases, persistent acquisition attempts that stop blind replay after uncertain remote outcomes, GenX live-catalog/pricing/credit synchronization code, per-job GenX credit reservations and request-key replay protection, GenX reconciliation, a structured-data `acquired -> execute -> artifact -> deterministic QA` path, payout state transitions, idempotent ledger postings, treasury recomputation, and overview metrics sourced only from database truth. It does **not** claim live earnings or a live payout-ready market until credentials/KYC/payout proof exists.
 
-The next implementation slices are: migrations and auth tests -> GenX persistence/budget enforcement -> global lock acquisition API -> worker execution/QA pipeline -> first payout-ready live market vertical -> full operations dashboard -> watchdog/resource/storage governors.
+The immediate critical path is now: prove Django/PostgreSQL/Redis migrations and owner auth on the VPS -> configure/live-test GenX catalog + one budgeted call -> choose and complete the first payout-ready market adapter -> wire `discover -> score -> acquire -> execute -> QA -> submit -> revision -> payout` -> add bounded repair -> add RQ scheduler/watchers -> sandbox untrusted jobs -> finish watchdog/resource/storage governors and dashboard surfaces -> prove one real settled paid completion.

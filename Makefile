@@ -1,4 +1,4 @@
-.PHONY: dev test check migrate up down logs bootstrap-owner
+.PHONY: dev test check migrate up down logs bootstrap-owner genx-sync genx-reconcile
 
 dev:
 	DJANGO_DB_ENGINE=sqlite DJANGO_DEBUG=1 python manage.py runserver
@@ -23,3 +23,9 @@ logs:
 
 bootstrap-owner:
 	python manage.py bootstrap_owner
+
+genx-sync:
+	python manage.py sync_genx_catalog
+
+genx-reconcile:
+	python manage.py reconcile_genx
