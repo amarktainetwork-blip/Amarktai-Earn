@@ -1,8 +1,12 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from unittest.mock import patch
 
 from control.jwt_auth import issue_access
-from control.models import Artifact, Execution, GenXCall, Job, Marketplace, OwnerSecurityProfile, QAResult, SystemSetting, Worker
+from control.models import (
+    AcquisitionPreflight, Application, Artifact, Execution, GenXCall, Job, Marketplace,
+    MarketPolicyVersion, OwnerSecurityProfile, QAResult, Revision, Submission, SystemSetting, Worker,
+)
 from control.ops import snapshot
 from planning.models import WorkPlan
 
@@ -69,6 +73,42 @@ class OperationsDashboardIntegrationTests(TestCase):
         self.assertEqual(job["plan"], "EXECUTING")
         self.assertEqual(job["qa"], "PASS")
         self.assertEqual(job["artifacts"], 1)
+        self.assertEqual(job["operation"], "json_to_csv")
+        self.assertEqual(job["repair_attempts"], "0/1")
+        self.assertEqual(job["open_revisions"], 0)
+
+    def test_live_work_and_markets_surface_submission_policy_activity_and_blockers(self):
+        Submission.objects.create(job=self.job, artifact=Artifact.objects.get(job=self.job), version=1, status="SUBMITTED")
+        Revision.objects.create(job=self.job, message="Please revise", status="REQUIRED")
+        Application.objects.create(job=self.job, status="UNKNOWN_REMOTE_STATE")
+        MarketPolicyVersion.objects.create(
+            marketplace=self.market, policy_hash="policy-v1", automation_allowed=False, webdock_compatible=True,
+        )
+        AcquisitionPreflight.objects.create(
+            job=self.job, autonomy_mode="SHADOW", operation="json_to_csv", worker_class="structured_data",
+            eligible=True, allowed=False, reason_codes=["AUTONOMY_SHADOW_ONLY"],
+        )
+
+        live = snapshot("live-work", owner=self.user)["rows"][0]
+        self.assertEqual(live["submission"], "SUBMITTED")
+        self.assertEqual(live["submission_version"], 1)
+        self.assertEqual(live["open_revisions"], 1)
+
+        market = snapshot("markets", owner=self.user)["rows"][0]
+        self.assertFalse(market["policy_automation_allowed"])
+        self.assertEqual(market["unknown_remote_state"], 1)
+        self.assertEqual(market["latest_preflight"], "BLOCKED")
+        self.assertIn("AUTONOMY_SHADOW_ONLY", market["blockers"])
+        self.assertIn("PAYOUT_NOT_READY", market["blockers"])
+
+    def test_agents_expose_production_enablement_separately_from_runtime_status(self):
+        with patch.dict("os.environ", {"SANDBOX_CODING_ENABLED": "0", "GENX_API_KEY": ""}, clear=False):
+            agents = snapshot("agents", owner=self.user)["rows"]
+        structured = next(row for row in agents if row["worker_class"] == "structured_data")
+        coding = next(row for row in agents if row["worker_class"] == "code_small")
+        self.assertTrue(structured["production_enabled"])
+        self.assertFalse(coding["production_enabled"])
+        self.assertIn("CODING_SANDBOX_DISABLED", coding["enablement_reason_codes"])
 
     def test_sensitive_settings_are_never_returned(self):
         SystemSetting.objects.create(key="secret-example", value={"token": "must-not-leak"}, sensitive=True)
@@ -76,6 +116,12 @@ class OperationsDashboardIntegrationTests(TestCase):
         row = next(item for item in settings["rows"] if item["key"] == "secret-example")
         self.assertEqual(row["value"], "CONFIGURED — HIDDEN")
         self.assertNotIn("must-not-leak", str(settings))
+
+    def test_security_reports_only_configured_hidden_secret_state(self):
+        with patch.dict("os.environ", {"GENX_API_KEY": "must-not-leak"}, clear=False):
+            security = snapshot("security", owner=self.user)
+        self.assertIn("CONFIGURED — HIDDEN", str(security))
+        self.assertNotIn("must-not-leak", str(security))
 
     def test_authenticated_dashboard_api_exposes_registry_and_runtime_truth(self):
         self.client.cookies["amarktai_access"] = issue_access(self.user)
