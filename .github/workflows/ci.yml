@@ -80,7 +80,7 @@ jobs:
       - run: python manage.py migrate --noinput
       - run: python manage.py healthcheck
       - run: python -m unittest discover -s tests -p 'test_*_stdlib.py' -q
-      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration tests.test_dependency_media_integration tests.test_v1_acceptance_integration tests.test_profit_brain_integration -v 2
+      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration tests.test_dependency_media_integration tests.test_v1_acceptance_integration tests.test_profit_brain_integration tests.test_multifile_composite_integration -v 2
       - name: Production configuration preflight
         env:
           AMARKTAI_ENV: production

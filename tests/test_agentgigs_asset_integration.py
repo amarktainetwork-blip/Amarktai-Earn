@@ -8,7 +8,7 @@ from django.test import TestCase
 
 from control.models import Job, Marketplace
 from control.services.agentgigs_assets import ingest_agentgigs_assets, sync_awarded_agentgigs_assets
-from planning.models import JobAsset, WorkPlan
+from planning.models import JobAsset, JobAssetManifest, WorkPlan
 from planning.services import plan_awarded_job
 
 
@@ -178,6 +178,44 @@ class AgentGigsAssetIntegrationTests(TestCase):
         plan = plan_awarded_job(job.id)
         self.assertEqual(plan.status, WorkPlan.Status.BLOCKED)
         self.assertIn("INPUT_ASSET_NOT_STAGED", plan.reason_codes)
+
+    def test_multiple_assets_with_explicit_semantic_roles_are_verified(self):
+        adapter = FakeAssetAdapter()
+        job = self._job("asset-job-role-manifest")
+        messages = [
+            {
+                "id": "brief-one",
+                "attachment_name": "brief.txt",
+                "attachment_url": "https://files.example.test/brief.txt",
+                "attachment_size": 5,
+                "semantic_role": "brief",
+            },
+            {
+                "id": "data-one",
+                "attachment_name": "data.json",
+                "attachment_url": "https://files.example.test/data.json",
+                "attachment_size": 2,
+                "semantic_role": "data",
+            },
+        ]
+
+        def fetcher(ref, target, maximum):
+            payload = b"brief" if ref.name.endswith(".txt") else b"[]"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+            return len(payload), "text/plain" if ref.name.endswith(".txt") else "application/json"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            uploads = root / "uploads"; jobs = root / "jobs"
+            uploads.mkdir(); jobs.mkdir()
+            with patch.dict(os.environ, {"AMARKTAI_UPLOAD_ROOT": str(uploads), "AMARKTAI_JOB_ROOT": str(jobs)}, clear=False):
+                result = ingest_agentgigs_assets(job, adapter, details={"job": {}}, messages=messages, fetcher=fetcher)
+        self.assertEqual(result["ingested"], 2)
+        self.assertEqual(JobAsset.objects.filter(job=job, status=JobAsset.Status.VERIFIED).count(), 2)
+        manifest = JobAssetManifest.objects.get(job=job)
+        self.assertEqual(manifest.status, JobAssetManifest.Status.VERIFIED)
+        self.assertEqual(set(manifest.roles), {"brief", "data"})
 
     def test_unsupported_source_is_blocked_without_fetch(self):
         adapter = FakeAssetAdapter()

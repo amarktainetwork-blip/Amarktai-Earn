@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import hashlib
-import mimetypes
+import json
 import os
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 
-from control.models import AuditEvent, Job, Submission
-from planning.models import JobAsset, WorkPlan
+from control.models import AuditEvent, GenXCall, Job, QAResult, Submission
+from planning.asset_policy import AssetPolicyError, inspect_asset, safe_asset_name, validate_role
+from planning.models import JobAsset, JobAssetManifest, WorkPlan, WorkPlanStep, WorkPlanStepDependency
 from workers.registry import WorkerRegistryError, operation_spec
 from control.services.workload_policy import evaluate_job
 
@@ -19,7 +22,7 @@ class PlanningError(RuntimeError):
     pass
 
 
-PLANNER_VERSION = "deterministic-v1"
+PLANNER_VERSION = "deterministic-v2"
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -36,24 +39,84 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def stage_local_job_asset(*, job_id, path: str, source: str = "upload", external_id: str = "") -> JobAsset:
+def rebuild_asset_manifest(job: Job) -> JobAssetManifest:
+    assets = list(JobAsset.objects.filter(job=job).order_by("created_at", "id"))
+    verified = [row for row in assets if row.status == JobAsset.Status.VERIFIED and row.duplicate_of_id is None]
+    reasons = []
+    max_files = max(1, int(os.getenv("JOB_ASSET_MAX_FILES", "12")))
+    max_total = max(1, int(os.getenv("JOB_ASSET_MAX_TOTAL_BYTES", str(250 * 1024 * 1024))))
+    total = sum(row.size_bytes for row in verified)
+    if len(verified) > max_files:
+        reasons.append("ASSET_FILE_COUNT_LIMIT")
+    if total > max_total:
+        reasons.append("ASSET_TOTAL_BYTES_LIMIT")
+    if any(row.status == JobAsset.Status.BLOCKED for row in assets):
+        reasons.append("ASSET_BLOCKED")
+        for row in assets:
+            if row.status == JobAsset.Status.BLOCKED and isinstance(row.metadata, dict):
+                reasons.extend(str(code) for code in row.metadata.get("reason_codes", []) if code)
+    roles: dict[str, list[int]] = {}
+    for row in verified:
+        roles.setdefault(row.semantic_role, []).append(row.id)
+    material = [
+        {"id": row.id, "role": row.semantic_role, "sha256": row.sha256, "bytes": row.size_bytes, "mime": row.detected_mime_type}
+        for row in verified
+    ]
+    digest = hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode()).hexdigest() if material else ""
+    status = JobAssetManifest.Status.VERIFIED if verified and not reasons else JobAssetManifest.Status.BLOCKED
+    manifest, _ = JobAssetManifest.objects.update_or_create(
+        job=job,
+        defaults={
+            "status": status,
+            "file_count": len(verified),
+            "total_bytes": total,
+            "manifest_sha256": digest,
+            "roles": roles,
+            "reason_codes": reasons or ([] if verified else ["NO_VERIFIED_ASSETS"]),
+            "verified_at": timezone.now() if status == JobAssetManifest.Status.VERIFIED else None,
+        },
+    )
+    return manifest
+
+
+def stage_local_job_asset(*, job_id, path: str, source: str = "upload", external_id: str = "", semantic_role: str = "source", declared_mime_type: str = "") -> JobAsset:
     job = Job.objects.get(pk=job_id)
     candidate = Path(path).resolve()
     upload_root = Path(os.getenv("AMARKTAI_UPLOAD_ROOT", "/var/lib/amarktai-earn/uploads")).resolve()
     job_root = Path(os.getenv("AMARKTAI_JOB_ROOT", "/var/lib/amarktai-earn/jobs")).resolve()
     if not (_inside(candidate, upload_root) or _inside(candidate, job_root)):
         raise PlanningError("job asset is outside approved upload/job storage")
+    if candidate.is_symlink():
+        raise PlanningError("job asset symlinks are not permitted")
     if not candidate.is_file():
         raise PlanningError("job asset file does not exist")
+    role = validate_role(semantic_role)
+    name = safe_asset_name(candidate.name)
+    size = candidate.stat().st_size
+    maximum = max(1, int(os.getenv("JOB_ASSET_MAX_FILE_BYTES", str(100 * 1024 * 1024))))
+    if size > maximum:
+        raise PlanningError("job asset exceeds per-file size limit")
+    try:
+        inspection = inspect_asset(candidate)
+    except AssetPolicyError as exc:
+        raise PlanningError(exc.code) from exc
+    digest = _sha256(candidate)
+    duplicate = JobAsset.objects.filter(job=job, sha256=digest, status=JobAsset.Status.VERIFIED).exclude(path=str(candidate)).first()
     defaults = {
+        "semantic_role": role,
         "source": source[:40],
-        "name": candidate.name,
+        "name": name,
         "path": str(candidate),
-        "sha256": _sha256(candidate),
-        "size_bytes": candidate.stat().st_size,
-        "mime_type": mimetypes.guess_type(candidate.name)[0] or "application/octet-stream",
-        "status": JobAsset.Status.VERIFIED,
-        "verified_at": timezone.now(),
+        "sha256": digest,
+        "size_bytes": size,
+        "mime_type": inspection.detected_mime_type,
+        "declared_mime_type": declared_mime_type[:120],
+        "detected_mime_type": inspection.detected_mime_type,
+        "archive_inspected": inspection.archive_inspected,
+        "duplicate_of": duplicate,
+        "status": JobAsset.Status.BLOCKED if duplicate else JobAsset.Status.VERIFIED,
+        "verified_at": None if duplicate else timezone.now(),
+        "metadata": {"reason_codes": ["ASSET_DUPLICATE"]} if duplicate else {},
     }
     if external_id:
         asset, _ = JobAsset.objects.update_or_create(job=job, external_id=external_id, defaults=defaults)
@@ -65,6 +128,7 @@ def stage_local_job_asset(*, job_id, path: str, source: str = "upload", external
             asset.save()
         else:
             asset = JobAsset.objects.create(job=job, external_id="", **defaults)
+    manifest = rebuild_asset_manifest(job)
     WorkPlan.objects.filter(job=job, status__in=[WorkPlan.Status.FAILED, WorkPlan.Status.BLOCKED]).update(
         status=WorkPlan.Status.BLOCKED,
         reason_codes=["INPUT_ASSET_CHANGED_REPLAN_REQUIRED"],
@@ -73,7 +137,7 @@ def stage_local_job_asset(*, job_id, path: str, source: str = "upload", external
     AuditEvent.objects.create(
         event_type="job.asset_staged",
         actor="asset-stager",
-        metadata={"job_id": str(job.id), "asset_id": asset.id, "source": source, "sha256": asset.sha256},
+        metadata={"job_id": str(job.id), "asset_id": asset.id, "source": source, "role": role, "sha256": asset.sha256, "manifest_id": manifest.id},
     )
     return asset
 
@@ -206,6 +270,123 @@ def _infer_operation(job: Job, asset: JobAsset | None) -> tuple[str, dict, list[
     return "", {}, ["TRANSFORMATION_NOT_UNAMBIGUOUS"]
 
 
+def _topological_steps(raw_steps: list[dict]) -> tuple[list[dict], list[str]]:
+    reasons = []
+    by_key = {}
+    for raw in raw_steps:
+        if not isinstance(raw, dict):
+            reasons.append("COMPOSITE_STEP_INVALID")
+            continue
+        key = str(raw.get("key") or "").strip()
+        if not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", key) or key in by_key:
+            reasons.append("COMPOSITE_STEP_KEY_INVALID")
+            continue
+        by_key[key] = raw
+    dependencies = {}
+    for key, raw in by_key.items():
+        deps = raw.get("depends_on") or []
+        if not isinstance(deps, list) or any(str(dep) not in by_key or str(dep) == key for dep in deps):
+            reasons.append("COMPOSITE_DEPENDENCY_INVALID")
+            deps = []
+        dependencies[key] = [str(dep) for dep in deps]
+    ordered = []
+    remaining = dict(dependencies)
+    while remaining:
+        ready = sorted(key for key, deps in remaining.items() if all(dep in {item["key"] for item in ordered} for dep in deps))
+        if not ready:
+            reasons.append("COMPOSITE_DEPENDENCY_CYCLE")
+            break
+        for key in ready:
+            ordered.append({**by_key[key], "key": key, "depends_on": dependencies[key]})
+            remaining.pop(key)
+    return ordered, list(dict.fromkeys(reasons))
+
+
+def _build_composite_plan(plan: WorkPlan, job: Job, assets: list[JobAsset], raw_steps: list[dict]) -> list[str]:
+    maximum = max(1, min(int(os.getenv("WORKPLAN_MAX_COMPOSITE_STEPS", "8")), 20))
+    if len(raw_steps) < 2:
+        return ["COMPOSITE_REQUIRES_MULTIPLE_STEPS"]
+    if len(raw_steps) > maximum:
+        return ["COMPOSITE_STEP_LIMIT"]
+    ordered, reasons = _topological_steps(raw_steps)
+    if reasons:
+        return reasons
+    by_role: dict[str, list[JobAsset]] = {}
+    for asset in assets:
+        by_role.setdefault(asset.semantic_role, []).append(asset)
+    WorkPlanStep.objects.filter(plan=plan).delete()
+    created: dict[str, WorkPlanStep] = {}
+    for sequence, raw in enumerate(ordered, start=1):
+        operation = str(raw.get("operation") or "").strip()
+        try:
+            spec = operation_spec(operation)
+        except WorkerRegistryError:
+            reasons.append(f"STEP_OPERATION_NOT_REGISTERED:{raw['key']}")
+            continue
+        roles = raw.get("input_asset_roles") or []
+        if not isinstance(roles, list):
+            reasons.append(f"STEP_ASSET_ROLES_INVALID:{raw['key']}")
+            continue
+        selected_assets = []
+        for role in roles:
+            try:
+                normalized = validate_role(str(role))
+            except AssetPolicyError:
+                reasons.append(f"STEP_ASSET_ROLE_NOT_APPROVED:{raw['key']}")
+                continue
+            selected_assets.extend(by_role.get(normalized, []))
+            if normalized not in by_role:
+                reasons.append(f"STEP_REQUIRED_ASSET_ROLE_MISSING:{raw['key']}:{normalized}")
+        if not roles and not raw["depends_on"] and spec.input_suffixes:
+            reasons.append(f"STEP_INPUT_NOT_DECLARED:{raw['key']}")
+        raw_input_spec = raw.get("input_spec") or {}
+        if not isinstance(raw_input_spec, dict):
+            reasons.append(f"STEP_INPUT_SPEC_INVALID:{raw['key']}")
+            continue
+        try:
+            max_repairs = max(
+                0,
+                min(
+                    int(raw.get("max_repair_attempts", os.getenv("MAX_DETERMINISTIC_REPAIR_ATTEMPTS", "1"))),
+                    3,
+                ),
+            )
+            estimated_cost = max(Decimal("0"), Decimal(str(raw.get("estimated_cost") or "0")))
+        except (InvalidOperation, TypeError, ValueError):
+            reasons.append(f"STEP_COST_OR_REPAIR_BOUND_INVALID:{raw['key']}")
+            continue
+        input_spec = dict(raw_input_spec)
+        input_spec["operation"] = operation
+        input_spec["input_asset_roles"] = [str(role) for role in roles]
+        step = WorkPlanStep.objects.create(
+            plan=plan,
+            key=raw["key"],
+            sequence=sequence,
+            operation=operation,
+            worker_class=spec.worker_class,
+            input_spec=input_spec,
+            status=WorkPlanStep.Status.BLOCKED,
+            max_repair_attempts=max_repairs,
+            estimated_cost=estimated_cost,
+            reason_codes=["WAITING_FOR_UPSTREAM_QA"] if raw["depends_on"] else [],
+        )
+        step.input_assets.add(*selected_assets)
+        created[raw["key"]] = step
+    if reasons:
+        WorkPlanStep.objects.filter(plan=plan).delete()
+        return list(dict.fromkeys(reasons))
+    for raw in ordered:
+        for dependency in raw["depends_on"]:
+            WorkPlanStepDependency.objects.create(step=created[raw["key"]], depends_on=created[dependency])
+    WorkPlanStep.objects.filter(plan=plan, dependency_links__isnull=True).update(status=WorkPlanStep.Status.READY, reason_codes=[])
+    plan.is_composite = True
+    plan.max_steps = maximum
+    plan.worker_class = "composite"
+    plan.operation = "composite"
+    plan.input_spec = {"step_keys": [raw["key"] for raw in ordered]}
+    return []
+
+
 @transaction.atomic
 def plan_awarded_job(job_id) -> WorkPlan:
     job = Job.objects.select_for_update().get(pk=job_id)
@@ -223,27 +404,45 @@ def plan_awarded_job(job_id) -> WorkPlan:
     }:
         return plan
 
-    assets = list(JobAsset.objects.filter(job=job, status=JobAsset.Status.VERIFIED).exclude(path="").order_by("created_at")[:2])
+    assets = list(JobAsset.objects.filter(job=job, status=JobAsset.Status.VERIFIED, duplicate_of=None).exclude(path="").order_by("created_at"))
     reasons: list[str] = []
     reasons.extend(evaluate_job(job).reason_codes)
     operation = ""
     input_spec = {}
-    if len(assets) > 1:
+    plan.is_composite = False
+    plan.max_steps = 1
+    raw_payload = job.normalized_payload if isinstance(job.normalized_payload, dict) else {}
+    raw_steps = raw_payload.get("workflow_steps")
+    manifest = rebuild_asset_manifest(job) if JobAsset.objects.filter(job=job).exists() else None
+    if manifest and manifest.status != JobAssetManifest.Status.VERIFIED:
+        reasons.extend(manifest.reason_codes)
+    if isinstance(raw_steps, list):
+        reasons.extend(_build_composite_plan(plan, job, assets, raw_steps))
+        if not reasons:
+            operation = "composite"
+            input_spec = plan.input_spec
+    elif raw_steps is not None:
+        reasons.append("COMPOSITE_STEPS_INVALID")
+    elif len(assets) > 1:
         reasons.append("MULTIPLE_INPUT_ASSETS_AMBIGUOUS")
     else:
         operation, input_spec, infer_reasons = _infer_operation(job, assets[0] if assets else None)
         reasons.extend(infer_reasons)
 
-    if operation:
+    if operation and operation != "composite":
         try:
             plan.worker_class = operation_spec(operation).worker_class
         except WorkerRegistryError:
             plan.worker_class = ""
             reasons.append("WORKER_OPERATION_NOT_REGISTERED")
-    else:
+    elif operation != "composite":
         plan.worker_class = ""
     plan.operation = operation
     plan.input_spec = input_spec
+    if operation != "composite":
+        plan.is_composite = False
+        plan.max_steps = 1
+        WorkPlanStep.objects.filter(plan=plan).delete()
     plan.status = WorkPlan.Status.READY if operation and not reasons else WorkPlan.Status.BLOCKED
     plan.planner_version = PLANNER_VERSION
     plan.reason_codes = reasons
@@ -263,7 +462,11 @@ def _queue_execution(plan: WorkPlan) -> bool:
     from control.queueing import queue
     from control.tasks import execute_work_plan_task
 
-    decision = decide_admission(purpose="WORKPLAN_QUEUE", job=plan.job, operation=plan.operation)
+    operation = plan.operation
+    if plan.is_composite:
+        step = plan.steps.filter(status__in=[WorkPlanStep.Status.READY, WorkPlanStep.Status.NEEDS_REPAIR]).order_by("sequence").first()
+        operation = step.operation if step else ""
+    decision = decide_admission(purpose="WORKPLAN_QUEUE", job=plan.job, operation=operation)
     if not decision.allowed:
         WorkPlan.objects.filter(pk=plan.pk).update(status=WorkPlan.Status.BLOCKED, reason_codes=decision.reason_codes)
         return False
@@ -344,8 +547,148 @@ def dispatch_awarded_jobs(*, marketplace_slug: str | None = None, limit: int = 5
     }
 
 
+def _unlock_composite_steps(plan: WorkPlan) -> None:
+    for step in plan.steps.filter(status=WorkPlanStep.Status.BLOCKED).order_by("sequence"):
+        dependencies = [link.depends_on for link in step.dependency_links.select_related("depends_on")]
+        if dependencies and all(item.status == WorkPlanStep.Status.QA_PASSED for item in dependencies):
+            step.status = WorkPlanStep.Status.READY
+            step.reason_codes = []
+            step.save(update_fields=["status", "reason_codes", "updated_at"])
+
+
+def _composite_inputs(step: WorkPlanStep) -> dict:
+    inputs = dict(step.input_spec)
+    assets = list(step.input_assets.filter(status=JobAsset.Status.VERIFIED, duplicate_of=None).order_by("id"))
+    dependencies = [link.depends_on for link in step.dependency_links.select_related("depends_on")]
+    if any(item.status != WorkPlanStep.Status.QA_PASSED or item.qa_result_id is None or not item.qa_result.passed for item in dependencies):
+        raise PlanningError("downstream step requires QA-passed upstream artifacts")
+    artifacts = []
+    for dependency in dependencies:
+        artifacts.extend(list(dependency.output_artifacts.order_by("id")))
+    step.input_artifacts.set(artifacts)
+    paths = [row.path for row in assets if row.path] + [row.path for row in artifacts if row.path]
+    inputs["sources"] = paths
+    inputs["input_asset_ids"] = [row.id for row in assets]
+    inputs["upstream_artifact_ids"] = [row.id for row in artifacts]
+    if len(paths) == 1:
+        inputs.setdefault("source", paths[0])
+    elif len(paths) > 1 and "source_role" in inputs:
+        role_assets = [row for row in assets if row.semantic_role == inputs["source_role"]]
+        if len(role_assets) == 1:
+            inputs.setdefault("source", role_assets[0].path)
+    return inputs
+
+
+def _execute_composite_plan(plan_id: int) -> WorkPlan:
+    from control.services.execution import execute_registered_job
+
+    initial = WorkPlan.objects.get(pk=plan_id)
+    if initial.status not in {WorkPlan.Status.READY, WorkPlan.Status.QUEUED, WorkPlan.Status.EXECUTING, WorkPlan.Status.NEEDS_REPAIR}:
+        return initial
+    maximum_iterations = max(1, min(int(os.getenv("WORKPLAN_MAX_COMPOSITE_STEPS", "8")), 20))
+    for _ in range(maximum_iterations):
+        with transaction.atomic():
+            plan = WorkPlan.objects.select_for_update().select_related("job", "job__marketplace").get(pk=plan_id)
+            _unlock_composite_steps(plan)
+            failed = plan.steps.filter(status__in=[WorkPlanStep.Status.FAILED]).first()
+            if failed:
+                plan.status = WorkPlan.Status.FAILED
+                plan.reason_codes = [f"COMPOSITE_STEP_FAILED:{failed.key}"]
+                plan.save(update_fields=["status", "reason_codes", "updated_at"])
+                return plan
+            if plan.steps.exists() and not plan.steps.exclude(status=WorkPlanStep.Status.QA_PASSED).exists():
+                plan.status = WorkPlan.Status.QA_PASSED
+                plan.reason_codes = []
+                plan.save(update_fields=["status", "reason_codes", "updated_at"])
+                if plan.job.marketplace.slug == "agentgigs":
+                    _queue_submission(plan)
+                return plan
+            step = plan.steps.filter(status=WorkPlanStep.Status.NEEDS_REPAIR).order_by("sequence").first()
+            repair = step is not None
+            if step is None:
+                step = plan.steps.filter(status=WorkPlanStep.Status.READY).order_by("sequence").first()
+            if step is None:
+                plan.status = WorkPlan.Status.BLOCKED
+                plan.reason_codes = ["COMPOSITE_NO_EXECUTABLE_STEP"]
+                plan.save(update_fields=["status", "reason_codes", "updated_at"])
+                return plan
+            if repair and step.repair_attempts >= step.max_repair_attempts:
+                step.status = WorkPlanStep.Status.BLOCKED
+                step.reason_codes = ["MAX_REPAIR_ATTEMPTS_REACHED"]
+                step.save(update_fields=["status", "reason_codes", "updated_at"])
+                plan.status = WorkPlan.Status.BLOCKED
+                plan.reason_codes = [f"COMPOSITE_STEP_REPAIR_LIMIT:{step.key}"]
+                plan.save(update_fields=["status", "reason_codes", "updated_at"])
+                return plan
+            inputs = _composite_inputs(step)
+            step.attempt += 1
+            if repair:
+                step.repair_attempts += 1
+                step.repair_history = [*step.repair_history, {"attempt": step.attempt, "reason_codes": step.reason_codes}]
+                plan.repair_attempts += 1
+            step.status = WorkPlanStep.Status.EXECUTING
+            step.reason_codes = []
+            step.save(update_fields=["attempt", "repair_attempts", "repair_history", "status", "reason_codes", "updated_at"])
+            plan.execution_attempts += 1
+            plan.status = WorkPlan.Status.EXECUTING
+            plan.save(update_fields=["execution_attempts", "repair_attempts", "status", "updated_at"])
+            job_id = plan.job_id
+            worker_id = f"{step.worker_class}-{str(job_id)[:8]}-{step.key[:24]}"
+            operation = step.operation
+            worker_class = step.worker_class
+            step_id = step.id
+            allow_repair = repair or plan.job.state == Job.State.EXECUTING
+
+        try:
+            execution = execute_registered_job(
+                job_id=job_id,
+                worker_id=worker_id,
+                inputs=inputs,
+                allow_repair=allow_repair,
+                expected_worker_class=worker_class,
+            )
+        except Exception as exc:
+            WorkPlanStep.objects.filter(pk=step_id).update(
+                status=WorkPlanStep.Status.FAILED,
+                reason_codes=[exc.__class__.__name__[:120]],
+            )
+            WorkPlan.objects.filter(pk=plan_id).update(
+                status=WorkPlan.Status.FAILED,
+                reason_codes=[f"COMPOSITE_STEP_FAILED:{step.key}"],
+                last_error_code=exc.__class__.__name__[:120],
+            )
+            raise
+
+        step = WorkPlanStep.objects.get(pk=step_id)
+        qa = QAResult.objects.filter(execution=execution).order_by("-created_at").first()
+        step.execution = execution
+        step.qa_result = qa
+        step.actual_cost = GenXCall.objects.filter(
+            job_id=job_id,
+            worker_id=execution.worker_id,
+            created_at__gte=execution.started_at,
+            created_at__lte=execution.ended_at or timezone.now(),
+        ).aggregate(total=Sum("cost_equivalent"))["total"] or Decimal("0")
+        step.output_artifacts.set(execution.artifacts.all())
+        if execution.status == "QA_PASSED" and qa and qa.passed:
+            step.status = WorkPlanStep.Status.QA_PASSED
+            step.reason_codes = []
+            step.save(update_fields=["execution", "qa_result", "actual_cost", "status", "reason_codes", "updated_at"])
+            continue
+        step.status = WorkPlanStep.Status.NEEDS_REPAIR
+        step.reason_codes = ["DETERMINISTIC_QA_FAILED"]
+        step.save(update_fields=["execution", "qa_result", "actual_cost", "status", "reason_codes", "updated_at"])
+        WorkPlan.objects.filter(pk=plan_id).update(status=WorkPlan.Status.NEEDS_REPAIR, reason_codes=[f"COMPOSITE_STEP_QA_FAILED:{step.key}"])
+        return WorkPlan.objects.get(pk=plan_id)
+    WorkPlan.objects.filter(pk=plan_id).update(status=WorkPlan.Status.BLOCKED, reason_codes=["COMPOSITE_STEP_LIMIT"])
+    return WorkPlan.objects.get(pk=plan_id)
+
+
 def execute_work_plan(plan_id: int) -> WorkPlan:
     from control.services.execution import execute_registered_job
+
+    if WorkPlan.objects.filter(pk=plan_id, is_composite=True).exists():
+        return _execute_composite_plan(plan_id)
 
     with transaction.atomic():
         plan = WorkPlan.objects.select_for_update().select_related("job", "job__marketplace").get(pk=plan_id)
