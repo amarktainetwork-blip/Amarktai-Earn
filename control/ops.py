@@ -9,11 +9,15 @@ from pathlib import Path
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
-from planning.models import WorkPlan
+from planning.models import DependencyPreparation, WorkPlan
 from workers.registry import registry_manifest
+from workers.genx_support import catalog_supports
 from .models import (
     Alert,
     AdmissionDecision,
+    AcquisitionPreflight,
+    Application,
+    Bid,
     AuthThrottle,
     Artifact,
     AuditEvent,
@@ -21,19 +25,23 @@ from .models import (
     GenXAccountSnapshot,
     GenXCall,
     Job,
+    Claim,
     LedgerEntry,
     Marketplace,
+    MarketplaceCredential,
     ModelStat,
     Node,
     OwnerSecurityProfile,
     Payout,
     QAResult,
     RecoveryCode,
+    Revision,
     ReauthenticationGrant,
     ResourceSnapshot,
     ServiceHeartbeat,
     RefreshSession,
     SystemSetting,
+    Submission,
     TreasuryBalance,
     Worker,
 )
@@ -67,6 +75,12 @@ def _dec(value):
     return str(value)
 
 
+def _valid_runtime_secret(name: str) -> bool:
+    value = os.getenv(name, "")
+    lowered = value.casefold()
+    return len(value.encode()) >= 32 and not any(marker in lowered for marker in ("replace", "change-me", "dev-only"))
+
+
 def _disk_row(label: str, path: str) -> dict:
     candidate = Path(path)
     try:
@@ -96,6 +110,11 @@ def overview_snapshot() -> dict:
     genx_used = GenXCall.objects.filter(created_at__date=today).aggregate(v=Sum("credits"))["v"] or Decimal("0")
     latest_genx = GenXAccountSnapshot.objects.order_by("-created_at").first()
     open_alerts = Alert.objects.filter(status="OPEN").count()
+    blocked_acquisitions = AcquisitionPreflight.objects.filter(allowed=False, created_at__gte=timezone.now() - timedelta(hours=24)).count()
+    unknown_remote = sum(
+        model.objects.filter(status="UNKNOWN_REMOTE_STATE").count()
+        for model in (Application, Bid, Claim, Submission, GenXCall)
+    )
     resource = ResourceSnapshot.objects.order_by("-created_at").first()
     return {
         "section": "overview",
@@ -106,6 +125,8 @@ def overview_snapshot() -> dict:
             {"label": "ACTIVE PAID JOBS", "value": Job.objects.filter(state__in=[Job.State.CLAIMED, Job.State.AWARDED, Job.State.EXECUTING]).count()},
             {"label": "ACTIVE AGENTS", "value": Worker.objects.exclude(status__in=["OFFLINE", "READY"]).count()},
             {"label": "OPEN ALERTS", "value": open_alerts},
+            {"label": "BLOCKED ACQUISITIONS 24H", "value": blocked_acquisitions, "truth": "persisted fail-closed preflight decisions"},
+            {"label": "UNKNOWN REMOTE STATE", "value": unknown_remote, "truth": "requires deterministic reconciliation; never blind retry"},
             {"label": "RESOURCE GOVERNOR", "value": "GREEN" if resource and resource.healthy else "BLOCKED" if resource else "NO SNAPSHOT", "truth": ", ".join(resource.blocker_codes) if resource and resource.blocker_codes else "latest persisted admission state"},
             {"label": "GENX BALANCE", "value": "—" if not latest_genx or latest_genx.available_credits is None else f"{latest_genx.available_credits} cr"},
             {"label": "GENX USED TODAY", "value": f"{genx_used} cr"},
@@ -128,6 +149,8 @@ def live_work_snapshot(limit: int = 100) -> dict:
         except WorkPlan.DoesNotExist:
             plan = None
         latest_qa = QAResult.objects.filter(job=job).order_by("-created_at").first()
+        submission = Submission.objects.filter(job=job).order_by("-version", "-created_at").first()
+        dependency = DependencyPreparation.objects.filter(job=job).order_by("-updated_at").first()
         rows.append({
             "job": str(job.id),
             "market": job.marketplace.slug,
@@ -137,10 +160,18 @@ def live_work_snapshot(limit: int = 100) -> dict:
             "reward": f"{job.currency} {job.reward}",
             "plan": plan.status if plan else "—",
             "worker": execution.worker.worker_class if execution and execution.worker else "—",
+            "operation": plan.operation if plan else "",
+            "plan_blockers": plan.reason_codes if plan else [],
             "worker_id": execution.worker_id if execution else None,
             "execution": execution.status if execution else "—",
             "attempt": execution.attempt if execution else None,
             "qa": "PASS" if latest_qa and latest_qa.passed else "FAIL" if latest_qa else "—",
+            "repair_attempts": f"{plan.repair_attempts}/{plan.max_repair_attempts}" if plan else None,
+            "last_error": plan.last_error_code if plan else "",
+            "submission": submission.status if submission else None,
+            "submission_version": submission.version if submission else None,
+            "open_revisions": Revision.objects.filter(job=job, status="REQUIRED").count(),
+            "dependency_preparation": dependency.status if dependency else None,
             "artifacts": Artifact.objects.filter(job=job).count(),
             "deadline": _dt(job.deadline),
             "updated": _dt(job.updated_at),
@@ -151,14 +182,46 @@ def live_work_snapshot(limit: int = 100) -> dict:
 def agents_snapshot() -> dict:
     runtime = {row.id: row for row in Worker.objects.select_related("current_job").order_by("worker_class", "id")}
     manifest = registry_manifest()
+    genx_requirements = {
+        "documents": ((), "text"),
+        "research": ((), "text"),
+        "localization": (("translation", "translate", "localization"), "text"),
+        "transcription": (("transcription", "transcribe", "speech to text"), None),
+        "code_small": (("code", "coding", "software"), "text"),
+        "code_heavy": (("code", "coding", "software"), "text"),
+    }
     rows = []
     for spec in manifest:
+        reasons = []
+        disabled = {item.strip() for item in os.getenv("WORKER_DISABLED_CLASSES", "").split(",") if item.strip()}
+        if spec["worker_class"] in disabled:
+            reasons.append("WORKER_DISABLED")
+        if not spec["runtime_available"]:
+            reasons.append("RUNTIME_UNAVAILABLE")
+        sandbox_worker = spec["worker_class"] in {"code_small", "code_heavy", "ci_testing"}
+        coding_worker = spec["worker_class"] in {"code_small", "code_heavy"}
+        if sandbox_worker:
+            if os.getenv("SANDBOX_CODING_ENABLED", "0") != "1":
+                reasons.append("CODING_SANDBOX_DISABLED")
+            else:
+                if not _valid_runtime_secret("SANDBOX_BROKER_SECRET"):
+                    reasons.append("SANDBOX_BROKER_SECRET_INVALID")
+                if coding_worker and not _valid_runtime_secret("SANDBOX_TOKEN_SECRET"):
+                    reasons.append("SANDBOX_TOKEN_SECRET_INVALID")
+        if spec["requires_genx"] and not os.getenv("GENX_API_KEY", "").strip():
+            reasons.append("GENX_NOT_CONFIGURED")
+        elif spec["requires_genx"]:
+            keywords, fallback_category = genx_requirements[spec["worker_class"]]
+            if not catalog_supports(*keywords, fallback_category=fallback_category):
+                reasons.append("GENX_CAPABILITY_UNAVAILABLE")
+        enablement = {"production_enabled": not reasons, "enablement_reason_codes": reasons}
         matching = [worker for worker in runtime.values() if worker.worker_class == spec["worker_class"]]
         if not matching:
-            rows.append({**spec, "id": "not-started", "status": "OFFLINE", "node": "—", "current_job": None, "last_heartbeat": None})
+            rows.append({**spec, **enablement, "id": "not-started", "status": "OFFLINE", "node": "—", "current_job": None, "last_heartbeat": None})
         for worker in matching:
             rows.append({
                 **spec,
+                **enablement,
                 "id": worker.id,
                 "version": worker.version,
                 "status": worker.status,
@@ -174,6 +237,8 @@ def agents_snapshot() -> dict:
             "operations": [],
             "qa_profile": "UNKNOWN",
             "description": "Runtime worker not present in current registry",
+            "production_enabled": False,
+            "enablement_reason_codes": ["WORKER_NOT_REGISTERED"],
             "id": worker.id,
             "status": worker.status,
             "node": worker.node,
@@ -190,6 +255,21 @@ def markets_snapshot() -> dict:
             health = market.health_snapshot
         except Exception:
             health = None
+        policy = market.policy_versions.order_by("-checked_at", "-created_at").first()
+        preflight = AcquisitionPreflight.objects.filter(job__marketplace=market).order_by("-created_at").first()
+        blockers = []
+        if not market.enabled:
+            blockers.append("MARKET_DISABLED")
+        if market.status != Marketplace.Status.LIVE:
+            blockers.append("MARKET_NOT_LIVE")
+        if not market.payout_ready:
+            blockers.append("PAYOUT_NOT_READY")
+        if not market.south_africa_verified:
+            blockers.append("SOUTH_AFRICA_NOT_VERIFIED")
+        if policy is None or not policy.automation_allowed:
+            blockers.append("AUTOMATION_POLICY_NOT_APPROVED")
+        if preflight and not preflight.allowed:
+            blockers.extend(preflight.reason_codes)
         rows.append({
             "market": market.slug,
             "status": market.status,
@@ -197,12 +277,24 @@ def markets_snapshot() -> dict:
             "payout_ready": market.payout_ready,
             "south_africa_verified": market.south_africa_verified,
             "fee_rate": _dec(market.fee_rate),
+            "autonomy_mode": current_mode().value,
+            "auto_acquisition_switch": os.getenv("AGENTGIGS_AUTO_APPLY_ENABLED", "0") == "1" if market.slug == "agentgigs" else False,
+            "policy_automation_allowed": policy.automation_allowed if policy else None,
+            "policy_webdock_compatible": policy.webdock_compatible if policy else None,
+            "policy_checked": _dt(policy.checked_at) if policy else None,
+            "blockers": list(dict.fromkeys(blockers)),
             "api": health.api_ok if health else None,
             "auth": health.auth_ok if health else None,
             "payout": health.payout_ok if health else None,
             "supply": health.supply_ok if health else None,
             "last_error": health.last_error_code if health else "",
             "checked": _dt(health.checked_at) if health else None,
+            "jobs_total": Job.objects.filter(marketplace=market).count(),
+            "opportunities_seen_24h": Job.objects.filter(marketplace=market, created_at__gte=timezone.now() - timedelta(hours=24)).count(),
+            "applications_total": Application.objects.filter(job__marketplace=market).count(),
+            "unknown_remote_state": Application.objects.filter(job__marketplace=market, status="UNKNOWN_REMOTE_STATE").count(),
+            "latest_preflight": "ALLOWED" if preflight and preflight.allowed else "BLOCKED" if preflight else "NO DECISION",
+            "latest_preflight_reasons": preflight.reason_codes if preflight else [],
         })
     return {"section": "markets", "rows": rows}
 
@@ -370,6 +462,12 @@ def security_snapshot(owner) -> dict:
     recovery_remaining = RecoveryCode.objects.filter(user=owner, used_at__isnull=True).count()
     active_lockouts = AuthThrottle.objects.filter(locked_until__gt=now).count()
     active_reauth = ReauthenticationGrant.objects.filter(user=owner, used_at__isnull=True, revoked_at__isnull=True, expires_at__gt=now).count()
+    configured_market_credentials = MarketplaceCredential.objects.filter(active=True).count()
+    hidden = "CONFIGURED — HIDDEN"
+
+    def secret_state(name: str) -> str:
+        return hidden if os.getenv(name, "").strip() else "NOT CONFIGURED"
+
     rows = [{
         "created": _dt(row.created_at),
         "severity": row.severity,
@@ -385,6 +483,12 @@ def security_snapshot(owner) -> dict:
             {"label": "RECOVERY CODES REMAINING", "value": recovery_remaining},
             {"label": "ACTIVE AUTH COOLDOWNS", "value": active_lockouts},
             {"label": "ACTIVE REAUTH GRANTS", "value": active_reauth},
+            {"label": "JWT SIGNING KEYS", "value": secret_state("JWT_SIGNING_KEYS_JSON")},
+            {"label": "FIELD ENCRYPTION KEYS", "value": secret_state("FIELD_ENCRYPTION_KEYS_JSON")},
+            {"label": "GENX MASTER CREDENTIAL", "value": secret_state("GENX_API_KEY")},
+            {"label": "MARKET WEBHOOK SECRET", "value": secret_state("AGENTGIGS_WEBHOOK_SECRET")},
+            {"label": "BACKUP PASSPHRASE", "value": secret_state("BACKUP_PASSPHRASE")},
+            {"label": "MARKETPLACE CREDENTIALS", "value": f"{configured_market_credentials} {hidden}" if configured_market_credentials else "NOT CONFIGURED"},
         ],
         "rows": rows,
     }

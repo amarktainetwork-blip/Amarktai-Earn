@@ -1,8 +1,12 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from unittest.mock import patch
 
 from control.jwt_auth import issue_access
-from control.models import Artifact, Execution, GenXCall, Job, Marketplace, OwnerSecurityProfile, QAResult, SystemSetting, Worker
+from control.models import (
+    AcquisitionPreflight, Application, Artifact, Bid, Claim, Execution, GenXCall, GenXModelCatalog, Job, Marketplace,
+    MarketPolicyVersion, OwnerSecurityProfile, QAResult, Revision, Submission, SystemSetting, Worker,
+)
 from control.ops import snapshot
 from planning.models import WorkPlan
 
@@ -69,6 +73,89 @@ class OperationsDashboardIntegrationTests(TestCase):
         self.assertEqual(job["plan"], "EXECUTING")
         self.assertEqual(job["qa"], "PASS")
         self.assertEqual(job["artifacts"], 1)
+        self.assertEqual(job["operation"], "json_to_csv")
+        self.assertEqual(job["repair_attempts"], "0/1")
+        self.assertEqual(job["open_revisions"], 0)
+
+    def test_live_work_and_markets_surface_submission_policy_activity_and_blockers(self):
+        Submission.objects.create(job=self.job, artifact=Artifact.objects.get(job=self.job), version=1, status="SUBMITTED")
+        Revision.objects.create(job=self.job, message="Please revise", status="REQUIRED")
+        Application.objects.create(job=self.job, status="UNKNOWN_REMOTE_STATE")
+        MarketPolicyVersion.objects.create(
+            marketplace=self.market, policy_hash="policy-v1", automation_allowed=False, webdock_compatible=True,
+        )
+        AcquisitionPreflight.objects.create(
+            job=self.job, autonomy_mode="SHADOW", operation="json_to_csv", worker_class="structured_data",
+            eligible=True, allowed=False, reason_codes=["AUTONOMY_SHADOW_ONLY"],
+        )
+
+        live = snapshot("live-work", owner=self.user)["rows"][0]
+        self.assertEqual(live["submission"], "SUBMITTED")
+        self.assertEqual(live["submission_version"], 1)
+        self.assertEqual(live["open_revisions"], 1)
+
+        market = snapshot("markets", owner=self.user)["rows"][0]
+        self.assertFalse(market["policy_automation_allowed"])
+        self.assertEqual(market["unknown_remote_state"], 1)
+        self.assertEqual(market["latest_preflight"], "BLOCKED")
+        self.assertIn("AUTONOMY_SHADOW_ONLY", market["blockers"])
+        self.assertIn("PAYOUT_NOT_READY", market["blockers"])
+
+    def test_agents_expose_production_enablement_separately_from_runtime_status(self):
+        with patch.dict("os.environ", {"SANDBOX_CODING_ENABLED": "0", "GENX_API_KEY": ""}, clear=False):
+            agents = snapshot("agents", owner=self.user)["rows"]
+        structured = next(row for row in agents if row["worker_class"] == "structured_data")
+        coding = next(row for row in agents if row["worker_class"] == "code_small")
+        self.assertTrue(structured["production_enabled"])
+        self.assertFalse(coding["production_enabled"])
+        self.assertIn("CODING_SANDBOX_DISABLED", coding["enablement_reason_codes"])
+
+    def test_agents_require_sandbox_secrets_and_worker_specific_genx_capability(self):
+        GenXModelCatalog.objects.create(
+            model_id="translation-specialist",
+            category="translation",
+            provider="test",
+            active=True,
+            model_payload={"capabilities": ["translation"]},
+        )
+        environment = {
+            "SANDBOX_CODING_ENABLED": "1",
+            "SANDBOX_BROKER_SECRET": "short",
+            "SANDBOX_TOKEN_SECRET": "short",
+            "GENX_API_KEY": "configured",
+        }
+        with patch.dict("os.environ", environment, clear=False):
+            agents = snapshot("agents", owner=self.user)["rows"]
+        localization = next(row for row in agents if row["worker_class"] == "localization")
+        transcription = next(row for row in agents if row["worker_class"] == "transcription")
+        coding = next(row for row in agents if row["worker_class"] == "code_small")
+        ci_testing = next(row for row in agents if row["worker_class"] == "ci_testing")
+        self.assertTrue(localization["production_enabled"])
+        self.assertFalse(transcription["production_enabled"])
+        self.assertIn("GENX_CAPABILITY_UNAVAILABLE", transcription["enablement_reason_codes"])
+        self.assertIn("SANDBOX_BROKER_SECRET_INVALID", coding["enablement_reason_codes"])
+        self.assertIn("SANDBOX_TOKEN_SECRET_INVALID", coding["enablement_reason_codes"])
+        self.assertIn("SANDBOX_BROKER_SECRET_INVALID", ci_testing["enablement_reason_codes"])
+        self.assertNotIn("SANDBOX_TOKEN_SECRET_INVALID", ci_testing["enablement_reason_codes"])
+
+    def test_overview_counts_every_ambiguous_external_mutation(self):
+        Application.objects.create(job=self.job, status="UNKNOWN_REMOTE_STATE")
+        Bid.objects.create(job=self.job, amount="10.00", status="UNKNOWN_REMOTE_STATE")
+        Claim.objects.create(job=self.job, status="UNKNOWN_REMOTE_STATE")
+        Submission.objects.create(job=self.job, status="UNKNOWN_REMOTE_STATE")
+        GenXCall.objects.create(
+            request_key="ops-genx-unknown",
+            job=self.job,
+            worker=self.worker,
+            model="dynamic-model",
+            task_class="data",
+            status="UNKNOWN_REMOTE_STATE",
+            estimated_credits="1",
+            max_allowed_credits="2",
+        )
+        overview = snapshot("overview", owner=self.user)
+        card = next(row for row in overview["cards"] if row["label"] == "UNKNOWN REMOTE STATE")
+        self.assertEqual(card["value"], 5)
 
     def test_sensitive_settings_are_never_returned(self):
         SystemSetting.objects.create(key="secret-example", value={"token": "must-not-leak"}, sensitive=True)
@@ -76,6 +163,12 @@ class OperationsDashboardIntegrationTests(TestCase):
         row = next(item for item in settings["rows"] if item["key"] == "secret-example")
         self.assertEqual(row["value"], "CONFIGURED — HIDDEN")
         self.assertNotIn("must-not-leak", str(settings))
+
+    def test_security_reports_only_configured_hidden_secret_state(self):
+        with patch.dict("os.environ", {"GENX_API_KEY": "must-not-leak"}, clear=False):
+            security = snapshot("security", owner=self.user)
+        self.assertIn("CONFIGURED — HIDDEN", str(security))
+        self.assertNotIn("must-not-leak", str(security))
 
     def test_authenticated_dashboard_api_exposes_registry_and_runtime_truth(self):
         self.client.cookies["amarktai_access"] = issue_access(self.user)

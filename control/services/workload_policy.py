@@ -35,9 +35,14 @@ def job_text(job) -> str:
     return "\n".join(values).casefold()
 
 
+def evaluate_text(text: str) -> WorkloadDecision:
+    normalized = str(text or "").casefold()
+    reasons = [code for code, patterns in _PROHIBITED.items() if any(re.search(pattern, normalized) for pattern in patterns)]
+    return WorkloadDecision(not reasons, tuple(reasons))
+
+
 def evaluate_job(job) -> WorkloadDecision:
-    text = job_text(job)
-    reasons = [code for code, patterns in _PROHIBITED.items() if any(re.search(pattern, text) for pattern in patterns)]
+    reasons = list(evaluate_text(job_text(job)).reason_codes)
     latest_policy = job.marketplace.policy_versions.order_by("-checked_at", "-created_at").first()
     if latest_policy is not None and not latest_policy.automation_allowed:
         reasons.append("PROHIBITED_MARKET_POLICY")
