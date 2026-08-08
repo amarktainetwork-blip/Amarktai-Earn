@@ -23,8 +23,12 @@ class GenXClient:
         self.session = session or requests.Session()
 
     @property
+    def auth_headers(self):
+        return {"Authorization": f"Bearer {self.api_key}"}
+
+    @property
     def headers(self):
-        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        return {**self.auth_headers, "Content-Type": "application/json"}
 
     def _request(self, method: str, path: str, *, retries: int = 2, **kwargs) -> dict[str, Any]:
         last_error: Exception | None = None
@@ -85,6 +89,99 @@ class GenXClient:
 
     def result(self, job_id: str):
         return self._request("GET", f"/api/v1/jobs/{job_id}/result")
+
+    def upload_file(self, path):
+        from pathlib import Path
+
+        source = Path(path)
+        if not source.is_file():
+            raise GenXError("GenX upload source file does not exist")
+        if source.stat().st_size > 100 * 1024 * 1024:
+            raise GenXError("GenX upload exceeds documented 100MB file limit")
+        try:
+            with source.open("rb") as handle:
+                response = self.session.request(
+                    "POST",
+                    self.base_url + "/api/v1/files",
+                    headers=self.auth_headers,
+                    timeout=self.timeout,
+                    files={"file": (source.name, handle, "application/octet-stream")},
+                )
+        except requests.RequestException as exc:
+            raise GenXError(f"GenX file upload failed: {exc.__class__.__name__}") from exc
+        if not response.ok:
+            raise GenXError(f"GenX HTTP {response.status_code}", status_code=response.status_code)
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise GenXError("GenX file upload returned non-JSON metadata") from exc
+        return data if isinstance(data, dict) else {"data": data}
+
+    def delete_file(self, file_id: str):
+        if not file_id:
+            raise GenXError("GenX file ID is required")
+        return self._request("DELETE", f"/api/v1/files/{file_id}", retries=0)
+
+    def create_session(self, model: str, *, system_prompt: str = "", title: str = ""):
+        payload = {"model": model}
+        if system_prompt:
+            payload["system_prompt"] = system_prompt
+        if title:
+            payload["title"] = title
+        return self._request("POST", "/api/v1/sessions", json=payload, retries=0)
+
+    def session_message(
+        self,
+        session_id: str,
+        message: str,
+        *,
+        idempotency_key: str = "",
+        tools: list | None = None,
+        file_ids: list[str] | None = None,
+    ):
+        payload = {"message": message}
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
+        if tools:
+            payload["tools"] = tools
+        if file_ids:
+            payload["files"] = file_ids
+        return self._request("POST", f"/api/v1/sessions/{session_id}/messages", json=payload, retries=0)
+
+    def session_messages(self, session_id: str):
+        return self._request("GET", f"/api/v1/sessions/{session_id}/messages")
+
+    def close_session(self, session_id: str):
+        return self._request("POST", f"/api/v1/sessions/{session_id}/close", retries=0)
+
+    def job_file(self, job_id: str, *, max_bytes: int = 20 * 1024 * 1024) -> bytes:
+        try:
+            response = self.session.request(
+                "GET",
+                self.base_url + f"/api/v1/jobs/{job_id}/file",
+                headers=self.auth_headers,
+                timeout=self.timeout,
+                stream=True,
+            )
+        except requests.RequestException as exc:
+            raise GenXError(f"GenX result download failed: {exc.__class__.__name__}") from exc
+        if not response.ok:
+            raise GenXError(f"GenX HTTP {response.status_code}", status_code=response.status_code)
+        chunks = []
+        total = 0
+        try:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_bytes:
+                    raise GenXError("GenX result file exceeds configured limit")
+                chunks.append(chunk)
+        finally:
+            close = getattr(response, "close", None)
+            if close:
+                close()
+        return b"".join(chunks)
 
     def cancel(self, job_id: str):
         return self._request("POST", f"/api/v1/jobs/{job_id}/cancel", retries=0)

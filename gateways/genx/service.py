@@ -19,6 +19,7 @@ from control.models import (
     Worker,
 )
 from gateways.genx.client import GenXClient, GenXError
+from gateways.genx.output import extract_text
 from gateways.genx.contracts import (
     ModelCandidate,
     assert_credit_budget,
@@ -227,8 +228,6 @@ class GenXGateway:
             metadata=metadata,
         )
         if not created:
-            # Never replay a request key automatically. A RESERVED/SUBMITTING call may
-            # represent a process crash after the remote request was accepted.
             return call
 
         started = time.monotonic()
@@ -242,10 +241,6 @@ class GenXGateway:
             final = self.client.wait(external_job_id, timeout_seconds=wait_timeout_seconds)
             return self.reconcile(call.id, final, elapsed_ms=int((time.monotonic() - started) * 1000))
         except (GenXError, GenXGatewayError, TimeoutError) as exc:
-            # A timeout/network/server error after submission is not proof that the
-            # remote asynchronous job failed. Preserve the reservation and require
-            # reconciliation instead of enabling an unsafe replay. Only a confirmed
-            # 4xx rejection before a remote job id exists is treated as FAILED.
             confirmed_rejection = (
                 isinstance(exc, GenXError)
                 and exc.status_code is not None
@@ -268,6 +263,108 @@ class GenXGateway:
             )
             raise
 
+    def run_session(
+        self,
+        *,
+        job_id,
+        worker_id: str,
+        task_class: str,
+        system_prompt: str,
+        message: str,
+        estimated_credits: Decimal,
+        max_allowed_credits: Decimal,
+        request_key: str,
+        tools: list | None = None,
+        preferred_model: str | None = None,
+    ) -> tuple[GenXCall, dict[str, Any]]:
+        selected = self.select_model(task_class=task_class, category="text", preferred_model=preferred_model)
+        job = Job.objects.select_related("marketplace").get(pk=job_id)
+        metadata = {
+            "job": str(job.id),
+            "worker": worker_id,
+            "marketplace": job.marketplace.slug,
+            "task_class": task_class,
+            "model_requested": selected.model_id,
+            "transport": "session",
+            "max_credits": str(max_allowed_credits),
+        }
+        call, created = self._reserve_call(
+            job_id=job.id,
+            worker_id=worker_id,
+            model=selected.model_id,
+            task_class=task_class,
+            estimated_credits=Decimal(estimated_credits),
+            max_allowed_credits=Decimal(max_allowed_credits),
+            request_key=request_key,
+            metadata=metadata,
+        )
+        if not created:
+            if call.external_job_id.startswith("session:"):
+                session_id = call.external_job_id.split(":", 1)[1]
+                return call, self.client.session_messages(session_id)
+            return call, {}
+
+        started = time.monotonic()
+        session_id = ""
+        try:
+            GenXCall.objects.filter(pk=call.pk).update(status="SUBMITTING")
+            session = self.client.create_session(
+                selected.model_id,
+                system_prompt=system_prompt,
+                title=f"Amarktai Earn {task_class} {str(job.id)[:8]}",
+            )
+            session_id = str(session.get("session_id") or session.get("id") or "")
+            if not session_id:
+                raise GenXGatewayError("GenX session response did not contain a session ID")
+            GenXCall.objects.filter(pk=call.pk).update(external_job_id=f"session:{session_id}", status="SUBMITTED")
+            response = self.client.session_message(
+                session_id,
+                message,
+                idempotency_key=request_key,
+                tools=tools,
+            )
+            reconciled = self.reconcile(
+                call.id,
+                {
+                    "status": "COMPLETED",
+                    "usage": response.get("usage") if isinstance(response.get("usage"), dict) else {},
+                    "billing": response.get("billing") if isinstance(response.get("billing"), dict) else {},
+                },
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            )
+            try:
+                self.client.close_session(session_id)
+            except GenXError:
+                AuditEvent.objects.create(
+                    severity="WARNING",
+                    event_type="genx.session_close_failed",
+                    actor="genx-gateway",
+                    metadata={"call_id": str(call.id), "session_id": session_id},
+                )
+            return reconciled, response
+        except (GenXError, GenXGatewayError, TimeoutError) as exc:
+            confirmed_rejection = (
+                isinstance(exc, GenXError)
+                and exc.status_code is not None
+                and 400 <= exc.status_code < 500
+                and exc.status_code != 429
+                and not session_id
+            )
+            next_status = "FAILED" if confirmed_rejection else "UNKNOWN_REMOTE_STATE"
+            GenXCall.objects.filter(pk=call.pk).update(
+                status=next_status,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                completed_at=timezone.now() if confirmed_rejection else None,
+                error_code=exc.__class__.__name__,
+            )
+            AuditEvent.objects.create(
+                severity="ERROR" if confirmed_rejection else "WARNING",
+                event_type="genx.session_failed" if confirmed_rejection else "genx.session_unknown_remote_state",
+                actor="genx-gateway",
+                metadata={"call_id": str(call.id), "job_id": str(job.id), "error_code": exc.__class__.__name__},
+            )
+            raise
+
     def reconcile_pending(self, limit: int = 100) -> dict[str, int]:
         reconciled = 0
         unresolved = 0
@@ -278,8 +375,23 @@ class GenXGateway:
         )
         for call in calls:
             try:
-                payload = self.client.job(call.external_job_id)
-                self.reconcile(call.id, payload)
+                if call.external_job_id.startswith("session:"):
+                    session_id = call.external_job_id.split(":", 1)[1]
+                    payload = self.client.session_messages(session_id)
+                    if not extract_text(payload):
+                        unresolved += 1
+                        continue
+                    self.reconcile(
+                        call.id,
+                        {
+                            "status": "COMPLETED",
+                            "usage": payload.get("usage") if isinstance(payload.get("usage"), dict) else {},
+                            "billing": payload.get("billing") if isinstance(payload.get("billing"), dict) else {},
+                        },
+                    )
+                else:
+                    payload = self.client.job(call.external_job_id)
+                    self.reconcile(call.id, payload)
                 reconciled += 1
             except GenXError:
                 unresolved += 1

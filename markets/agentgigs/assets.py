@@ -24,7 +24,10 @@ class RemoteAssetRef:
     source_kind: str = "job_attachment"
 
 
-SUPPORTED_SOURCE_SUFFIXES = {".json", ".csv"}
+SUPPORTED_SOURCE_SUFFIXES = {
+    ".json", ".csv", ".pdf", ".docx", ".txt", ".md",
+    ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm",
+}
 DEFAULT_MAX_SOURCE_BYTES = 25 * 1024 * 1024
 
 
@@ -63,13 +66,6 @@ def _row_to_ref(row: dict[str, Any], *, source_kind: str, message_id: str = "") 
 
 
 def extract_source_asset_refs(details: dict[str, Any] | None, messages: list[dict[str, Any]] | None) -> list[RemoteAssetRef]:
-    """Extract source attachments from response fields AgentGigs actually returned.
-
-    `deliverable_files` are intentionally ignored because they are worker outputs.
-    The public docs mention job attachments but do not publish a standalone listing
-    endpoint/shape, so we consume `attachments` only when it is present in details,
-    plus the documented message attachment fields.
-    """
     refs: list[RemoteAssetRef] = []
     details = details if isinstance(details, dict) else {}
     job = details.get("job") if isinstance(details.get("job"), dict) else {}

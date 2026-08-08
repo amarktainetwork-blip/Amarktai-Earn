@@ -63,8 +63,6 @@ def stage_local_job_asset(*, job_id, path: str, source: str = "upload", external
             asset.save()
         else:
             asset = JobAsset.objects.create(job=job, external_id="", **defaults)
-    # A new verified input is an explicit operator/adapter action, so it may
-    # reopen a previously failed/blocked plan for deterministic re-planning.
     WorkPlan.objects.filter(job=job, status__in=[WorkPlan.Status.FAILED, WorkPlan.Status.BLOCKED]).update(
         status=WorkPlan.Status.BLOCKED,
         reason_codes=["INPUT_ASSET_CHANGED_REPLAN_REQUIRED"],
@@ -78,7 +76,7 @@ def stage_local_job_asset(*, job_id, path: str, source: str = "upload", external
     return asset
 
 
-def _instruction_text(job: Job) -> str:
+def _instruction_parts(job: Job) -> list[str]:
     raw = job.normalized_payload if isinstance(job.normalized_payload, dict) else {}
     fields = [job.title]
     for key in ("description", "requirements", "instructions", "task", "deliverables"):
@@ -87,17 +85,68 @@ def _instruction_text(job: Job) -> str:
             fields.append(value)
         elif isinstance(value, list):
             fields.extend(str(item) for item in value if isinstance(item, (str, int, float)))
-    return " ".join(fields).casefold()
+    return [str(value).strip() for value in fields if str(value).strip()]
 
 
-def _infer_operation(job: Job, asset: JobAsset) -> tuple[str, list[str]]:
-    suffix = Path(asset.path).suffix.casefold()
+def _instruction_text(job: Job) -> str:
+    return " ".join(_instruction_parts(job)).casefold()
+
+
+def _target_language(job: Job) -> str:
+    raw = job.normalized_payload if isinstance(job.normalized_payload, dict) else {}
+    for key in ("target_language", "targetLanguage", "language", "locale"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:80]
+    text = " ".join(_instruction_parts(job))
+    common = (
+        "English", "Spanish", "French", "German", "Italian", "Portuguese", "Russian",
+        "Dutch", "Afrikaans", "Arabic", "Chinese", "Japanese", "Korean", "Hindi",
+    )
+    import re
+    for language in common:
+        if re.search(rf"\b(?:into|to|in)\s+{re.escape(language)}\b", text, re.IGNORECASE):
+            return language
+    return ""
+
+
+def _infer_operation(job: Job, asset: JobAsset | None) -> tuple[str, dict, list[str]]:
     text = _instruction_text(job)
+    raw_instructions = "\n".join(_instruction_parts(job))
+    suffix = Path(asset.path).suffix.casefold() if asset is not None else ""
+    data_suffixes = {".json", ".csv"}
+    document_suffixes = {".pdf", ".docx", ".txt", ".md"}
+    media_suffixes = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm"}
+
+    if asset is None and any(term in text for term in ("research", "investigate", "web research", "find sources")):
+        return "research_report", {"operation": "research_report", "query": job.title, "requirements": raw_instructions}, []
+    if asset is None:
+        return "", {}, ["INPUT_ASSET_NOT_STAGED"]
+
     if suffix == ".json" and "csv" in text and any(term in text for term in ("convert", "conversion", "to csv")):
-        return "json_to_csv", []
+        return "json_to_csv", {"operation": "json_to_csv", "source": asset.path, "asset_id": asset.id}, []
     if suffix == ".csv" and any(term in text for term in ("normalize", "normalise", "clean csv", "clean the csv", "trim whitespace", "standardize", "standardise")):
-        return "csv_normalize", []
-    return "", ["TRANSFORMATION_NOT_UNAMBIGUOUS"]
+        return "csv_normalize", {"operation": "csv_normalize", "source": asset.path, "asset_id": asset.id}, []
+
+    if suffix in document_suffixes:
+        if any(term in text for term in ("translate", "translation", "localize", "localise", "localization", "localisation")):
+            language = _target_language(job)
+            if not language:
+                return "", {}, ["TARGET_LANGUAGE_NOT_EXPLICIT"]
+            return "translate_document", {"operation": "translate_document", "source": asset.path, "asset_id": asset.id, "target_language": language}, []
+        if any(term in text for term in ("summarize", "summarise", "summary of", "create a summary")):
+            return "document_summarize", {"operation": "document_summarize", "source": asset.path, "asset_id": asset.id}, []
+        if any(term in text for term in ("rewrite", "polish", "improve wording", "edit this document", "edit the document")):
+            return "document_rewrite", {"operation": "document_rewrite", "source": asset.path, "asset_id": asset.id, "instructions": raw_instructions}, []
+        if any(term in text for term in ("extract text", "extract the text", "convert to text", "plain text")):
+            return "document_extract_text", {"operation": "document_extract_text", "source": asset.path, "asset_id": asset.id}, []
+
+    if suffix in media_suffixes and any(term in text for term in ("transcribe", "transcription", "speech to text", "speech-to-text")):
+        return "transcribe_media", {"operation": "transcribe_media", "source": asset.path, "asset_id": asset.id}, []
+
+    if suffix not in data_suffixes | document_suffixes | media_suffixes:
+        return "", {}, ["SOURCE_TYPE_NOT_SUPPORTED_BY_REGISTERED_WORKER"]
+    return "", {}, ["TRANSFORMATION_NOT_UNAMBIGUOUS"]
 
 
 @transaction.atomic
@@ -121,15 +170,11 @@ def plan_awarded_job(job_id) -> WorkPlan:
     reasons: list[str] = []
     operation = ""
     input_spec = {}
-    if not assets:
-        reasons.append("INPUT_ASSET_NOT_STAGED")
-    elif len(assets) > 1:
+    if len(assets) > 1:
         reasons.append("MULTIPLE_INPUT_ASSETS_AMBIGUOUS")
     else:
-        operation, infer_reasons = _infer_operation(job, assets[0])
+        operation, input_spec, infer_reasons = _infer_operation(job, assets[0] if assets else None)
         reasons.extend(infer_reasons)
-        if operation:
-            input_spec = {"operation": operation, "source": assets[0].path, "asset_id": assets[0].id}
 
     if operation:
         try:
@@ -183,9 +228,7 @@ def _queue_execution(plan: WorkPlan) -> bool:
 
 
 def reconcile_submission_plans(*, marketplace_slug: str | None = None, limit: int = 100) -> int:
-    plans = WorkPlan.objects.select_related("job", "job__marketplace").filter(
-        status=WorkPlan.Status.SUBMISSION_RECONCILIATION
-    )
+    plans = WorkPlan.objects.select_related("job", "job__marketplace").filter(status=WorkPlan.Status.SUBMISSION_RECONCILIATION)
     if marketplace_slug:
         plans = plans.filter(job__marketplace__slug=marketplace_slug)
     reconciled = 0

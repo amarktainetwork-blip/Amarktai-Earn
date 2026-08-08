@@ -122,7 +122,7 @@ def execute_registered_job(
             worker.save(update_fields=["version", "status", "current_job", "last_heartbeat", "updated_at"])
             transition_job(job.id, Job.State.EXECUTING, actor=worker_id, metadata={"execution_id": execution.id, "worker_class": spec.worker_class, "operation": operation})
 
-        result = spec.build().execute(WorkRequest(job_id=str(job.id), workspace=Path(execution.workspace), inputs=clean_inputs))
+        result = spec.build().execute(WorkRequest(job_id=str(job.id), workspace=Path(execution.workspace), inputs=clean_inputs, worker_id=worker_id, execution_id=execution.id, attempt=execution.attempt))
         lock = renew_job_lock(job.id, node_id=node_id, fencing_token=lock.fencing_token, lease_seconds=lease_seconds)
         if not result.ok:
             Execution.objects.filter(pk=execution.pk).update(
