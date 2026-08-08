@@ -1,0 +1,12 @@
+Django>=5.2,<5.3
+django-allauth[mfa]>=65.10,<66
+argon2-cffi>=25.1,<26
+PyJWT>=2.10,<3
+pyotp>=2.9,<3
+psycopg[binary]>=3.2,<4
+redis>=6.2,<7
+rq>=2.4,<3
+requests>=2.32,<3
+pydantic>=2.11,<3
+pydantic-settings>=2.10,<3
+cryptography>=45,<46

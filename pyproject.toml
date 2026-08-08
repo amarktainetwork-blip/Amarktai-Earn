@@ -1,0 +1,13 @@
+[project]
+name = "amarktai-earn"
+version = "0.1.0"
+description = "Private autonomous digital-work operating system"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+exclude = ["control/migrations"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+python_files = ["test_*.py"]

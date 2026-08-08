@@ -1,0 +1,106 @@
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CADDY_EMAIL: ${CADDY_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    networks: [edge, internal]
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - artifacts:/var/lib/amarktai-earn/artifacts
+      - job_data:/var/lib/amarktai-earn/jobs
+      - repo_cache:/var/lib/amarktai-earn/repos
+      - app_cache:/var/lib/amarktai-earn/cache
+      - backups:/var/lib/amarktai-earn/backups
+      - logs:/var/lib/amarktai-earn/logs
+      - uploads:/var/lib/amarktai-earn/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [internal]
+
+  worker:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: sh -lc 'rq worker --url "$$REDIS_URL" p0_revenue_protection p1_instant_claim p2_auto_accept p3_assigned p4_high_ev p5_microjobs p6_bounties p7_background'
+    volumes:
+      - artifacts:/var/lib/amarktai-earn/artifacts
+      - job_data:/var/lib/amarktai-earn/jobs
+      - repo_cache:/var/lib/amarktai-earn/repos
+      - app_cache:/var/lib/amarktai-earn/cache
+      - logs:/var/lib/amarktai-earn/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [internal]
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --save 60 1000
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+networks:
+  edge: {}
+  internal: {}
+
+volumes:
+  postgres_data: {}
+  redis_data: {}
+  caddy_data: {}
+  caddy_config: {}
+  artifacts: {}
+  job_data: {}
+  repo_cache: {}
+  app_cache: {}
+  backups: {}
+  logs: {}
+  uploads: {}
