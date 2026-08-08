@@ -4,6 +4,7 @@ import time
 from django.core.management.base import BaseCommand, CommandError
 
 from control.services.agentgigs import configured_adapter, run_cycle
+from planning.services import dispatch_awarded_jobs
 from markets.agentgigs.client import AgentGigsError
 
 
@@ -22,6 +23,7 @@ class Command(BaseCommand):
         while True:
             try:
                 result = run_cycle(configured_adapter(), limit=limit)
+                result["dispatch"] = dispatch_awarded_jobs(marketplace_slug="agentgigs", limit=limit)
                 self.stdout.write(self.style.SUCCESS(str(result)))
             except (AgentGigsError, ValueError) as exc:
                 if options["once"]:
