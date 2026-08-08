@@ -74,7 +74,7 @@ jobs:
       - run: python manage.py migrate --noinput
       - run: python manage.py healthcheck
       - run: python -m unittest discover -s tests -p 'test_*_stdlib.py' -q
-      - run: python manage.py test tests.test_django_integration -v 2
+      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration -v 2
       - name: Compose configuration parses
         env:
           CADDY_EMAIL: ci@example.test
