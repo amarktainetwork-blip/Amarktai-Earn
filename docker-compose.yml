@@ -16,6 +16,23 @@ services:
         condition: service_healthy
     networks: [edge, internal]
 
+  volume-init:
+    build: .
+    user: "0:0"
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    entrypoint: ["/app/scripts/init-volumes.sh"]
+    volumes:
+      - artifacts:/var/lib/amarktai-earn/artifacts
+      - job_data:/var/lib/amarktai-earn/jobs
+      - repo_cache:/var/lib/amarktai-earn/repos
+      - app_cache:/var/lib/amarktai-earn/cache
+      - backups:/var/lib/amarktai-earn/backups
+      - logs:/var/lib/amarktai-earn/logs
+      - uploads:/var/lib/amarktai-earn/uploads
+    networks: [internal]
+
   web:
     build: .
     restart: unless-stopped
@@ -38,6 +55,8 @@ services:
       - logs:/var/lib/amarktai-earn/logs
       - uploads:/var/lib/amarktai-earn/uploads
     depends_on:
+      volume-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -60,6 +79,8 @@ services:
       - logs:/var/lib/amarktai-earn/logs
       - uploads:/var/lib/amarktai-earn/uploads
     depends_on:
+      volume-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -79,6 +100,8 @@ services:
       - uploads:/var/lib/amarktai-earn/uploads
       - logs:/var/lib/amarktai-earn/logs
     depends_on:
+      volume-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:

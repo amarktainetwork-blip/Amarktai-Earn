@@ -19,6 +19,20 @@ class LaunchHardeningContractTests(unittest.TestCase):
             self.assertIn("no-new-privileges:true", block)
             self.assertIn("init: true", block)
 
+    def test_shared_app_volumes_are_initialized_before_nonroot_services(self):
+        compose = (ROOT / "docker-compose.yml").read_text()
+        init_block = compose[compose.index("\n  volume-init:"):compose.index("\n  web:")]
+        self.assertIn('user: "0:0"', init_block)
+        self.assertIn("/app/scripts/init-volumes.sh", init_block)
+        self.assertIn("backups:/var/lib/amarktai-earn/backups", init_block)
+        for service, end in (("web", "worker"), ("worker", "watcher"), ("watcher", "postgres")):
+            block = compose[compose.index(f"\n  {service}:"):compose.index(f"\n  {end}:")]
+            self.assertIn("volume-init:", block)
+            self.assertIn("service_completed_successfully", block)
+        script = (ROOT / "scripts" / "init-volumes.sh").read_text()
+        self.assertIn("chown amarktai:amarktai", script)
+        self.assertIn("chmod 0750", script)
+
     def test_docker_build_context_excludes_runtime_secrets(self):
         ignore = (ROOT / ".dockerignore").read_text()
         self.assertIn(".env\n", ignore)

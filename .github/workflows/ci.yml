@@ -106,6 +106,9 @@ jobs:
           }
           trap cleanup EXIT
           docker volume create "$volume" >/dev/null
+          docker run --rm --user 0:0 \
+            -v "$volume":/var/lib/amarktai-earn/backups \
+            amarktai-earn-ci /app/scripts/init-volumes.sh
           docker run --rm --network host \
             -e POSTGRES_DB=amarktai_earn_ci \
             -e POSTGRES_USER=amarktai_ci \
