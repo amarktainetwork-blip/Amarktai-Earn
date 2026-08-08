@@ -156,6 +156,34 @@ class MarketCandidate(Timestamped):
     notes = models.TextField(blank=True)
 
 
+class MarketIntegrationProfile(Timestamped):
+    """Versioned truth about an adapter surface and its external launch blockers."""
+
+    marketplace = models.OneToOneField(Marketplace, on_delete=models.CASCADE, related_name="integration_profile")
+    adapter_name = models.CharField(max_length=160)
+    adapter_version = models.CharField(max_length=40, default="v1")
+    source_wired = models.BooleanField(default=False)
+    autonomous_acquisition_enabled = models.BooleanField(default=False)
+    policy_verified = models.BooleanField(default=False)
+    docs_checked_at = models.DateTimeField(default=timezone.now)
+    auth_method = models.CharField(max_length=160, blank=True)
+    rate_limit = models.CharField(max_length=160, blank=True)
+    payout_method = models.CharField(max_length=160, blank=True)
+    capabilities = models.JSONField(default=dict)
+    source_urls = models.JSONField(default=list)
+    blockers = models.JSONField(default=list)
+    evidence = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(autonomous_acquisition_enabled=False)
+                | models.Q(policy_verified=True),
+                name="market_acquisition_requires_verified_policy",
+            )
+        ]
+
+
 class Job(Timestamped):
     class State(models.TextChoices):
         DISCOVERED = "DISCOVERED"

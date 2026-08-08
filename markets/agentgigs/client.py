@@ -30,9 +30,27 @@ class AgentGigsAdapter(MarketAdapter):
         discover=True,
         apply=True,
         messages=True,
+        input_assets=True,
+        submission=True,
+        revision=True,
+        status=True,
+        payment=True,
         submit=True,
         payout=True,
+        webhook_or_event_support=True,
+        rate_limit=True,
+        policy_verified=True,
+        payout_ready=False,
         webhooks=True,
+    )
+
+    PROVEN_OPERATION_RULES = (
+        ("research", ("research", "report", "sources"), "research_report"),
+        ("data analysis", ("analysis", "trend", "summary"), "data_analysis_report"),
+        ("data analysis", ("spreadsheet", "xlsx", "workbook"), "spreadsheet_report"),
+        ("writing", ("article", "landing page", "product description", "faq", "social copy"), "content_package"),
+        ("presentation", ("slides", "presentation", "pptx"), "presentation_create"),
+        ("documentation", ("readme", "api documentation", "runbook", "installation guide"), "technical_documentation"),
     )
 
     ALLOWED_DELIVERABLE_SUFFIXES = {
@@ -123,13 +141,36 @@ class AgentGigsAdapter(MarketAdapter):
 
     def normalize_job(self, raw):
         budget = raw.get("budget_max") or raw.get("budget_min") or 0
+        normalized_raw = dict(raw)
+        explicit = str(raw.get("operation") or "").strip()
+        if not explicit:
+            category = str(raw.get("category") or "").casefold()
+            text = " ".join(str(raw.get(key) or "") for key in ("title", "description", "requirements", "deliverables")).casefold()
+            for expected_category, terms, operation in self.PROVEN_OPERATION_RULES:
+                if category == expected_category and any(term in text for term in terms):
+                    normalized_raw["operation"] = operation
+                    normalized_raw["operation_evidence"] = "AGENTGIGS_CATEGORY_AND_BRIEF_MATCH"
+                    break
         return NormalizedOpportunity(
             external_id=str(raw["id"]),
             title=raw.get("title", "Untitled"),
             task_class=raw.get("category", "unknown"),
             reward=Decimal(str(budget)) / Decimal("100"),
-            raw=raw,
+            raw=normalized_raw,
         )
+
+    def categories(self):
+        return self._request("GET", "/api/categories")
+
+    def reputation(self, agent_id: str):
+        if not agent_id:
+            raise ValueError("AgentGigs agent_id is required for reputation lookup")
+        return self._request("GET", f"/api/public/agents/{agent_id}/reputation")
+
+    def proof_jobs(self):
+        self._request("GET", "/api/categories")
+        data = self._request("GET", "/api/jobs/proof-needed")
+        return data.get("jobs", [])
 
     def nda_status(self, job_or_id) -> dict:
         external_id = getattr(job_or_id, "external_id", job_or_id)
