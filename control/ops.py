@@ -203,6 +203,8 @@ def agents_snapshot() -> dict:
             reasons.append("RUNTIME_UNAVAILABLE")
         if spec["worker_class"] == "public_web_data" and os.getenv("PUBLIC_WEB_DATA_ENABLED", "0") != "1":
             reasons.append("PUBLIC_WEB_DATA_DISABLED")
+        if spec["worker_class"] == "ai_safety_research" and os.getenv("SAFETY_BOUNTY_EXECUTION_ENABLED", "0") != "1":
+            reasons.append("SAFETY_BOUNTY_EXECUTION_DISABLED")
         sandbox_worker = spec["worker_class"] in {"code_small", "code_heavy", "ci_testing"}
         coding_worker = spec["worker_class"] in {"code_small", "code_heavy"}
         if sandbox_worker:

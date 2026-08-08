@@ -686,6 +686,189 @@ class StrategyAdjustment(Timestamped):
     applied = models.BooleanField(default=False)
 
 
+class SyntheticDatasetRun(Timestamped):
+    class Mode(models.TextChoices):
+        COMMISSIONED = "COMMISSIONED"
+        INVENTORY = "INVENTORY"
+
+    class Status(models.TextChoices):
+        COMPLETED = "COMPLETED"
+        REJECTED = "REJECTED"
+
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name="synthetic_dataset_runs")
+    execution = models.OneToOneField(Execution, on_delete=models.CASCADE, related_name="synthetic_dataset_run")
+    mode = models.CharField(max_length=20, choices=Mode.choices, default=Mode.COMMISSIONED)
+    status = models.CharField(max_length=20, choices=Status.choices)
+    schema = models.JSONField(default=dict)
+    generation_plan = models.JSONField(default=dict)
+    provenance = models.JSONField(default=dict)
+    rights_confirmed = models.BooleanField(default=False)
+    demand_evidence = models.JSONField(default=dict)
+    budget_authorized = models.BooleanField(default=False)
+    requested_records = models.PositiveIntegerField(default=0)
+    records_generated = models.PositiveIntegerField(default=0)
+    accepted_records = models.PositiveIntegerField(default=0)
+    duplicate_records = models.PositiveIntegerField(default=0)
+    invalid_records = models.PositiveIntegerField(default=0)
+    class_distribution = models.JSONField(default=dict)
+    split_counts = models.JSONField(default=dict)
+    generation_cost = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    genx_credits = models.DecimalField(max_digits=18, decimal_places=6, default=0)
+    cost_per_accepted_record = models.DecimalField(max_digits=18, decimal_places=8, default=0)
+    qa_rejection_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    artifact_manifest = models.JSONField(default=dict)
+    reason_codes = models.JSONField(default=list)
+
+
+class BountyProgram(Timestamped):
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT"
+        ACTIVE = "ACTIVE"
+        EXPIRED = "EXPIRED"
+        REVOKED = "REVOKED"
+
+    name = models.CharField(max_length=200)
+    provider = models.CharField(max_length=120)
+    external_id = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    execution_enabled = models.BooleanField(default=False)
+    automation_allowed = models.BooleanField(default=False)
+    terms_url = models.URLField(blank=True)
+    authorization_source = models.TextField(blank=True)
+    details = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["provider", "external_id"], condition=~models.Q(external_id=""), name="uniq_bounty_program_external_id")
+        ]
+
+
+class ProgramScopeVersion(Timestamped):
+    program = models.ForeignKey(BountyProgram, on_delete=models.CASCADE, related_name="scope_versions")
+    version = models.PositiveIntegerField()
+    authorization_hash = models.CharField(max_length=64)
+    rules_snapshot = models.JSONField(default=dict)
+    allowed_test_types = models.JSONField(default=list)
+    prohibited_test_types = models.JSONField(default=list)
+    rate_limit_per_minute = models.PositiveIntegerField(default=0)
+    max_requests_per_attempt = models.PositiveIntegerField(default=0)
+    max_spend_per_attempt = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    effective_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    active = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["program", "version"], name="uniq_bounty_program_scope_version")]
+
+
+class AuthorizedTarget(Timestamped):
+    class TargetType(models.TextChoices):
+        SUPPLIED_SANDBOX = "SUPPLIED_SANDBOX"
+        LOCAL_FIXTURE = "LOCAL_FIXTURE"
+        REMOTE_PROGRAM = "REMOTE_PROGRAM"
+
+    scope_version = models.ForeignKey(ProgramScopeVersion, on_delete=models.CASCADE, related_name="authorized_targets")
+    target_type = models.CharField(max_length=24, choices=TargetType.choices)
+    canonical_target = models.CharField(max_length=500)
+    authorization_evidence = models.TextField()
+    network_access_allowed = models.BooleanField(default=False)
+    active = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["scope_version", "canonical_target"], name="uniq_authorized_scope_target")]
+
+
+class SafetyResearchAttempt(Timestamped):
+    class Status(models.TextChoices):
+        BLOCKED = "BLOCKED"
+        AUTHORIZED = "AUTHORIZED"
+        RUNNING = "RUNNING"
+        COMPLETED = "COMPLETED"
+        FAILED = "FAILED"
+
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name="safety_research_attempts")
+    program = models.ForeignKey(BountyProgram, on_delete=models.PROTECT, related_name="attempts")
+    scope_version = models.ForeignKey(ProgramScopeVersion, on_delete=models.PROTECT, related_name="attempts")
+    target = models.ForeignKey(AuthorizedTarget, on_delete=models.PROTECT, related_name="attempts")
+    execution = models.OneToOneField(Execution, null=True, blank=True, on_delete=models.SET_NULL, related_name="safety_research_attempt")
+    test_type = models.CharField(max_length=100)
+    status = models.CharField(max_length=20, choices=Status.choices)
+    plan = models.JSONField(default=dict)
+    authorization_snapshot = models.JSONField(default=dict)
+    estimated_spend = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    max_requests = models.PositiveIntegerField(default=0)
+    executed_requests = models.PositiveIntegerField(default=0)
+    reason_codes = models.JSONField(default=list)
+    result = models.JSONField(default=dict)
+    started_at = models.DateTimeField(null=True, blank=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+
+
+class SafetyFinding(Timestamped):
+    class Status(models.TextChoices):
+        CANDIDATE = "CANDIDATE"
+        REPRODUCED = "REPRODUCED"
+        NOT_REPRODUCED = "NOT_REPRODUCED"
+        SUBMISSION_READY = "SUBMISSION_READY"
+        SUBMITTED = "SUBMITTED"
+        REJECTED = "REJECTED"
+
+    attempt = models.ForeignKey(SafetyResearchAttempt, on_delete=models.CASCADE, related_name="findings")
+    fingerprint = models.CharField(max_length=64)
+    title = models.CharField(max_length=300)
+    impact = models.TextField()
+    severity = models.CharField(max_length=24)
+    evidence = models.JSONField(default=dict)
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.CANDIDATE)
+    duplicate_checked = models.BooleanField(default=False)
+    contains_private_data = models.BooleanField(default=False)
+    sanitized = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["attempt", "fingerprint"], name="uniq_safety_finding_attempt_fingerprint")]
+
+
+class FindingReproduction(Timestamped):
+    finding = models.ForeignKey(SafetyFinding, on_delete=models.CASCADE, related_name="reproductions")
+    independent_reviewer = models.CharField(max_length=160)
+    reproduced = models.BooleanField(default=False)
+    evidence = models.JSONField(default=dict)
+    evidence_hash = models.CharField(max_length=64)
+    reproduced_at = models.DateTimeField(default=timezone.now)
+
+
+class SafetyBountySubmission(Timestamped):
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT"
+        SUBMITTED = "SUBMITTED"
+        TRIAGED = "TRIAGED"
+        CLARIFICATION_REQUIRED = "CLARIFICATION_REQUIRED"
+        AWARDED = "AWARDED"
+        REJECTED = "REJECTED"
+
+    finding = models.OneToOneField(SafetyFinding, on_delete=models.PROTECT, related_name="bounty_submission")
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.DRAFT)
+    submission_method = models.CharField(max_length=120)
+    remote_reference = models.CharField(max_length=255, blank=True)
+    report_artifact = models.ForeignKey(Artifact, null=True, blank=True, on_delete=models.SET_NULL)
+    awarded_amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    currency = models.CharField(max_length=3, default="USD")
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    triage = models.JSONField(default=dict)
+
+
+class SanitizedEvaluationCase(Timestamped):
+    finding = models.ForeignKey(SafetyFinding, on_delete=models.PROTECT, related_name="sanitized_evaluation_cases")
+    case_type = models.CharField(max_length=80)
+    prompt = models.TextField()
+    expected_behavior = models.TextField()
+    provenance = models.JSONField(default=dict)
+    rights_confirmed = models.BooleanField(default=False)
+    private_data_removed = models.BooleanField(default=False)
+    harmful_detail_removed = models.BooleanField(default=False)
+
+
 class ServiceHeartbeat(Timestamped):
     service = models.CharField(max_length=80, unique=True)
     node_id = models.CharField(max_length=120, default="VPS1")
