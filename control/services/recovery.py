@@ -255,6 +255,13 @@ def run_recovery_cycle(*, reconcile_genx: bool = True) -> dict[str, Any]:
         try:
             from sandbox_broker.client import SandboxBrokerClient
             sandbox = SandboxBrokerClient().cleanup(max_age_seconds=max(60, int(os.getenv("WATCHDOG_SANDBOX_STALE_SECONDS", "1800"))))
+            dependency_removed = int(sandbox.get("dependency_volumes_removed", 0))
+            if dependency_removed:
+                _record(
+                    key=f"dependency-cache-cleanup:{int(timezone.now().timestamp()) // 60}",
+                    target_type="dependency_cache", target_id="docker-volumes", action="remove_expired_dependency_caches",
+                    outcome="RECOVERED", reason="DEPENDENCY_CACHE_RETENTION_EXPIRED", details={"removed": dependency_removed},
+                )
         except Exception as exc:
             AuditEvent.objects.create(severity="WARNING", event_type="operations.sandbox_cleanup_failed", actor="watchdog", metadata={"error_code": exc.__class__.__name__})
     result = {"state": state, "cleanup": cleanup, "genx": genx, "sandbox": sandbox}

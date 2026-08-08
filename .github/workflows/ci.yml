@@ -80,7 +80,7 @@ jobs:
       - run: python manage.py migrate --noinput
       - run: python manage.py healthcheck
       - run: python -m unittest discover -s tests -p 'test_*_stdlib.py' -q
-      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration -v 2
+      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration tests.test_dependency_media_integration -v 2
       - name: Production configuration preflight
         env:
           AMARKTAI_ENV: production
@@ -105,10 +105,16 @@ jobs:
             --tmpfs /tmp:rw,nosuid,nodev,size=64m --tmpfs /home/sandbox:rw,nosuid,nodev,size=64m \
             amarktai-earn-sandbox:phase8c /bin/bash -lc 'test "$(id -u)" = 10001 && test ! -e /var/run/docker.sock && aider --version && aider --help >/dev/null && openhands --help >/dev/null'
           test "$(docker image inspect -f '{{.Config.User}}' amarktai-earn-sandbox-broker:phase8c)" = "10002:10002"
+          socket_gid=$(stat -c '%g' /var/run/docker.sock)
+          docker run --rm --group-add "$socket_gid" -v /var/run/docker.sock:/var/run/docker.sock \
+            -e SANDBOX_AGENT_IMAGE=amarktai-earn-sandbox:phase8c \
+            -e SANDBOX_REPOSITORY_VOLUME=amarktai_dependency_smoke_${GITHUB_RUN_ID} \
+            amarktai-earn-sandbox-broker:phase8c python /app/scripts/dependency-prep-smoke.py
       - name: Build production image and prove secrets are excluded
         run: |
           docker build -t amarktai-earn-ci .
-          docker run --rm amarktai-earn-ci sh -lc 'test ! -e /app/.env && command -v pg_dump && command -v pg_restore && command -v gpg'
+          docker run --rm amarktai-earn-ci sh -lc 'test ! -e /app/.env && command -v pg_dump && command -v pg_restore && command -v gpg && command -v ffmpeg && command -v ffprobe'
+          docker run --rm amarktai-earn-ci python /app/scripts/media-smoke.py
       - name: Encrypted PostgreSQL backup and restore proof
         run: |
           set -euo pipefail

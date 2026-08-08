@@ -6,6 +6,8 @@ import os
 import re
 import secrets
 import subprocess
+import time
+import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -17,6 +19,7 @@ class BrokerError(RuntimeError):
 
 _SAFE_REL = re.compile(r"^[0-9a-fA-F-]{20,80}/[0-9a-fA-F]{40}$")
 _SAFE_AGENT = {"aider", "openhands", "ci"}
+_DEPENDENCY_LOCK = threading.Lock()
 
 
 def _secret() -> str:
@@ -34,8 +37,8 @@ def _run(args: list[str], *, timeout: int, check: bool = True) -> subprocess.Com
     return result
 
 
-def _security_args(*, network: str, volume_name: str, memory: str, cpus: str, pids: int) -> list[str]:
-    return [
+def _security_args(*, network: str, volume_name: str, memory: str, cpus: str, pids: int, dependency_volume: str = "") -> list[str]:
+    args = [
         "--rm",
         "--read-only",
         "--cap-drop", "ALL",
@@ -50,6 +53,159 @@ def _security_args(*, network: str, volume_name: str, memory: str, cpus: str, pi
         "--tmpfs", "/home/sandbox:rw,nosuid,nodev,size=96m",
         "-v", f"{volume_name}:/workspace:rw",
     ]
+    if dependency_volume:
+        if not re.fullmatch(r"amarktai_deps_(?:python|node)_[0-9a-f]{24}", dependency_volume):
+            raise BrokerError("dependency cache key is invalid")
+        args += ["-v", f"{dependency_volume}:/opt/amarktai-dependencies:ro"]
+    return args
+
+
+def _dependency_runtime_args(dependency_volume: str) -> list[str]:
+    if not dependency_volume:
+        return []
+    return [
+        "-e", "PIP_NO_INDEX=1",
+        "-e", "PIP_FIND_LINKS=/opt/amarktai-dependencies/wheels",
+        "-e", "PYTHONPATH=/opt/amarktai-dependencies/site-packages",
+        "-e", "NODE_PATH=/opt/amarktai-dependencies/node_modules",
+        "-e", "PATH=/opt/amarktai-dependencies/node_modules/.bin:/usr/local/bin:/usr/bin:/bin",
+    ]
+
+
+def _dependency_stats(volume_name: str, image: str) -> tuple[int, int, bool]:
+    result = _run([
+        "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges:true", "--user", "10001:10001",
+        "-v", f"{volume_name}:/cache:ro", image, "python", "-c",
+        "import os; from pathlib import Path; p=Path('/cache'); files=[x for x in p.rglob('*') if x.is_file()]; print(len(files),sum(x.stat().st_size for x in files),int((p/'.ready').is_file()))",
+    ], timeout=120)
+    try:
+        count, size, ready = (result.stdout or "").strip().split()
+        return int(count), int(size), ready == "1"
+    except (ValueError, TypeError) as exc:
+        raise BrokerError("dependency cache statistics were invalid") from exc
+
+
+def _snapshot_manifest_hash(*, repo_volume: str, image: str, snapshot_rel: str, ecosystem: str) -> str:
+    script = (
+        "import hashlib,json,os,pathlib; "
+        "p=pathlib.Path('/src')/os.environ['SNAPSHOT_REL']; e=os.environ['ECOSYSTEM']; "
+        "a=(p/'requirements.txt').read_bytes() if e=='python' else (p/'package.json').read_bytes(); "
+        "b=b'' if e=='python' else (p/'package-lock.json').read_bytes(); "
+        "d=json.loads(b) if e=='node' else {}; "
+        "assert e!='node' or d.get('lockfileVersion') in (2,3); "
+        "print(hashlib.sha256(a if e=='python' else a+b'\\0'+b).hexdigest())"
+    )
+    result = _run([
+        "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges:true", "--user", "10001:10001",
+        "-v", f"{repo_volume}:/src:ro", "-e", f"SNAPSHOT_REL={snapshot_rel}", "-e", f"ECOSYSTEM={ecosystem}",
+        image, "python", "-c", script,
+    ], timeout=60)
+    digest = (result.stdout or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise BrokerError("dependency manifest inspection failed")
+    return digest
+
+
+def _prepare_dependencies(payload: dict[str, Any]) -> dict[str, Any]:
+    snapshot_rel = str(payload.get("snapshot_rel") or "")
+    if not _SAFE_REL.fullmatch(snapshot_rel):
+        raise BrokerError("snapshot path is not an approved job/commit path")
+    ecosystem = str(payload.get("ecosystem") or "")
+    manifest_path = str(payload.get("manifest_path") or "")
+    expected_path = {"python": "requirements.txt", "node": "package-lock.json"}.get(ecosystem)
+    if not expected_path or manifest_path != expected_path:
+        raise BrokerError("dependency ecosystem or manifest is unsupported")
+    manifest_hash = str(payload.get("manifest_hash") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", manifest_hash):
+        raise BrokerError("dependency manifest hash is invalid")
+
+    image = os.getenv("SANDBOX_AGENT_IMAGE", "amarktai-earn-sandbox:phase8c")
+    repo_volume = os.getenv("SANDBOX_REPOSITORY_VOLUME", "amarktai_repo_cache")
+    if not hmac.compare_digest(_snapshot_manifest_hash(repo_volume=repo_volume, image=image, snapshot_rel=snapshot_rel, ecosystem=ecosystem), manifest_hash):
+        raise BrokerError("dependency manifest changed after verification")
+    volume_name = f"amarktai_deps_{ecosystem}_{manifest_hash[:24]}"
+    maximum_bytes = max(1024 * 1024, min(int(os.getenv("DEPENDENCY_MAX_CACHE_BYTES", "536870912")), 2 * 1024**3))
+    maximum_files = max(100, min(int(os.getenv("DEPENDENCY_MAX_CACHE_FILES", "50000")), 200000))
+    timeout = max(30, min(int(os.getenv("DEPENDENCY_PREPARATION_TIMEOUT_SECONDS", "600")), 1800))
+
+    inspected = _run(["docker", "volume", "inspect", volume_name], timeout=30, check=False)
+    if inspected.returncode == 0:
+        files, size, ready = _dependency_stats(volume_name, image)
+        if ready and files <= maximum_files and size <= maximum_bytes:
+            return {"cache_key": volume_name, "ecosystem": ecosystem, "file_count": files, "total_bytes": size, "cache_hit": True}
+        _run(["docker", "volume", "rm", "-f", volume_name], timeout=30, check=False)
+
+    volumes = _run(["docker", "volume", "ls", "-q", "--filter", "label=amarktai.dependency=true"], timeout=30, check=False)
+    existing = [item.strip() for item in (volumes.stdout or "").splitlines() if re.fullmatch(r"amarktai_deps_(?:python|node)_[0-9a-f]{24}", item.strip())]
+    maximum_volumes = max(1, min(int(os.getenv("DEPENDENCY_MAX_CACHE_VOLUMES", "8")), 100))
+    total_quota = max(maximum_bytes, int(os.getenv("DEPENDENCY_TOTAL_CACHE_QUOTA_BYTES", str(2 * 1024**3))))
+    total_usage = 0
+    for existing_volume in existing[:100]:
+        _files, existing_size, _ready = _dependency_stats(existing_volume, image)
+        total_usage += existing_size
+    if len(existing) >= maximum_volumes or total_usage + maximum_bytes > total_quota:
+        raise BrokerError("dependency cache capacity is exhausted")
+
+    _run(["docker", "volume", "create", "--label", "amarktai.dependency=true", "--label", f"amarktai.ecosystem={ecosystem}", volume_name], timeout=30)
+    try:
+        _run([
+            "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges:true", "--user", "0:0",
+            "-v", f"{volume_name}:/cache:rw", image, "/bin/bash", "-lc", "chmod 1777 /cache",
+        ], timeout=60)
+        container_name = "amarktai-dependency-" + secrets.token_hex(12)
+        base = [
+            "docker", "run", "--name", container_name, "-d", "--network", os.getenv("DEPENDENCY_FETCH_NETWORK", "bridge"),
+            "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+            "--pids-limit", str(max(32, min(int(os.getenv("DEPENDENCY_PREPARATION_PIDS_LIMIT", "128")), 512))),
+            "--memory", os.getenv("DEPENDENCY_PREPARATION_MEMORY_LIMIT", "768m"),
+            "--cpus", os.getenv("DEPENDENCY_PREPARATION_CPU_LIMIT", "1.0"),
+            "--user", "10001:10001", "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
+            "--tmpfs", "/home/sandbox:rw,nosuid,nodev,size=64m", "-e", "HOME=/home/sandbox", "-e", "PIP_NO_CACHE_DIR=1",
+            "-v", f"{repo_volume}:/src:ro", "-v", f"{volume_name}:/cache:rw",
+            "-e", f"SNAPSHOT_REL={snapshot_rel}", image, "/bin/bash", "-lc",
+        ]
+        if ecosystem == "python":
+            command = 'mkdir -p /cache/wheels /cache/site-packages && pip download --disable-pip-version-check --no-deps --require-hashes --only-binary=:all: -r "/src/$SNAPSHOT_REL/requirements.txt" -d /cache/wheels && pip install --disable-pip-version-check --no-index --no-deps --require-hashes --only-binary=:all: --find-links /cache/wheels --target /cache/site-packages -r "/src/$SNAPSHOT_REL/requirements.txt" && touch /cache/.ready'
+        else:
+            command = 'mkdir -p /tmp/work && cp "/src/$SNAPSHOT_REL/package.json" "/src/$SNAPSHOT_REL/package-lock.json" /tmp/work/ && cd /tmp/work && npm ci --ignore-scripts --no-audit --no-fund --cache /cache/npm-cache && mkdir -p node_modules && mv node_modules /cache/node_modules && touch /cache/.ready'
+        _run([*base, command], timeout=60)
+        started = time.monotonic()
+        while True:
+            state = _run(["docker", "inspect", "-f", "{{.State.Running}}|{{.State.ExitCode}}", container_name], timeout=15, check=False)
+            if state.returncode != 0 or "|" not in (state.stdout or ""):
+                raise BrokerError("dependency preparation container disappeared")
+            running, exit_code = state.stdout.strip().split("|", 1)
+            files, size, _ready = _dependency_stats(volume_name, image)
+            if files > maximum_files or size > maximum_bytes:
+                raise BrokerError("dependency cache exceeds configured bounds")
+            if running != "true":
+                if exit_code != "0":
+                    logs = _run(["docker", "logs", container_name], timeout=30, check=False)
+                    raise BrokerError(((logs.stderr or "") + (logs.stdout or ""))[-2000:] or "dependency preparation failed")
+                break
+            if time.monotonic() - started >= timeout:
+                raise BrokerError("dependency preparation timed out")
+            time.sleep(1)
+        files, size, ready = _dependency_stats(volume_name, image)
+        if not ready or files > maximum_files or size > maximum_bytes:
+            raise BrokerError("dependency cache exceeds configured bounds")
+        return {"cache_key": volume_name, "ecosystem": ecosystem, "file_count": files, "total_bytes": size, "cache_hit": False}
+    except Exception:
+        if "container_name" in locals():
+            _run(["docker", "rm", "-f", container_name], timeout=30, check=False)
+        _run(["docker", "volume", "rm", "-f", volume_name], timeout=30, check=False)
+        raise
+    finally:
+        if "container_name" in locals():
+            _run(["docker", "rm", "-f", container_name], timeout=30, check=False)
+
+
+def prepare_dependencies(payload: dict[str, Any]) -> dict[str, Any]:
+    with _DEPENDENCY_LOCK:
+        return _prepare_dependencies(payload)
 
 
 def cleanup_stale_containers(max_age_seconds: int) -> dict[str, int]:
@@ -72,7 +228,21 @@ def cleanup_stale_containers(max_age_seconds: int) -> dict[str, int]:
             continue
         if running != "true" or (now - created).total_seconds() >= max_age_seconds:
             removed += int(_run(["docker", "rm", "-f", container_id], timeout=30, check=False).returncode == 0)
-    return {"inspected": inspected, "removed": removed}
+    dependency_removed = 0
+    volumes = _run(["docker", "volume", "ls", "-q", "--filter", "label=amarktai.dependency=true"], timeout=30, check=False)
+    for volume in (volumes.stdout or "").splitlines()[:1000]:
+        volume = volume.strip()
+        if not re.fullmatch(r"amarktai_deps_(?:python|node)_[0-9a-f]{24}", volume):
+            continue
+        info = _run(["docker", "volume", "inspect", "-f", "{{.CreatedAt}}", volume], timeout=15, check=False)
+        try:
+            created = datetime.fromisoformat((info.stdout or "").strip().replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        retention = max(max_age_seconds, int(os.getenv("DEPENDENCY_CACHE_RETENTION_SECONDS", "604800")))
+        if (now - created).total_seconds() >= retention:
+            dependency_removed += int(_run(["docker", "volume", "rm", volume], timeout=30, check=False).returncode == 0)
+    return {"inspected": inspected, "removed": removed, "dependency_volumes_removed": dependency_removed}
 
 
 def run_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
@@ -101,6 +271,7 @@ def run_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
     cpus = os.getenv("SANDBOX_CPU_LIMIT", "1.5")
     pids = max(32, min(int(os.getenv("SANDBOX_PIDS_LIMIT", "256")), 1024))
     timeout = max(30, min(int(os.getenv("SANDBOX_EXECUTION_TIMEOUT_SECONDS", "900")), 3600))
+    dependency_volume = str(payload.get("dependency_cache_key") or "")
     volume_name = "amarktai_job_" + secrets.token_hex(12)
     sandbox_id = secrets.token_hex(12)
     agent_log = ""
@@ -122,8 +293,9 @@ def run_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
         _run(seed, timeout=120)
 
         network = "none" if agent == "ci" else llm_network
-        args = ["docker", "run", *_security_args(network=network, volume_name=volume_name, memory=memory, cpus=cpus, pids=pids)]
+        args = ["docker", "run", *_security_args(network=network, volume_name=volume_name, memory=memory, cpus=cpus, pids=pids, dependency_volume=dependency_volume)]
         args += ["-e", f"AMARKTAI_AGENT={agent}", "-e", f"AMARKTAI_TASK={task}", "-e", f"AMARKTAI_TEST_COMMAND={test_command}"]
+        args += _dependency_runtime_args(dependency_volume)
         if agent in {"aider", "openhands"}:
             args += [
                 "-e", f"LLM_API_KEY={scoped_token}",
@@ -140,7 +312,7 @@ def run_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
 
         diff_result = _run([
             "docker", "run", *_security_args(
-                network="none", volume_name=volume_name, memory=memory, cpus=cpus, pids=pids,
+                network="none", volume_name=volume_name, memory=memory, cpus=cpus, pids=pids, dependency_volume=dependency_volume,
             ), image, "/bin/bash", "-lc",
             "cd /workspace && git add -N -- . && git diff --binary --no-ext-diff amarktai-baseline --",
         ], timeout=120, check=False)
@@ -151,8 +323,8 @@ def run_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
             test_log = agent_log
         else:
             test_result = _run([
-                "docker", "run", *_security_args(network="none", volume_name=volume_name, memory=memory, cpus=cpus, pids=pids),
-                "-e", f"AMARKTAI_TEST_COMMAND={test_command}", image,
+                "docker", "run", *_security_args(network="none", volume_name=volume_name, memory=memory, cpus=cpus, pids=pids, dependency_volume=dependency_volume),
+                *_dependency_runtime_args(dependency_volume), "-e", f"AMARKTAI_TEST_COMMAND={test_command}", image,
                 "/bin/bash", "-lc", 'cd /workspace && /bin/bash -lc "$AMARKTAI_TEST_COMMAND"',
             ], timeout=timeout, check=False)
             test_exit = test_result.returncode
@@ -191,7 +363,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path not in {"/run", "/cleanup"}:
+        if self.path not in {"/run", "/prepare", "/cleanup"}:
             return self._json(404, {"error": "not found"})
         auth = self.headers.get("Authorization", "")
         if not hmac.compare_digest(auth, f"Bearer {_secret()}"):
@@ -205,6 +377,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise BrokerError("request body must be an object")
             if self.path == "/cleanup":
                 return self._json(200, cleanup_stale_containers(int(payload.get("max_age_seconds", 1800))))
+            if self.path == "/prepare":
+                return self._json(200, prepare_dependencies(payload))
             return self._json(200, run_sandbox(payload))
         except BrokerError as exc:
             return self._json(400, {"error": str(exc)})

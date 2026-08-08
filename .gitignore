@@ -10,7 +10,7 @@ __pycache__/
 .venv/
 venv/
 staticfiles/
-media/
+/media/
 coverage.xml
 htmlcov/
 .DS_Store

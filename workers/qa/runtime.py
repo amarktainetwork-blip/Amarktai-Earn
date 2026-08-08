@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import re
+import json
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from workers.qa.deterministic import verify_csv
+from PIL import Image
 
 
 @dataclass(frozen=True)
@@ -157,6 +160,73 @@ def _ci_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
     )
 
 
+def _media_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    checks: list[str] = []
+    maximum = int(evidence.get("max_output_bytes") or 0)
+    if primary.is_file() and primary.stat().st_size > 0:
+        checks.append("output_nonempty")
+    if maximum and primary.is_file() and primary.stat().st_size <= maximum:
+        checks.append("output_size_bounded")
+    kind = str(evidence.get("media_kind") or "")
+    qa_evidence: dict[str, Any] = {"size_bytes": primary.stat().st_size if primary.is_file() else 0}
+    if kind == "image" and primary.is_file():
+        try:
+            with Image.open(primary) as image:
+                image.verify()
+            with Image.open(primary) as image:
+                dimensions = list(image.size)
+                actual_format = str(image.format or "").upper()
+            qa_evidence.update({"dimensions": dimensions, "format": actual_format})
+            checks.append("image_decodes")
+            if actual_format == str(evidence.get("expected_format") or "").upper():
+                checks.append("image_format_matches")
+            if dimensions == list(evidence.get("expected_dimensions") or []):
+                checks.append("image_dimensions_match")
+        except (OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+            pass
+        required = {"output_nonempty", "output_size_bounded", "image_decodes", "image_format_matches", "image_dimensions_match"}
+    elif kind == "av" and primary.is_file():
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration,format_name:stream=codec_type", "-of", "json", str(primary)],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            data = json.loads(result.stdout) if result.returncode == 0 else {}
+            duration = float(data.get("format", {}).get("duration") or 0)
+            stream_types = [str(row.get("codec_type")) for row in data.get("streams", [])]
+            qa_evidence.update({"duration_seconds": duration, "stream_types": stream_types, "format_name": data.get("format", {}).get("format_name")})
+            if duration > 0:
+                checks.append("media_probe_valid")
+            if evidence.get("require_audio") and "audio" in stream_types:
+                checks.append("audio_stream_present")
+            if evidence.get("require_video") and "video" in stream_types:
+                checks.append("video_stream_present")
+            expected_duration = evidence.get("expected_duration_seconds")
+            if expected_duration is None or abs(duration - float(expected_duration)) <= 1.0:
+                checks.append("duration_within_tolerance")
+            expected_format = str(evidence.get("expected_format") or "")
+            actual_formats = set(str(data.get("format", {}).get("format_name") or "").split(","))
+            matches = (
+                (expected_format == "mp4" and "mp4" in actual_formats)
+                or (expected_format == "webm" and "webm" in actual_formats)
+                or (expected_format == "mp3" and "mp3" in actual_formats)
+                or (expected_format == "wav" and "wav" in actual_formats)
+            )
+            if matches:
+                checks.append("media_format_matches")
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, TypeError, ValueError):
+            pass
+        required = {"output_nonempty", "output_size_bounded", "media_probe_valid", "duration_within_tolerance", "media_format_matches"}
+        if evidence.get("require_audio"):
+            required.add("audio_stream_present")
+        if evidence.get("require_video"):
+            required.add("video_stream_present")
+    else:
+        required = {"unsupported_media_evidence"}
+    passed = required.issubset(checks)
+    return QAOutcome(passed=passed, check_type="deterministic_media", score=1.0 if passed else 0.0, checks=checks, evidence=qa_evidence)
+
+
 def run_qa(profile: str, primary: Path, worker_evidence: dict[str, Any] | None = None) -> QAOutcome:
     evidence = worker_evidence if isinstance(worker_evidence, dict) else {}
     if profile == "csv":
@@ -180,4 +250,6 @@ def run_qa(profile: str, primary: Path, worker_evidence: dict[str, Any] | None =
         return _code_patch_outcome(primary, evidence)
     if profile == "ci":
         return _ci_outcome(primary, evidence)
+    if profile == "media":
+        return _media_outcome(primary, evidence)
     raise ValueError(f"unsupported QA profile: {profile}")

@@ -1,7 +1,7 @@
 FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-client gnupg \
+    && apt-get install -y --no-install-recommends postgresql-client gnupg ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 RUN addgroup --system amarktai && adduser --system --ingroup amarktai amarktai
 WORKDIR /app

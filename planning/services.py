@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import os
+import re
 from pathlib import Path
 
 from django.db import transaction
@@ -111,12 +112,27 @@ def _target_language(job: Job) -> str:
     return ""
 
 
+def _time_seconds(value: str) -> float:
+    parts = [int(item) for item in value.split(":")]
+    if len(parts) == 2:
+        minutes, seconds = parts
+        hours = 0
+    elif len(parts) == 3:
+        hours, minutes, seconds = parts
+    else:
+        raise ValueError("invalid media timestamp")
+    if minutes > 59 or seconds > 59:
+        raise ValueError("invalid media timestamp")
+    return float(hours * 3600 + minutes * 60 + seconds)
+
+
 def _infer_operation(job: Job, asset: JobAsset | None) -> tuple[str, dict, list[str]]:
     text = _instruction_text(job)
     raw_instructions = "\n".join(_instruction_parts(job))
     suffix = Path(asset.path).suffix.casefold() if asset is not None else ""
     data_suffixes = {".json", ".csv"}
     document_suffixes = {".pdf", ".docx", ".txt", ".md"}
+    image_suffixes = {".jpg", ".jpeg", ".png", ".webp"}
     media_suffixes = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm"}
 
     if asset is None and any(term in text for term in ("research", "investigate", "web research", "find sources")):
@@ -128,6 +144,28 @@ def _infer_operation(job: Job, asset: JobAsset | None) -> tuple[str, dict, list[
         return "json_to_csv", {"operation": "json_to_csv", "source": asset.path, "asset_id": asset.id}, []
     if suffix == ".csv" and any(term in text for term in ("normalize", "normalise", "clean csv", "clean the csv", "trim whitespace", "standardize", "standardise")):
         return "csv_normalize", {"operation": "csv_normalize", "source": asset.path, "asset_id": asset.id}, []
+
+    if suffix in image_suffixes:
+        match = re.search(r"\bresize(?: the)? image to (\d{1,5})\s*x\s*(\d{1,5})\b", text)
+        if match:
+            return "image_resize", {"operation": "image_resize", "source": asset.path, "asset_id": asset.id, "width": int(match.group(1)), "height": int(match.group(2)), "output_format": "JPEG" if suffix in {".jpg", ".jpeg"} else suffix[1:].upper()}, []
+        match = re.search(r"\b(?:create|make)(?: a)? (?:bounded )?thumbnail(?: of)? (\d{1,5})\s*x\s*(\d{1,5})\b", text)
+        if match:
+            return "image_thumbnail", {"operation": "image_thumbnail", "source": asset.path, "asset_id": asset.id, "width": int(match.group(1)), "height": int(match.group(2)), "output_format": "JPEG" if suffix in {".jpg", ".jpeg"} else suffix[1:].upper()}, []
+        match = re.search(r"\bcenter(?:ed)? crop(?: the)? image to (\d{1,5})\s*x\s*(\d{1,5})\b", text)
+        if match:
+            return "image_center_crop", {"operation": "image_center_crop", "source": asset.path, "asset_id": asset.id, "width": int(match.group(1)), "height": int(match.group(2)), "output_format": "JPEG" if suffix in {".jpg", ".jpeg"} else suffix[1:].upper()}, []
+        match = re.search(r"\bconvert(?: the)? (?:image|png|jpe?g|webp)?\s*(?:to|as) (jpe?g|png|webp)(?: (?:at )?quality (\d{2}))?\b", text)
+        if match:
+            target = "JPEG" if match.group(1) in {"jpg", "jpeg"} else match.group(1).upper()
+            spec = {"operation": "image_convert", "source": asset.path, "asset_id": asset.id, "output_format": target}
+            if match.group(2):
+                spec["quality"] = int(match.group(2))
+            return "image_convert", spec, []
+        match = re.search(r"\b(?:compress|optimi[sz]e)(?: the)? image (?:to|as) (jpe?g|webp) quality (\d{2})\b", text)
+        if match:
+            target = "JPEG" if match.group(1) in {"jpg", "jpeg"} else "WEBP"
+            return "image_compress", {"operation": "image_compress", "source": asset.path, "asset_id": asset.id, "output_format": target, "quality": int(match.group(2))}, []
 
     if suffix in document_suffixes:
         if any(term in text for term in ("translate", "translation", "localize", "localise", "localization", "localisation")):
@@ -145,7 +183,25 @@ def _infer_operation(job: Job, asset: JobAsset | None) -> tuple[str, dict, list[
     if suffix in media_suffixes and any(term in text for term in ("transcribe", "transcription", "speech to text", "speech-to-text")):
         return "transcribe_media", {"operation": "transcribe_media", "source": asset.path, "asset_id": asset.id}, []
 
-    if suffix not in data_suffixes | document_suffixes | media_suffixes:
+    if suffix in media_suffixes:
+        match = re.search(r"\btrim (?:the )?(?:audio|video|media) from (\d{1,2}:\d{2}(?::\d{2})?) to (\d{1,2}:\d{2}(?::\d{2})?)\b", text)
+        if match:
+            try:
+                start, end = _time_seconds(match.group(1)), _time_seconds(match.group(2))
+            except ValueError:
+                return "", {}, ["MEDIA_TIME_RANGE_INVALID"]
+            output = "mp4" if suffix in {".mp4", ".mov"} else "webm" if suffix == ".webm" else "mp3" if suffix != ".wav" else "wav"
+            return "media_trim", {"operation": "media_trim", "source": asset.path, "asset_id": asset.id, "start_seconds": start, "end_seconds": end, "output_format": output}, []
+        match = re.search(r"\bextract (?:the )?audio (?:track )?(?:to|as) (mp3|wav)\b", text)
+        if match and suffix in {".mp4", ".mov", ".webm"}:
+            return "media_extract_audio", {"operation": "media_extract_audio", "source": asset.path, "asset_id": asset.id, "output_format": match.group(1)}, []
+        match = re.search(r"\b(?:transcode|convert)(?: the)? (?:audio|video|media) (?:to|as) (mp4|webm|mp3|wav)\b", text)
+        if match:
+            if suffix in {".mp3", ".wav", ".m4a", ".ogg", ".flac"} and match.group(1) in {"mp4", "webm"}:
+                return "", {}, ["MEDIA_OUTPUT_INCOMPATIBLE"]
+            return "media_transcode", {"operation": "media_transcode", "source": asset.path, "asset_id": asset.id, "output_format": match.group(1)}, []
+
+    if suffix not in data_suffixes | document_suffixes | image_suffixes | media_suffixes:
         return "", {}, ["SOURCE_TYPE_NOT_SUPPORTED_BY_REGISTERED_WORKER"]
     return "", {}, ["TRANSFORMATION_NOT_UNAMBIGUOUS"]
 
