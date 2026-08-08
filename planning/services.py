@@ -13,7 +13,7 @@ from django.utils import timezone
 
 from control.models import AuditEvent, GenXCall, Job, QAResult, Submission
 from planning.asset_policy import AssetPolicyError, inspect_asset, safe_asset_name, validate_role
-from planning.models import JobAsset, JobAssetManifest, WorkPlan, WorkPlanStep, WorkPlanStepDependency
+from planning.models import JobAsset, JobAssetManifest, RepositorySnapshot, WorkPlan, WorkPlanStep, WorkPlanStepDependency
 from workers.registry import WorkerRegistryError, operation_spec
 from control.services.workload_policy import evaluate_job
 
@@ -193,11 +193,65 @@ def _time_seconds(value: str) -> float:
 def _infer_operation(job: Job, asset: JobAsset | None) -> tuple[str, dict, list[str]]:
     text = _instruction_text(job)
     raw_instructions = "\n".join(_instruction_parts(job))
+    raw_payload = job.normalized_payload if isinstance(job.normalized_payload, dict) else {}
     suffix = Path(asset.path).suffix.casefold() if asset is not None else ""
-    data_suffixes = {".json", ".csv"}
+    data_suffixes = {".json", ".csv", ".xlsx"}
     document_suffixes = {".pdf", ".docx", ".txt", ".md"}
     image_suffixes = {".jpg", ".jpeg", ".png", ".webp"}
     media_suffixes = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm"}
+
+    explicit = str(raw_payload.get("operation") or "").strip()
+    if explicit:
+        try:
+            spec = operation_spec(explicit)
+        except WorkerRegistryError:
+            return "", {}, ["EXPLICIT_OPERATION_NOT_REGISTERED"]
+        raw_inputs = raw_payload.get("inputs") or {}
+        if not isinstance(raw_inputs, dict):
+            return "", {}, ["EXPLICIT_INPUT_SPEC_INVALID"]
+        inputs = dict(raw_inputs)
+        for key, value in raw_payload.items():
+            if key not in {"operation", "inputs", "workflow_steps", "asset_roles"}:
+                inputs.setdefault(key, value)
+        for unsafe_path in ("source", "sources", "repository_path"):
+            inputs.pop(unsafe_path, None)
+        inputs["operation"] = explicit
+        if asset is not None:
+            if spec.input_suffixes and suffix not in spec.input_suffixes:
+                return "", {}, ["INPUT_TYPE_NOT_SUPPORTED"]
+            inputs["source"] = asset.path
+            inputs["asset_id"] = asset.id
+        embedded_input = any(inputs.get(key) for key in ("content", "slides", "sections", "brief", "requirements", "url"))
+        snapshot = None
+        if explicit in {"defensive_code_review", "technical_documentation"}:
+            snapshot = RepositorySnapshot.objects.filter(job=job, status=RepositorySnapshot.Status.VERIFIED).first()
+        if asset is None and spec.input_suffixes and not embedded_input and not (explicit == "technical_documentation" and snapshot):
+            return "", {}, ["INPUT_ASSET_NOT_STAGED"]
+        if explicit == "public_web_extract":
+            public_reasons = []
+            if os.getenv("PUBLIC_WEB_DATA_ENABLED", "0") != "1":
+                public_reasons.append("PUBLIC_WEB_DATA_DISABLED")
+            if inputs.get("authorization_confirmed") is not True or inputs.get("terms_permit") is not True:
+                public_reasons.append("PUBLIC_WEB_POLICY_PROOF_REQUIRED")
+            if not str(inputs.get("purpose") or "").strip():
+                public_reasons.append("PUBLIC_WEB_PURPOSE_REQUIRED")
+            if public_reasons:
+                return "", {}, public_reasons
+        if explicit == "defensive_code_review":
+            defensive_reasons = []
+            if inputs.get("authorization_confirmed") is not True:
+                defensive_reasons.append("DEFENSIVE_REVIEW_AUTHORIZATION_REQUIRED")
+            if not str(inputs.get("scope") or "").strip():
+                defensive_reasons.append("DEFENSIVE_REVIEW_SCOPE_REQUIRED")
+            if defensive_reasons:
+                return "", {}, defensive_reasons
+        if explicit in {"defensive_code_review", "technical_documentation"}:
+            if snapshot and snapshot.path and Path(snapshot.path).is_dir():
+                inputs["repository_path"] = snapshot.path
+                inputs["repository_snapshot_id"] = snapshot.id
+            elif explicit == "defensive_code_review":
+                return "", {}, ["REPOSITORY_NOT_STAGED"]
+        return explicit, inputs, []
 
     if asset is None and any(term in text for term in ("research", "investigate", "web research", "find sources")):
         return "research_report", {"operation": "research_report", "query": job.title, "requirements": raw_instructions}, []
@@ -208,6 +262,14 @@ def _infer_operation(job: Job, asset: JobAsset | None) -> tuple[str, dict, list[
         return "json_to_csv", {"operation": "json_to_csv", "source": asset.path, "asset_id": asset.id}, []
     if suffix == ".csv" and any(term in text for term in ("normalize", "normalise", "clean csv", "clean the csv", "trim whitespace", "standardize", "standardise")):
         return "csv_normalize", {"operation": "csv_normalize", "source": asset.path, "asset_id": asset.id}, []
+    if suffix in data_suffixes and any(term in text for term in ("deduplicate", "de-duplicate", "remove duplicates")):
+        return "tabular_deduplicate", {"operation": "tabular_deduplicate", "source": asset.path, "asset_id": asset.id, "output_format": suffix.lstrip(".")}, []
+    if suffix in data_suffixes and any(term in text for term in ("spreadsheet report", "professional spreadsheet", "xlsx report")):
+        return "spreadsheet_report", {"operation": "spreadsheet_report", "source": asset.path, "asset_id": asset.id}, []
+    if suffix in data_suffixes and any(term in text for term in ("descriptive analysis", "data analysis report", "data quality report")):
+        return "data_analysis_report", {"operation": "data_analysis_report", "source": asset.path, "asset_id": asset.id}, []
+    if suffix in {".html", ".htm"} and any(term in text for term in ("seo audit", "content audit", "page audit")):
+        return "seo_content_audit", {"operation": "seo_content_audit", "source": asset.path, "asset_id": asset.id}, []
 
     if suffix in image_suffixes:
         match = re.search(r"\bresize(?: the)? image to (\d{1,5})\s*x\s*(\d{1,5})\b", text)
@@ -265,7 +327,7 @@ def _infer_operation(job: Job, asset: JobAsset | None) -> tuple[str, dict, list[
                 return "", {}, ["MEDIA_OUTPUT_INCOMPATIBLE"]
             return "media_transcode", {"operation": "media_transcode", "source": asset.path, "asset_id": asset.id, "output_format": match.group(1)}, []
 
-    if suffix not in data_suffixes | document_suffixes | image_suffixes | media_suffixes:
+    if suffix not in data_suffixes | document_suffixes | image_suffixes | media_suffixes | {".html", ".htm"}:
         return "", {}, ["SOURCE_TYPE_NOT_SUPPORTED_BY_REGISTERED_WORKER"]
     return "", {}, ["TRANSFORMATION_NOT_UNAMBIGUOUS"]
 

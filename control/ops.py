@@ -189,6 +189,9 @@ def agents_snapshot() -> dict:
         "transcription": (("transcription", "transcribe", "speech to text"), None),
         "code_small": (("code", "coding", "software"), "text"),
         "code_heavy": (("code", "coding", "software"), "text"),
+        "technical_documentation": ((), "text"),
+        "content_copy": ((), "text"),
+        "customer_support": ((), "text"),
     }
     rows = []
     for spec in manifest:
@@ -198,6 +201,8 @@ def agents_snapshot() -> dict:
             reasons.append("WORKER_DISABLED")
         if not spec["runtime_available"]:
             reasons.append("RUNTIME_UNAVAILABLE")
+        if spec["worker_class"] == "public_web_data" and os.getenv("PUBLIC_WEB_DATA_ENABLED", "0") != "1":
+            reasons.append("PUBLIC_WEB_DATA_DISABLED")
         sandbox_worker = spec["worker_class"] in {"code_small", "code_heavy", "ci_testing"}
         coding_worker = spec["worker_class"] in {"code_small", "code_heavy"}
         if sandbox_worker:

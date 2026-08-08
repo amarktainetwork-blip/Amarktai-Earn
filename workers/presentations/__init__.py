@@ -1,0 +1,1 @@
+"""Deterministic PPTX production worker."""

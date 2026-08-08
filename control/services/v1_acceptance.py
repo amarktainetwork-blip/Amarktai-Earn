@@ -135,13 +135,17 @@ def _resource_governor(*, ci_proven: bool) -> AcceptanceCriterion:
 
 
 def _worker_registry(*, ci_proven: bool) -> AcceptanceCriterion:
-    expected = {"structured_data", "documents", "research", "localization", "transcription", "code_small", "code_heavy", "ci_testing", "media"}
+    expected = {
+        "structured_data", "documents", "research", "localization", "transcription", "code_small", "code_heavy", "ci_testing", "media",
+        "advanced_structured_data", "spreadsheet_reporting", "data_analysis", "technical_documentation", "content_copy", "seo_audit",
+        "presentations", "document_production", "public_web_data", "web_output", "defensive_code_review", "customer_support",
+    }
     specs = all_specs()
     actual = {spec.worker_class for spec in specs}
     invalid = sorted(spec.worker_class for spec in specs if not spec.operations or not spec.qa_profile or not spec.factory)
     if actual != expected or invalid:
         return _criterion("worker_execution", "Registered worker execution paths", "FAIL", "SOURCE", f"Registry mismatch: missing={sorted(expected - actual)}, extra={sorted(actual - expected)}, invalid={invalid}.", "Restore complete registered V1 worker specifications.")
-    return _ci_gate("worker_execution", "Registered worker execution paths", "All nine V1 worker classes have production factories, operations, QA profiles, and completed deterministic/integration/container proofs.", ci_proven=ci_proven)
+    return _ci_gate("worker_execution", "Registered worker execution paths", "All expanded V1 worker classes have production factories, operations, independent QA profiles, and completed deterministic/integration/container proofs.", ci_proven=ci_proven)
 
 
 def _dashboard_contract(*, ci_proven: bool) -> AcceptanceCriterion:

@@ -35,7 +35,8 @@ class Phase8CCodingContractTests(unittest.TestCase):
             self.assertEqual(claims.max_credits, Decimal("2.5"))
             encoded, sig = token.split(".", 1)
             with self.assertRaises(SandboxTokenError):
-                verify_sandbox_token(encoded + "." + ("A" + sig[1:]))
+                replacement = "A" if sig[0] != "A" else "B"
+                verify_sandbox_token(encoded + "." + (replacement + sig[1:]))
             with self.assertRaises(SandboxTokenError):
                 verify_sandbox_token(token, now=claims.expires_at)
 
