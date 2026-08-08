@@ -141,7 +141,7 @@ def _prepare_dependencies(payload: dict[str, Any]) -> dict[str, Any]:
         _run([
             "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges:true", "--user", "0:0",
-            "-v", f"{volume_name}:/cache:rw", image, "/bin/bash", "-lc", "chown -R 10001:10001 /cache",
+            "-v", f"{volume_name}:/cache:rw", image, "/bin/bash", "-lc", "chmod 1777 /cache",
         ], timeout=60)
         container_name = "amarktai-dependency-" + secrets.token_hex(12)
         base = [

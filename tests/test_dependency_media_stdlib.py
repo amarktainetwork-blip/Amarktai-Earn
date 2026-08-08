@@ -38,6 +38,11 @@ class DependencyMediaContracts(unittest.TestCase):
         self.assertIn("dependency-prep-smoke.py", workflow)
         self.assertIn("docker-cli", (ROOT / "sandbox/broker.Dockerfile").read_text(encoding="utf-8"))
 
+    def test_dependency_cache_initialization_needs_no_chown_capability(self):
+        broker = (ROOT / "sandbox_broker/server.py").read_text(encoding="utf-8")
+        self.assertIn('"chmod 1777 /cache"', broker)
+        self.assertNotIn('"chown -R 10001:10001 /cache"', broker)
+
 
 if __name__ == "__main__":
     unittest.main()
