@@ -15,6 +15,7 @@ from control.models import (
     GenXCall,
     GenXModelCatalog,
     Job,
+    JobScore,
     ModelStat,
     Worker,
 )
@@ -146,7 +147,8 @@ class GenXGateway:
         request_key: str | None,
         metadata: dict[str, Any],
     ) -> tuple[GenXCall, bool]:
-        job = Job.objects.select_for_update().select_related("marketplace", "jobscore").get(pk=job_id)
+        job = Job.objects.select_for_update().select_related("marketplace").get(pk=job_id)
+        score = JobScore.objects.select_for_update().get(job=job)
         worker = Worker.objects.select_for_update().get(pk=worker_id)
         if request_key:
             existing = GenXCall.objects.filter(request_key=request_key).first()
@@ -161,7 +163,7 @@ class GenXGateway:
                 already_reserved=reserved,
                 estimated=estimated_credits,
                 call_limit=max_allowed_credits,
-                job_limit=job.jobscore.max_genx_credits,
+                job_limit=score.max_genx_credits,
             )
         except ValueError as exc:
             raise GenXBudgetExceeded(str(exc)) from exc
@@ -188,7 +190,7 @@ class GenXGateway:
                 "worker": worker.id,
                 "model": model,
                 "estimated_credits": str(estimated_credits),
-                "job_budget_credits": str(job.jobscore.max_genx_credits),
+                "job_budget_credits": str(score.max_genx_credits),
             },
         )
         return call, True
@@ -243,6 +245,10 @@ class GenXGateway:
             final = self.client.wait(external_job_id, timeout_seconds=wait_timeout_seconds)
             return self.reconcile(call.id, final, elapsed_ms=int((time.monotonic() - started) * 1000))
         except (GenXError, GenXGatewayError, TimeoutError) as exc:
+            # A timeout/network/server error after submission is not proof that the
+            # remote asynchronous job failed. Preserve the reservation and require
+            # reconciliation instead of enabling an unsafe replay. Only a confirmed
+            # 4xx rejection before a remote job id exists is treated as FAILED.
             confirmed_rejection = (
                 isinstance(exc, GenXError)
                 and exc.status_code is not None
