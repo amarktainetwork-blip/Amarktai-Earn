@@ -17,13 +17,14 @@ from workers.tabular import normalize_rows, safe_spreadsheet_value, write_xlsx
 class ExpandedWorkerContractTests(unittest.TestCase):
     def test_expanded_registry_has_unique_factories_operations_and_qa(self):
         specs = all_specs()
-        self.assertEqual(len(specs), 21)
-        self.assertEqual(len({row.worker_class for row in specs}), 21)
-        self.assertEqual(len(registered_operations()), 38)
+        self.assertEqual(len(specs), 23)
+        self.assertEqual(len({row.worker_class for row in specs}), 23)
+        self.assertEqual(len(registered_operations()), 40)
         expected = {
             "advanced_structured_data", "spreadsheet_reporting", "data_analysis", "technical_documentation",
             "content_copy", "seo_audit", "presentations", "document_production", "public_web_data",
             "web_output", "defensive_code_review", "customer_support",
+            "synthetic_data", "ai_safety_research",
         }
         self.assertTrue(expected.issubset({row.worker_class for row in specs}))
         for operation in registered_operations():

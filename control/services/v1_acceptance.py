@@ -139,6 +139,7 @@ def _worker_registry(*, ci_proven: bool) -> AcceptanceCriterion:
         "structured_data", "documents", "research", "localization", "transcription", "code_small", "code_heavy", "ci_testing", "media",
         "advanced_structured_data", "spreadsheet_reporting", "data_analysis", "technical_documentation", "content_copy", "seo_audit",
         "presentations", "document_production", "public_web_data", "web_output", "defensive_code_review", "customer_support",
+        "synthetic_data", "ai_safety_research",
     }
     specs = all_specs()
     actual = {spec.worker_class for spec in specs}

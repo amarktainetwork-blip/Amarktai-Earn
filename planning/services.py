@@ -245,6 +245,21 @@ def _infer_operation(job: Job, asset: JobAsset | None) -> tuple[str, dict, list[
                 defensive_reasons.append("DEFENSIVE_REVIEW_SCOPE_REQUIRED")
             if defensive_reasons:
                 return "", {}, defensive_reasons
+        if explicit == "synthetic_dataset_generate":
+            synthetic_reasons = []
+            if inputs.get("rights_confirmed") is not True or not isinstance(inputs.get("provenance"), dict) or not inputs.get("provenance"):
+                synthetic_reasons.append("SYNTHETIC_RIGHTS_AND_PROVENANCE_REQUIRED")
+            if not isinstance(inputs.get("schema"), dict) or not isinstance(inputs.get("generation_plan"), dict):
+                synthetic_reasons.append("SYNTHETIC_SCHEMA_AND_PLAN_REQUIRED")
+            if str(inputs.get("mode") or "COMMISSIONED").upper() == "INVENTORY" and not (
+                inputs.get("inventory_demand_evidence") and inputs.get("inventory_budget_authorized") is True
+                and os.getenv("SYNTHETIC_SPECULATIVE_INVENTORY_ENABLED", "0") == "1"
+            ):
+                synthetic_reasons.append("SYNTHETIC_INVENTORY_NOT_EXPLICITLY_AUTHORIZED")
+            if synthetic_reasons:
+                return "", {}, synthetic_reasons
+        if explicit == "ai_safety_evaluate":
+            return "", {}, ["SAFETY_AUTHORIZATION_SERVICE_REQUIRED"]
         if explicit in {"defensive_code_review", "technical_documentation"}:
             if snapshot and snapshot.path and Path(snapshot.path).is_dir():
                 inputs["repository_path"] = snapshot.path

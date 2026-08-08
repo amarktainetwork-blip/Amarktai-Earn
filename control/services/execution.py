@@ -236,6 +236,12 @@ def execute_registered_job(
             current_job=None if qa.passed else job,
             last_heartbeat=timezone.now(),
         )
+        if operation == "synthetic_dataset_generate":
+            from control.services.synthetic_data import persist_synthetic_dataset_run
+
+            persist_synthetic_dataset_run(
+                job=job, execution=execution, evidence=result.evidence, qa_passed=qa.passed,
+            )
         AuditEvent.objects.create(
             event_type="job.qa_passed" if qa.passed else "job.qa_failed",
             actor="qa-runtime",

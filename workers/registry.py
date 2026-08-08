@@ -233,6 +233,26 @@ _SPECS: tuple[WorkerSpec, ...] = (
         input_suffixes=(),
         requires_genx=False,
     ),
+    WorkerSpec(
+        worker_class="synthetic_data",
+        version="1.0.0",
+        factory="workers.synthetic_data.worker.SyntheticDataWorker",
+        operations=("synthetic_dataset_generate",),
+        qa_profile="synthetic_dataset",
+        description="Commissioned schema-driven synthetic datasets with validation, privacy/provenance gates, splits, cards, and independent reopen QA",
+        input_suffixes=(),
+        requires_genx=False,
+    ),
+    WorkerSpec(
+        worker_class="ai_safety_research",
+        version="1.0.0",
+        factory="workers.ai_safety_research.worker.AISafetyResearchWorker",
+        operations=("ai_safety_evaluate",),
+        qa_profile="ai_safety_research",
+        description="Persisted-scope, bounded, offline AI-safety evaluation of supplied/local authorized targets only",
+        input_suffixes=(),
+        requires_genx=False,
+    ),
 )
 
 _BY_CLASS = {spec.worker_class: spec for spec in _SPECS}

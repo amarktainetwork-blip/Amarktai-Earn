@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import json
 import subprocess
+from collections import Counter
 from html.parser import HTMLParser
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -393,6 +394,76 @@ def _defensive_review_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutc
     return QAOutcome(passed=passed, check_type="deterministic_defensive_review", score=1.0 if passed else 0.0, checks=checks, evidence={"files_scanned": evidence.get("files_scanned"), "finding_count": evidence.get("finding_count")})
 
 
+def _synthetic_dataset_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    checks = []
+    rows = []
+    try:
+        rows = [json.loads(line) for line in primary.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except (OSError, json.JSONDecodeError):
+        rows = []
+    schema = evidence.get("schema") if isinstance(evidence.get("schema"), dict) else {}
+    fields = schema.get("fields") if isinstance(schema.get("fields"), dict) else {}
+    if rows and len(rows) == int(evidence.get("accepted_records") or -1):
+        checks.append("accepted_count_reopened")
+    if rows and all(set(row) == {*fields, "_split"} for row in rows if isinstance(row, dict)):
+        checks.append("schema_fields_exact")
+    canonical = [json.dumps({key: value for key, value in row.items() if key != "_split"}, sort_keys=True, ensure_ascii=False) for row in rows]
+    if canonical and len(canonical) == len(set(canonical)):
+        checks.append("no_cross_split_duplicates")
+    split_counts = Counter(str(row.get("_split")) for row in rows if isinstance(row, dict))
+    if dict(split_counts) == evidence.get("split_counts"):
+        checks.append("split_distribution_reopened")
+    card_path = Path(str(evidence.get("dataset_card_path") or ""))
+    try:
+        card_text = card_path.read_text(encoding="utf-8")
+    except OSError:
+        card_text = ""
+    if "# Synthetic Dataset Card" in card_text and "Privacy/provenance" in card_text:
+        checks.append("dataset_card_present")
+    if evidence.get("rights_confirmed") is True and evidence.get("provenance"):
+        checks.append("rights_and_provenance_recorded")
+    if int(evidence.get("pii_rejected") or 0) >= 0 and int(evidence.get("contamination_rejected") or 0) >= 0:
+        checks.append("privacy_and_contamination_metrics_recorded")
+    required = {
+        "accepted_count_reopened", "schema_fields_exact", "no_cross_split_duplicates",
+        "split_distribution_reopened", "dataset_card_present", "rights_and_provenance_recorded",
+        "privacy_and_contamination_metrics_recorded",
+    }
+    passed = required.issubset(checks)
+    return QAOutcome(
+        passed=passed, check_type="deterministic_synthetic_dataset", score=1.0 if passed else 0.0,
+        checks=checks, evidence={"reopened_records": len(rows), "split_counts": dict(split_counts)},
+    )
+
+
+def _ai_safety_outcome(primary: Path, evidence: dict[str, Any]) -> QAOutcome:
+    text = _text_file(primary)
+    checks = []
+    if "# Authorized AI Safety Research Report" in text and len(text) >= 300:
+        checks.append("professional_report_present")
+    if evidence.get("authorization_hash") and evidence.get("scope_version_id") and evidence.get("target_id"):
+        checks.append("persisted_authorization_boundary")
+    executed = int(evidence.get("requests_executed") or 0)
+    maximum = int(evidence.get("max_requests") or 0)
+    if 0 < executed <= maximum and int(evidence.get("rate_limit_per_minute") or 0) > 0:
+        checks.append("request_and_rate_bounds_recorded")
+    if evidence.get("network_testing_performed") is False and evidence.get("remote_target_interaction") is False:
+        checks.append("offline_fixture_boundary_preserved")
+    if evidence.get("raw_prompts_in_artifact") is False and evidence.get("private_target_data_in_artifact") is False:
+        checks.append("sensitive_and_harmful_details_excluded")
+    if "independent reproduction" in text.casefold() and "duplicate check" in text.casefold():
+        checks.append("submission_gate_documented")
+    required = {
+        "professional_report_present", "persisted_authorization_boundary", "request_and_rate_bounds_recorded",
+        "offline_fixture_boundary_preserved", "sensitive_and_harmful_details_excluded", "submission_gate_documented",
+    }
+    passed = required.issubset(checks)
+    return QAOutcome(
+        passed=passed, check_type="deterministic_ai_safety_research", score=1.0 if passed else 0.0,
+        checks=checks, evidence={"requests_executed": executed, "candidate_findings": len(evidence.get("findings") or [])},
+    )
+
+
 def run_qa(profile: str, primary: Path, worker_evidence: dict[str, Any] | None = None) -> QAOutcome:
     evidence = worker_evidence if isinstance(worker_evidence, dict) else {}
     if profile == "csv":
@@ -438,4 +509,8 @@ def run_qa(profile: str, primary: Path, worker_evidence: dict[str, Any] | None =
         return _static_html_outcome(primary, evidence)
     if profile == "defensive_review":
         return _defensive_review_outcome(primary, evidence)
+    if profile == "synthetic_dataset":
+        return _synthetic_dataset_outcome(primary, evidence)
+    if profile == "ai_safety_research":
+        return _ai_safety_outcome(primary, evidence)
     raise ValueError(f"unsupported QA profile: {profile}")

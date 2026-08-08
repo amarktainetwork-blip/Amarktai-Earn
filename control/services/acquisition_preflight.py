@@ -156,6 +156,33 @@ def run_acquisition_preflight(job, *, persist: bool = True):
             reasons.append("DEFENSIVE_REVIEW_SCOPE_REQUIRED")
         if not any(str(payload.get(key) or "").strip() for key in ("repository_url", "repo_url", "github_url", "repository")):
             reasons.append("REPOSITORY_NOT_DECLARED")
+    if operation == "synthetic_dataset_generate":
+        if payload.get("rights_confirmed") is not True or not isinstance(payload.get("provenance"), dict) or not payload.get("provenance"):
+            reasons.append("SYNTHETIC_RIGHTS_AND_PROVENANCE_REQUIRED")
+        if not isinstance(payload.get("schema"), dict) or not isinstance(payload.get("generation_plan"), dict):
+            reasons.append("SYNTHETIC_SCHEMA_AND_PLAN_REQUIRED")
+        if str(payload.get("mode") or "COMMISSIONED").upper() == "INVENTORY" and not (
+            payload.get("inventory_demand_evidence") and payload.get("inventory_budget_authorized") is True
+            and os.getenv("SYNTHETIC_SPECULATIVE_INVENTORY_ENABLED", "0") == "1"
+        ):
+            reasons.append("SYNTHETIC_INVENTORY_NOT_EXPLICITLY_AUTHORIZED")
+    if operation == "ai_safety_evaluate":
+        from control.models import BountyProgram
+
+        program_id = payload.get("bounty_program_id")
+        canonical_target = str(payload.get("canonical_target") or "")
+        test_type = str(payload.get("test_type") or "").upper()
+        program = BountyProgram.objects.filter(pk=program_id, status=BountyProgram.Status.ACTIVE, execution_enabled=True, automation_allowed=True).first()
+        scope = program.scope_versions.filter(active=True, effective_at__lte=timezone.now(), expires_at__gt=timezone.now()).order_by("-version").first() if program else None
+        if not scope:
+            reasons.append("NO_SCOPE_NO_TESTING")
+        else:
+            if test_type not in {str(value).upper() for value in scope.allowed_test_types}:
+                reasons.append("SAFETY_TEST_TYPE_NOT_PERMITTED")
+            if not scope.authorized_targets.filter(canonical_target=canonical_target, active=True).exists():
+                reasons.append("TARGET_NOT_IN_CURRENT_SCOPE")
+        if os.getenv("SAFETY_BOUNTY_EXECUTION_ENABLED", "0") != "1":
+            reasons.append("SAFETY_BOUNTY_EXECUTION_DISABLED")
 
     market_policy = MarketPolicyVersion.objects.filter(marketplace=job.marketplace).order_by("-checked_at", "-created_at").first()
     if not market_policy or not market_policy.automation_allowed:
