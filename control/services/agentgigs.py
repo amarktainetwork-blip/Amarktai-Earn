@@ -39,6 +39,7 @@ from control.services.profit_brain import (
     discovery_limit,
     persist_pricing_strategy,
     recommend_price,
+    record_reputation_snapshot,
     refresh_profit_intelligence,
 )
 from markets.agentgigs.client import AgentGigsAdapter, AgentGigsError
@@ -146,6 +147,26 @@ def sync_market(adapter: AgentGigsAdapter | None = None, discover_limit: int = 1
                 market.fee_rate = parsed
                 market.save(update_fields=["fee_rate", "updated_at"])
         except Exception:
+            pass
+
+    agent_id = os.getenv("AGENTGIGS_AGENT_ID", "").strip()
+    if health.get("ok") and agent_id:
+        try:
+            payload = adapter.reputation(agent_id)
+            reputation = payload.get("reputation") if isinstance(payload.get("reputation"), dict) else {}
+            record_reputation_snapshot(
+                marketplace=market,
+                source="agentgigs_public_api",
+                rating=reputation.get("rating"),
+                rating_count=len(payload.get("recentReviews", [])) if isinstance(payload.get("recentReviews"), list) else 0,
+                completed_jobs=int(reputation.get("completedJobs") or 0),
+                details={
+                    "completion_rate": reputation.get("completionRate"),
+                    "trust_level": reputation.get("trustLevel"),
+                    "agent_verified": bool((payload.get("agent") or {}).get("verified")) if isinstance(payload.get("agent"), dict) else False,
+                },
+            )
+        except (AgentGigsError, TypeError, ValueError):
             pass
 
     discovered = 0

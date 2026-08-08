@@ -261,6 +261,10 @@ def markets_snapshot() -> dict:
         except Exception:
             health = None
         policy = market.policy_versions.order_by("-checked_at", "-created_at").first()
+        try:
+            profile = market.integration_profile
+        except Exception:
+            profile = None
         preflight = AcquisitionPreflight.objects.filter(job__marketplace=market).order_by("-created_at").first()
         blockers = []
         if not market.enabled:
@@ -273,6 +277,8 @@ def markets_snapshot() -> dict:
             blockers.append("SOUTH_AFRICA_NOT_VERIFIED")
         if policy is None or not policy.automation_allowed:
             blockers.append("AUTOMATION_POLICY_NOT_APPROVED")
+        if profile:
+            blockers.extend(profile.blockers)
         if preflight and not preflight.allowed:
             blockers.extend(preflight.reason_codes)
         rows.append({
@@ -283,7 +289,20 @@ def markets_snapshot() -> dict:
             "south_africa_verified": market.south_africa_verified,
             "fee_rate": _dec(market.fee_rate),
             "autonomy_mode": current_mode().value,
-            "auto_acquisition_switch": os.getenv("AGENTGIGS_AUTO_APPLY_ENABLED", "0") == "1" if market.slug == "agentgigs" else False,
+            "auto_acquisition_switch": (
+                os.getenv("AGENTGIGS_AUTO_APPLY_ENABLED", "0") == "1" if market.slug == "agentgigs"
+                else os.getenv(f"{market.slug.upper().replace('-', '_')}_AUTO_ACQUIRE_ENABLED", "0") == "1"
+            ),
+            "adapter": profile.adapter_name if profile else "",
+            "adapter_version": profile.adapter_version if profile else "",
+            "source_wired": profile.source_wired if profile else False,
+            "adapter_capabilities": profile.capabilities if profile else {},
+            "adapter_sources": profile.source_urls if profile else [],
+            "adapter_docs_checked": _dt(profile.docs_checked_at) if profile else None,
+            "adapter_policy_verified": profile.policy_verified if profile else False,
+            "adapter_acquisition_enabled": profile.autonomous_acquisition_enabled if profile else False,
+            "rate_limit": profile.rate_limit if profile else "",
+            "payout_method": profile.payout_method if profile else market.payment_model,
             "policy_automation_allowed": policy.automation_allowed if policy else None,
             "policy_webdock_compatible": policy.webdock_compatible if policy else None,
             "policy_checked": _dt(policy.checked_at) if policy else None,

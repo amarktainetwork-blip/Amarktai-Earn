@@ -99,9 +99,24 @@ def run_acquisition_preflight(job, *, persist: bool = True):
 
     policy = evaluate_job(job)
     reasons.extend(policy.reason_codes)
-    switch_enabled = os.getenv("AGENTGIGS_AUTO_APPLY_ENABLED", "0") == "1"
+    try:
+        integration_profile = job.marketplace.integration_profile
+    except Exception:
+        integration_profile = None
+    market_switch_name = f"{job.marketplace.slug.upper().replace('-', '_')}_AUTO_ACQUIRE_ENABLED"
+    legacy_switch = os.getenv("AGENTGIGS_AUTO_APPLY_ENABLED", "0") == "1" if job.marketplace.slug == "agentgigs" else False
+    configured_switch = os.getenv(market_switch_name, "1" if legacy_switch else "0") == "1"
+    switch_enabled = configured_switch and (
+        integration_profile.autonomous_acquisition_enabled if integration_profile is not None else True
+    )
     autonomy = acquisition_autonomy(switch_enabled=switch_enabled)
     reasons.extend(autonomy.reason_codes)
+    if integration_profile is not None:
+        if not integration_profile.policy_verified:
+            reasons.append("MARKET_ADAPTER_POLICY_NOT_VERIFIED")
+        if not integration_profile.autonomous_acquisition_enabled:
+            reasons.append("MARKET_AUTONOMOUS_ACQUISITION_DISABLED")
+        reasons.extend(str(reason) for reason in integration_profile.blockers)
 
     enabled_operations = {item.strip() for item in os.getenv("ACQUISITION_ENABLED_OPERATIONS", "json_to_csv,csv_normalize").split(",") if item.strip()}
     if not operation or operation not in enabled_operations:
@@ -209,6 +224,8 @@ def run_acquisition_preflight(job, *, persist: bool = True):
             "opportunity_cost": str(economic.opportunity_cost),
             "exploration": economic.exploration,
             "reputation_investment": economic.reputation_investment,
+            "market_adapter": integration_profile.adapter_name if integration_profile else "",
+            "market_adapter_capabilities": integration_profile.capabilities if integration_profile else {},
         },
     }
     if persist:
