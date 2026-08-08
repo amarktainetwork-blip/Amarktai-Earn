@@ -1,0 +1,11 @@
+# OpenHands 1.16.0 allows lmnr releases whose OpenTelemetry lower bounds can
+# otherwise resolve to an internally incompatible mix. Keep the observability
+# stack on the matching 1.39.1/0.60b1 release train used by lmnr.
+lmnr==0.7.58
+opentelemetry-api==1.39.1
+opentelemetry-sdk==1.39.1
+opentelemetry-semantic-conventions==0.60b1
+opentelemetry-instrumentation==0.60b1
+opentelemetry-instrumentation-threading==0.60b1
+opentelemetry-exporter-otlp-proto-http==1.39.1
+opentelemetry-exporter-otlp-proto-grpc==1.39.1

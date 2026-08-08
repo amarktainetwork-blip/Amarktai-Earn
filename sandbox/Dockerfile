@@ -6,8 +6,10 @@ RUN apt-get update \
 RUN python -m venv /opt/aider-venv \
     && /opt/aider-venv/bin/pip install --no-cache-dir aider-chat==0.86.2 \
     && ln -s /opt/aider-venv/bin/aider /usr/local/bin/aider
+COPY sandbox/openhands-constraints.txt /tmp/openhands-constraints.txt
 RUN python -m venv /opt/openhands-venv \
-    && /opt/openhands-venv/bin/pip install --no-cache-dir openhands==1.16.0 \
+    && /opt/openhands-venv/bin/pip install --no-cache-dir \
+        --constraint /tmp/openhands-constraints.txt openhands==1.16.0 \
     && ln -s /opt/openhands-venv/bin/openhands /usr/local/bin/openhands
 RUN pip install --no-cache-dir pytest==8.4.2 ruff==0.12.11
 RUN useradd --uid 10001 --create-home --shell /bin/bash sandbox \

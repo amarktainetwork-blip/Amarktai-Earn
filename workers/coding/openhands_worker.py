@@ -10,7 +10,7 @@ class OpenHandsCodingWorker(Worker):
     def execute(self, request: WorkRequest) -> WorkResult:
         try:
             result = run_ai_coding_sandbox(request, agent="openhands")
-            patch = request.workspace / "changes.patch"
+            patch = request.workspace / "changes.patch.txt"
             patch.write_text(str(result.get("patch") or ""), encoding="utf-8")
             log = request.workspace / "sandbox.log"
             log.write_text(str(result.get("agent_log") or ""), encoding="utf-8")

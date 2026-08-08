@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from control.sandbox_tokens import SandboxTokenError, issue_sandbox_token, verify_sandbox_token
+from markets.agentgigs.client import AgentGigsAdapter
 from sandbox_broker.server import _security_args
 from workers.qa.runtime import run_qa
 from workers.registry import operation_spec, registry_manifest
@@ -51,6 +52,7 @@ class Phase8CCodingContractTests(unittest.TestCase):
         self.assertNotIn("/var/run/docker.sock", text)
         broker = (ROOT / "sandbox_broker" / "server.py").read_text(encoding="utf-8")
         self.assertIn("git tag amarktai-baseline", broker)
+        self.assertIn("git add -N -- .", broker)
         self.assertIn("git diff --binary --no-ext-diff amarktai-baseline", broker)
         self.assertIn("hmac.compare_digest", broker)
 
@@ -70,6 +72,10 @@ class Phase8CCodingContractTests(unittest.TestCase):
         runner = (ROOT / "sandbox" / "run-agent.sh").read_text(encoding="utf-8")
         self.assertIn("aider-chat==0.86.2", dockerfile)
         self.assertIn("openhands==1.16.0", dockerfile)
+        self.assertIn("openhands-constraints.txt", dockerfile)
+        constraints = (ROOT / "sandbox" / "openhands-constraints.txt").read_text(encoding="utf-8")
+        self.assertIn("opentelemetry-sdk==1.39.1", constraints)
+        self.assertIn("opentelemetry-semantic-conventions==0.60b1", constraints)
         self.assertIn("USER 10001:10001", dockerfile)
         self.assertIn("--no-stream", runner)
         self.assertIn("--config /dev/null", runner)
@@ -80,7 +86,7 @@ class Phase8CCodingContractTests(unittest.TestCase):
     def test_code_and_ci_qa_require_independent_test_success(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            patch_file = root / "changes.patch"
+            patch_file = root / "changes.patch.txt"
             patch_file.write_text("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n+fixed\n", encoding="utf-8")
             outcome = run_qa("code_patch", patch_file, {"agent_exit_code": 0, "test_exit_code": 0, "sandbox_id": "s1"})
             self.assertTrue(outcome.passed)
@@ -91,6 +97,12 @@ class Phase8CCodingContractTests(unittest.TestCase):
             report.write_text("3 passed", encoding="utf-8")
             self.assertTrue(run_qa("ci", report, {"test_exit_code": 0}).passed)
             self.assertFalse(run_qa("ci", report, {"test_exit_code": 1}).passed)
+
+    def test_code_patch_deliverable_uses_agentgigs_supported_suffix(self):
+        for worker_path in ("aider_worker.py", "openhands_worker.py"):
+            source = (ROOT / "workers" / "coding" / worker_path).read_text(encoding="utf-8")
+            self.assertIn('"changes.patch.txt"', source)
+        self.assertIn(".txt", AgentGigsAdapter.ALLOWED_DELIVERABLE_SUFFIXES)
 
     def test_planner_and_proxy_fail_closed_contracts_are_present(self):
         planner = (ROOT / "planning" / "coding.py").read_text(encoding="utf-8")

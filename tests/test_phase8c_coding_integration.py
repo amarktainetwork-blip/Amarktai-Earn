@@ -139,7 +139,7 @@ class Phase8CCodingAgentIntegrationTests(TestCase):
             plan = execute_work_plan(plan.id)
         self.assertEqual(plan.status, WorkPlan.Status.QA_PASSED)
         self.assertEqual(broker.calls[0]["agent"], "aider")
-        self.assertTrue(Artifact.objects.filter(job=job, path__endswith="changes.patch").exists())
+        self.assertTrue(Artifact.objects.filter(job=job, path__endswith="changes.patch.txt").exists())
         self.assertTrue(QAResult.objects.filter(job=job, check_type="sandbox_code_patch", passed=True).exists())
         self._assert_visible(job, "code_small")
 
@@ -289,8 +289,11 @@ def _tar_bytes(entries):
         root = tarfile.TarInfo("demo-root/")
         root.type = tarfile.DIRTYPE
         archive.addfile(root)
-        for name, data, kind in entries:
+        for entry in entries:
+            name, data, kind, *mode = entry
             info = tarfile.TarInfo("demo-root/" + name)
+            if mode:
+                info.mode = mode[0]
             if kind == "file":
                 raw = data if isinstance(data, bytes) else str(data).encode()
                 info.size = len(raw)
@@ -343,3 +346,48 @@ class Phase8CGitHubRepositoryIntegrationTests(TestCase):
                 archive.addfile(info, io.BytesIO(raw))
             with self.assertRaises(GitHubRepositoryError):
                 _safe_extract_tar(buffer.getvalue(), destination, max_files=10, max_unpacked_bytes=1024)
+
+    def test_archive_extraction_preserves_only_owner_executable_bit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "safe"
+            archive = _tar_bytes([
+                ("scripts/test.sh", b"#!/bin/sh\n", "file", 0o755),
+                ("README.md", b"read me\n", "file", 0o644),
+            ])
+            _safe_extract_tar(archive, destination, max_files=10, max_unpacked_bytes=1024)
+            if os.name != "nt":
+                self.assertEqual((destination / "scripts" / "test.sh").stat().st_mode & 0o777, 0o700)
+                self.assertEqual((destination / "README.md").stat().st_mode & 0o777, 0o600)
+
+    def test_planner_rejects_verified_snapshot_for_changed_repository(self):
+        market = Marketplace.objects.create(slug="phase8c-stale", display_name="Phase 8C Stale")
+        job = Job.objects.create(
+            marketplace=market,
+            external_id="repo-stale",
+            title="Fix bug in code",
+            task_class="Coding",
+            reward="20.00",
+            state=Job.State.AWARDED,
+            normalized_payload={
+                "repository_url": "https://github.com/example/new-repo",
+                "repository_ref": "release",
+                "test_command": "pytest -q",
+            },
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot_path = Path(tmp) / "snapshot"
+            snapshot_path.mkdir()
+            RepositorySnapshot.objects.create(
+                job=job,
+                repository_url="https://github.com/example/old-repo",
+                owner="example",
+                repository="old-repo",
+                ref="main",
+                commit_sha="2" * 40,
+                path=str(snapshot_path),
+                status=RepositorySnapshot.Status.VERIFIED,
+            )
+            with patch.dict(os.environ, {"SANDBOX_CODING_ENABLED": "1"}, clear=False):
+                plan = prepare_coding_plan(job.id, stage_repository=False)
+            self.assertEqual(plan.status, WorkPlan.Status.BLOCKED)
+            self.assertIn("REPOSITORY_NOT_STAGED", plan.reason_codes)

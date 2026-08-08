@@ -127,6 +127,7 @@ def _safe_extract_tar(data: bytes, destination: Path, *, max_files: int, max_unp
                 raise GitHubRepositoryError("repository archive escaped destination")
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
+                target.chmod(0o700)
                 continue
             if not member.isfile():
                 raise GitHubRepositoryError("repository archive contains unsupported entry type")
@@ -142,7 +143,9 @@ def _safe_extract_tar(data: bytes, destination: Path, *, max_files: int, max_unp
                 raise GitHubRepositoryError("repository archive file could not be read")
             with target.open("wb") as output:
                 shutil.copyfileobj(source, output, length=1024 * 1024)
-            target.chmod(0o600)
+            # Preserve only the executable signal required by repository test
+            # entrypoints; never carry group/world archive permissions through.
+            target.chmod(0o700 if member.mode & 0o111 else 0o600)
     return file_count, total_bytes
 
 

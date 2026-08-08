@@ -114,10 +114,10 @@ def run_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
         agent_log = ((result.stdout or "") + "\n" + (result.stderr or ""))[-200000:]
 
         diff_result = _run([
-            "docker", "run", "--rm", "--network", "none", "--read-only",
-            "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-            "--user", "10001:10001", "-v", f"{volume_name}:/workspace:ro", image,
-            "/bin/bash", "-lc", "cd /workspace && git diff --binary --no-ext-diff amarktai-baseline --",
+            "docker", "run", *_security_args(
+                network="none", volume_name=volume_name, memory=memory, cpus=cpus, pids=pids,
+            ), image, "/bin/bash", "-lc",
+            "cd /workspace && git add -N -- . && git diff --binary --no-ext-diff amarktai-baseline --",
         ], timeout=120, check=False)
         patch = diff_result.stdout or ""
 

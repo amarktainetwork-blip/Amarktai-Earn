@@ -127,7 +127,7 @@ def prepare_coding_plan(job_id, *, stage_repository: bool = True, session=None) 
         return _set_plan(job, reasons=["REPOSITORY_NOT_STAGED"])
 
     snapshot = RepositorySnapshot.objects.filter(job=job, status=RepositorySnapshot.Status.VERIFIED).first()
-    if stage_repository and snapshot is None:
+    if stage_repository:
         try:
             snapshot = ensure_repository_snapshot(job.id, session=session)
         except Exception as exc:
@@ -138,7 +138,17 @@ def prepare_coding_plan(job_id, *, stage_repository: bool = True, session=None) 
                 metadata={"job_id": str(job.id), "error_code": exc.__class__.__name__},
             )
             return _set_plan(job, reasons=["REPOSITORY_NOT_STAGED"])
-    if snapshot is None or snapshot.status != RepositorySnapshot.Status.VERIFIED or not snapshot.path:
+    snapshot_matches_request = bool(
+        snapshot
+        and snapshot.repository_url == ref.url
+        and (not ref.ref or snapshot.ref == ref.ref)
+    )
+    if (
+        not snapshot_matches_request
+        or snapshot.status != RepositorySnapshot.Status.VERIFIED
+        or not snapshot.path
+        or not os.path.isdir(snapshot.path)
+    ):
         return _set_plan(job, reasons=["REPOSITORY_NOT_STAGED"])
 
     spec = {
