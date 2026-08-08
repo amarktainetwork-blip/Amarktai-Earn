@@ -13,9 +13,20 @@ from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 from .jwt_auth import issue_access, issue_refresh, rotate_refresh, revoke_refresh
-from .models import AuditEvent, GenXAccountSnapshot, GenXCall, Job, LoginChallenge, OwnerSecurityProfile, Payout, RecoveryCode, Worker
+from .models import AuditEvent, GenXAccountSnapshot, GenXCall, Job, LoginChallenge, OwnerSecurityProfile, Payout, RecoveryCode, ReauthenticationGrant, RefreshSession, Worker
 from .secrets import decrypt_secret
 from .ops import SECTIONS, snapshot as ops_snapshot
+from .services.auth_security import (
+    Throttled,
+    client_ip,
+    consume_reauthentication_grant,
+    ensure_not_throttled,
+    issue_reauthentication_grant,
+    record_failure,
+    reset,
+    verify_reauthentication,
+)
+from .services.autonomy import current_mode
 
 User = get_user_model()
 
@@ -37,6 +48,7 @@ def _clear_auth_cookies(response):
     response.delete_cookie(settings.ACCESS_COOKIE_NAME, path="/", samesite="Strict")
     response.delete_cookie(settings.REFRESH_COOKIE_NAME, path="/", samesite="Strict")
     response.delete_cookie(settings.PREAUTH_COOKIE_NAME, path="/", samesite="Strict")
+    response.delete_cookie("amarktai_reauth", path="/", samesite="Strict")
 
 @require_GET
 def healthz(request):
@@ -79,13 +91,23 @@ def password_login(request):
     data = _json(request)
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
+    ip = client_ip(request)
+    try:
+        ensure_not_throttled("password_ip", f"{username}|{ip}")
+        ensure_not_throttled("password_user", username)
+    except Throttled:
+        AuditEvent.objects.create(severity="WARN", event_type="auth.password_throttled", actor=username[:120])
+        return JsonResponse({"error": "authentication_failed"}, status=401)
     user = authenticate(request, username=username, password=password)
     if not user or not user.is_active or not user.is_staff:
+        record_failure("password_ip", f"{username}|{ip}")
+        record_failure("password_user", username)
         AuditEvent.objects.create(severity="WARN", event_type="auth.password_failed", actor=username[:120])
-        return JsonResponse({"error": "invalid_credentials"}, status=401)
+        return JsonResponse({"error": "authentication_failed"}, status=401)
+    reset("password_ip", f"{username}|{ip}")
     profile, _ = OwnerSecurityProfile.objects.get_or_create(user=user)
     if not profile.totp_secret_encrypted or not profile.totp_confirmed_at:
-        return JsonResponse({"error": "totp_not_enrolled", "message": "Owner TOTP must be enrolled from the server bootstrap flow."}, status=403)
+        return JsonResponse({"error": "authentication_failed"}, status=401)
     challenge = LoginChallenge.objects.create(user=user, expires_at=timezone.now() + timedelta(minutes=5))
     response = JsonResponse({"requires_2fa": True})
     response.set_cookie(settings.PREAUTH_COOKIE_NAME, str(challenge.id), max_age=300, secure=settings.SESSION_COOKIE_SECURE, httponly=True, samesite="Strict", path="/")
@@ -95,16 +117,23 @@ def password_login(request):
 def verify_totp(request):
     challenge_id = request.COOKIES.get(settings.PREAUTH_COOKIE_NAME)
     if not challenge_id:
-        return JsonResponse({"error": "preauth_required"}, status=401)
+        return JsonResponse({"error": "authentication_failed"}, status=401)
     with transaction.atomic():
         challenge = LoginChallenge.objects.select_for_update().filter(id=challenge_id).first()
         if not challenge or challenge.used_at or challenge.expires_at <= timezone.now() or challenge.attempts >= 5:
-            return JsonResponse({"error": "invalid_challenge"}, status=401)
+            return JsonResponse({"error": "authentication_failed"}, status=401)
         challenge.attempts += 1
         challenge.save(update_fields=["attempts", "updated_at"])
         data = _json(request)
         code = str(data.get("code") or "").replace(" ", "")
         recovery = bool(data.get("recovery"))
+        scope = "recovery_user" if recovery else "totp_ip"
+        subject = str(challenge.user_id) if recovery else f"{challenge.user_id}|{client_ip(request)}"
+        try:
+            ensure_not_throttled(scope, subject)
+        except Throttled:
+            AuditEvent.objects.create(severity="WARN", event_type="auth.2fa_throttled", actor=str(challenge.user_id))
+            return JsonResponse({"error": "authentication_failed"}, status=401)
         profile = OwnerSecurityProfile.objects.get(user=challenge.user)
         valid = False
         if recovery:
@@ -114,8 +143,11 @@ def verify_totp(request):
         else:
             valid = pyotp.TOTP(decrypt_secret(profile.totp_secret_encrypted)).verify(code, valid_window=1)
         if not valid:
+            record_failure(scope, subject)
             AuditEvent.objects.create(severity="WARN", event_type="auth.2fa_failed", actor=str(challenge.user_id))
-            return JsonResponse({"error": "invalid_2fa"}, status=401)
+            return JsonResponse({"error": "authentication_failed"}, status=401)
+        reset(scope, subject)
+        reset("password_user", challenge.user.get_username())
         challenge.used_at = timezone.now(); challenge.save(update_fields=["used_at", "updated_at"])
         access = issue_access(challenge.user)
         refresh, _ = issue_refresh(challenge.user)
@@ -149,6 +181,53 @@ def logout_view(request):
     _clear_auth_cookies(response)
     return response
 
+
+@require_POST
+def reauthenticate(request):
+    owner = getattr(request, "owner", None)
+    if not owner:
+        return JsonResponse({"error": "unauthorized"}, status=401)
+    subject = str(owner.pk)
+    try:
+        ensure_not_throttled("reauth_user", subject)
+    except Throttled:
+        return JsonResponse({"error": "reauthentication_failed"}, status=401)
+    data = _json(request)
+    if not verify_reauthentication(owner, str(data.get("password") or ""), str(data.get("code") or "")):
+        record_failure("reauth_user", subject)
+        AuditEvent.objects.create(severity="WARN", event_type="auth.reauthentication_failed", actor=subject)
+        return JsonResponse({"error": "reauthentication_failed"}, status=401)
+    reset("reauth_user", subject)
+    token = issue_reauthentication_grant(owner, ["security_reset"])
+    response = JsonResponse({"ok": True, "expires_in": int(__import__("os").getenv("REAUTH_GRANT_SECONDS", "300"))})
+    response.set_cookie(
+        "amarktai_reauth", token, max_age=int(__import__("os").getenv("REAUTH_GRANT_SECONDS", "300")),
+        secure=settings.SESSION_COOKIE_SECURE, httponly=True, samesite="Strict", path="/",
+    )
+    AuditEvent.objects.create(event_type="auth.reauthentication_success", actor=subject)
+    return response
+
+
+@require_POST
+def security_reset(request):
+    owner = getattr(request, "owner", None)
+    if not owner:
+        return JsonResponse({"error": "unauthorized"}, status=401)
+    token = request.COOKIES.get("amarktai_reauth", "")
+    if not consume_reauthentication_grant(owner, token, "security_reset"):
+        return JsonResponse({"error": "recent_reauthentication_required"}, status=403)
+    now = timezone.now()
+    with transaction.atomic():
+        RefreshSession.objects.filter(user=owner, revoked_at__isnull=True).update(revoked_at=now)
+        ReauthenticationGrant.objects.filter(user=owner, revoked_at__isnull=True).update(revoked_at=now)
+        profile = OwnerSecurityProfile.objects.select_for_update().get(user=owner)
+        profile.security_version += 1
+        profile.save(update_fields=["security_version", "updated_at"])
+        AuditEvent.objects.create(severity="WARN", event_type="auth.security_reset", actor=str(owner.pk))
+    response = JsonResponse({"ok": True})
+    _clear_auth_cookies(response)
+    return response
+
 @require_GET
 def overview_api(request):
     if not getattr(request, "owner", None):
@@ -164,7 +243,7 @@ def overview_api(request):
     latest_genx = GenXAccountSnapshot.objects.order_by("-created_at").first()
     active_agents = Worker.objects.exclude(status__in=["OFFLINE", "READY"]).count()
     return JsonResponse({
-        "autonomous_mode": __import__("os").getenv("AUTONOMOUS_MODE", "OFF"),
+        "autonomous_mode": current_mode().value,
         "net_earned_today": str(earned),
         "settled_today": str(settled),
         "pending_payout": str(pending),

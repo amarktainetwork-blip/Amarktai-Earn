@@ -14,6 +14,7 @@ from workers.registry import registry_manifest
 from .models import (
     Alert,
     AdmissionDecision,
+    AuthThrottle,
     Artifact,
     AuditEvent,
     Execution,
@@ -28,6 +29,7 @@ from .models import (
     Payout,
     QAResult,
     RecoveryCode,
+    ReauthenticationGrant,
     ResourceSnapshot,
     ServiceHeartbeat,
     RefreshSession,
@@ -35,6 +37,7 @@ from .models import (
     TreasuryBalance,
     Worker,
 )
+from control.services.autonomy import current_mode
 
 SECTIONS = (
     "overview",
@@ -108,7 +111,7 @@ def overview_snapshot() -> dict:
             {"label": "GENX USED TODAY", "value": f"{genx_used} cr"},
         ],
         "meta": {
-            "autonomous_mode": os.getenv("AUTONOMOUS_MODE", "OFF"),
+            "autonomous_mode": current_mode().value,
             "registered_workers": len(registry_manifest()),
             "revenue_truth": "Expected opportunity values are never earnings. Accepted/pending values are not cash. Only SETTLED is received cash.",
         },
@@ -357,7 +360,7 @@ def settings_snapshot() -> dict:
             "sensitive": row.sensitive,
             "updated": _dt(row.updated_at),
         })
-    return {"section": "settings", "rows": rows, "meta": {"autonomous_mode": os.getenv("AUTONOMOUS_MODE", "OFF")}}
+    return {"section": "settings", "rows": rows, "meta": {"autonomous_mode": current_mode().value}}
 
 
 def security_snapshot(owner) -> dict:
@@ -365,6 +368,8 @@ def security_snapshot(owner) -> dict:
     now = timezone.now()
     active_refresh = RefreshSession.objects.filter(user=owner, revoked_at__isnull=True, expires_at__gt=now).count()
     recovery_remaining = RecoveryCode.objects.filter(user=owner, used_at__isnull=True).count()
+    active_lockouts = AuthThrottle.objects.filter(locked_until__gt=now).count()
+    active_reauth = ReauthenticationGrant.objects.filter(user=owner, used_at__isnull=True, revoked_at__isnull=True, expires_at__gt=now).count()
     rows = [{
         "created": _dt(row.created_at),
         "severity": row.severity,
@@ -378,6 +383,8 @@ def security_snapshot(owner) -> dict:
             {"label": "SECURITY VERSION", "value": profile.security_version if profile else 0},
             {"label": "ACTIVE REFRESH SESSIONS", "value": active_refresh},
             {"label": "RECOVERY CODES REMAINING", "value": recovery_remaining},
+            {"label": "ACTIVE AUTH COOLDOWNS", "value": active_lockouts},
+            {"label": "ACTIVE REAUTH GRANTS", "value": active_reauth},
         ],
         "rows": rows,
     }

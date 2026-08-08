@@ -5,6 +5,7 @@ from decimal import Decimal
 from control.models import Application, AuditEvent, Bid, Claim, Job
 from control.services.jobs import acquisition_decision, transition_job
 from control.services.admission import AdmissionDenied, require_admission
+from control.services.acquisition_preflight import require_acquisition_preflight
 from control.services.locks import JobLockUnavailable, acquire_job_lock, release_job_lock
 from markets.base import MarketAdapter
 
@@ -42,6 +43,10 @@ def acquire_profitable_job(
     gate = acquisition_decision(job)
     if not gate.allowed:
         raise AcquisitionError("acquisition blocked: " + ",".join(gate.reason_codes))
+    try:
+        require_acquisition_preflight(job)
+    except ValueError as exc:
+        raise AcquisitionError(str(exc)) from exc
     if job.state != Job.State.EXPECTED:
         raise AcquisitionError(f"job must be EXPECTED before acquisition, got {job.state}")
     try:

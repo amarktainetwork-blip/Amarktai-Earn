@@ -11,6 +11,7 @@ from django.utils import timezone
 from control.models import AuditEvent, Job, Submission
 from planning.models import JobAsset, WorkPlan
 from workers.registry import WorkerRegistryError, operation_spec
+from control.services.workload_policy import evaluate_job
 
 
 class PlanningError(RuntimeError):
@@ -168,6 +169,7 @@ def plan_awarded_job(job_id) -> WorkPlan:
 
     assets = list(JobAsset.objects.filter(job=job, status=JobAsset.Status.VERIFIED).exclude(path="").order_by("created_at")[:2])
     reasons: list[str] = []
+    reasons.extend(evaluate_job(job).reason_codes)
     operation = ""
     input_spec = {}
     if len(assets) > 1:
@@ -294,6 +296,12 @@ def execute_work_plan(plan_id: int) -> WorkPlan:
         if plan.status not in {WorkPlan.Status.READY, WorkPlan.Status.QUEUED, WorkPlan.Status.NEEDS_REPAIR}:
             return plan
         repair = plan.status == WorkPlan.Status.NEEDS_REPAIR
+        prohibited = evaluate_job(plan.job)
+        if not prohibited.allowed:
+            plan.status = WorkPlan.Status.BLOCKED
+            plan.reason_codes = list(prohibited.reason_codes)
+            plan.save(update_fields=["status", "reason_codes", "updated_at"])
+            return plan
         if repair and plan.repair_attempts >= plan.max_repair_attempts:
             plan.status = WorkPlan.Status.BLOCKED
             plan.reason_codes = [*plan.reason_codes, "MAX_REPAIR_ATTEMPTS_REACHED"]

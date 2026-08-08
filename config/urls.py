@@ -14,6 +14,8 @@ urlpatterns = [
     path("api/auth/totp", views.verify_totp, name="verify_totp"),
     path("api/auth/refresh", views.refresh_tokens, name="refresh_tokens"),
     path("api/auth/logout", views.logout_view, name="logout"),
+    path("api/security/reauth", views.reauthenticate, name="reauthenticate"),
+    path("api/security/reset", views.security_reset, name="security_reset"),
     path("api/overview", views.overview_api, name="overview_api"),
     path("webhooks/agentgigs/", webhooks.agentgigs_webhook, name="agentgigs_webhook"),
 ]

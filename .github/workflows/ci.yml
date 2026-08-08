@@ -30,6 +30,7 @@ env:
   JWT_SIGNING_KEYS_JSON: '{"v1":"ci-signing-key-with-more-than-sixty-four-characters-000000000000000000"}'
   FIELD_ENCRYPTION_ACTIVE_KID: v1
   FIELD_ENCRYPTION_KEYS_JSON: '{"v1":"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="}'
+  AUTH_THROTTLE_PEPPER: ci-auth-throttle-pepper-with-more-than-thirty-two-characters
   AGENTGIGS_WEBHOOK_SECRET: integration-webhook-secret
   AUTONOMOUS_MODE: OFF
   AGENTGIGS_AUTO_APPLY_ENABLED: "0"
@@ -79,7 +80,7 @@ jobs:
       - run: python manage.py migrate --noinput
       - run: python manage.py healthcheck
       - run: python -m unittest discover -s tests -p 'test_*_stdlib.py' -q
-      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration -v 2
+      - run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration -v 2
       - name: Production configuration preflight
         env:
           AMARKTAI_ENV: production

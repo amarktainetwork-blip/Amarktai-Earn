@@ -6,6 +6,7 @@ from django.db.models import Max
 from control.models import Artifact, AuditEvent, Execution, Job, Submission
 from control.services.jobs import transition_job
 from control.services.locks import JobLockUnavailable, acquire_job_lock, release_job_lock
+from control.services.workload_policy import require_allowed
 from markets.base import MarketAdapter
 
 
@@ -25,6 +26,10 @@ def submit_qa_passed_job(*, adapter: MarketAdapter, job_id, node_id: str = "VPS1
     job = Job.objects.select_related("marketplace").get(pk=job_id)
     if adapter.slug != job.marketplace.slug:
         raise SubmissionError("adapter does not match job marketplace")
+    try:
+        require_allowed(job)
+    except ValueError as exc:
+        raise SubmissionError(str(exc)) from exc
     if job.state == Job.State.SUBMITTED:
         existing = Submission.objects.filter(job=job, status="SUBMITTED").order_by("-version").first()
         if existing:
