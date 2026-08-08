@@ -19,6 +19,9 @@ services:
   web:
     build: .
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
     env_file: .env
     command: /app/scripts/start-web.sh
     healthcheck:
@@ -44,8 +47,11 @@ services:
   worker:
     build: .
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
     env_file: .env
-    command: sh -lc 'rq worker --with-scheduler --url "$$REDIS_URL" p0_revenue_protection p1_instant_claim p2_auto_accept p3_assigned p4_high_ev p5_microjobs p6_bounties p7_background'
+    command: sh -lc 'python manage.py production_check && exec rq worker --with-scheduler --url "$$REDIS_URL" p0_revenue_protection p1_instant_claim p2_auto_accept p3_assigned p4_high_ev p5_microjobs p6_bounties p7_background'
     volumes:
       - artifacts:/var/lib/amarktai-earn/artifacts
       - job_data:/var/lib/amarktai-earn/jobs
@@ -63,8 +69,15 @@ services:
   watcher:
     build: .
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
     env_file: .env
-    command: sh -lc 'if [ "$$AGENTGIGS_WATCHER_ENABLED" = "1" ]; then exec python manage.py run_agentgigs_watcher; else exec sleep infinity; fi'
+    command: sh -lc 'python manage.py production_check && if [ "$$AGENTGIGS_WATCHER_ENABLED" = "1" ]; then exec python manage.py run_agentgigs_watcher; else exec sleep infinity; fi'
+    volumes:
+      - job_data:/var/lib/amarktai-earn/jobs
+      - uploads:/var/lib/amarktai-earn/uploads
+      - logs:/var/lib/amarktai-earn/logs
     depends_on:
       postgres:
         condition: service_healthy
