@@ -1,7 +1,7 @@
 import os
 from decimal import Decimal, ROUND_CEILING
 from django.db import transaction
-from control.acquisition import AcquisitionThresholds, GateDecision
+from control.acquisition import AcquisitionThresholds, GateDecision, paid_cost_envelope
 from control.economics import EconomicsInput, score_job
 from control.job_state import assert_transition
 from control.models import AuditEvent, Job, JobScore, Marketplace
@@ -10,9 +10,10 @@ from markets.base import NormalizedOpportunity
 
 def _thresholds() -> AcquisitionThresholds:
     return AcquisitionThresholds(
-        min_expected_profit=Decimal(os.getenv("MIN_EXPECTED_PROFIT_USD", "1.00")),
-        min_expected_profit_per_minute=Decimal(os.getenv("MIN_EXPECTED_PROFIT_PER_MINUTE_USD", "0.05")),
-        max_genx_cost=Decimal(os.getenv("MAX_GENX_COST_PER_JOB_USD", "2.00")),
+        min_expected_profit=Decimal(os.getenv("MIN_EXPECTED_PROFIT_USD", "0.00")),
+        min_expected_profit_per_minute=Decimal(os.getenv("MIN_EXPECTED_PROFIT_PER_MINUTE_USD", "0.00")),
+        absolute_max_paid_cost=Decimal(os.getenv("ABSOLUTE_MAX_PAID_COST_PER_JOB_USD", "250.00")),
+        paid_cost_contingency_fraction=Decimal(os.getenv("PAID_COST_CONTINGENCY_FRACTION", "0.10")),
     )
 
 
@@ -86,8 +87,22 @@ def acquisition_decision(job: Job):
         reasons.append("PAYOUT_NOT_READY")
     if not market.south_africa_verified:
         reasons.append("SOUTH_AFRICA_NOT_VERIFIED")
-    if score.expected_genx_cost > _thresholds().max_genx_cost:
-        reasons.append("GENX_BUDGET_TOO_HIGH")
+    thresholds = _thresholds()
+    expected_gross = score.recommended_offer or job.reward
+    marketplace_fee = expected_gross * job.marketplace.fee_rate
+    operational_cost = Decimal(os.getenv("EXPECTED_OPERATIONAL_COST_PER_JOB_USD", "0.10"))
+    envelope = paid_cost_envelope(
+        expected_gross=expected_gross,
+        marketplace_fee=marketplace_fee,
+        expected_genx_cost=score.expected_genx_cost,
+        expected_external_cost=score.expected_external_cost,
+        expected_operational_cost=operational_cost,
+        risk_adjusted_profit=score.expected_profit - operational_cost,
+        minimum_expected_profit=thresholds.min_expected_profit,
+        absolute_max_paid_cost=thresholds.absolute_max_paid_cost,
+        contingency_fraction=thresholds.paid_cost_contingency_fraction,
+    )
+    reasons.extend(envelope.reason_codes)
     economic = evaluate_opportunity(job)
     reasons.extend(economic.reason_codes)
     return GateDecision(allowed=not reasons, reason_codes=tuple(dict.fromkeys(reasons)))

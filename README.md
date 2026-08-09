@@ -15,7 +15,7 @@ Expanded V1 is **CODE-COMPLETE** in this repository. **CI-PROVEN** applies only 
 
 Job truth is `DISCOVERED → EXPECTED → CLAIMED/AWARDED → EXECUTING → SUBMITTED → ACCEPTED → PAYOUT_PENDING → SETTLED`, with `FAILED` explicit. Payout truth is `EARNED`, `PAYOUT_PENDING`, `SETTLED`, or `REVERSED`.
 
-Only `SETTLED` is received cash. Rewards, exposure, expected profit, applications, awards, accepted work, and payout-pending amounts are not revenue. Growth targets are objectives, never achieved-revenue claims.
+Only `SETTLED` is received cash. Rewards, exposure, expected profit, applications, awards, accepted work, and payout-pending amounts are not revenue. `TARGET_*` values are objective floors, never achieved-revenue claims or earnings caps. Exceeding a target never stops discovery, acquisition, execution, or additional profitable work.
 
 ## Architecture and lifecycle
 
@@ -43,17 +43,21 @@ The controller never silently self-modifies production source. Proposed code imp
 
 The Profit Brain persists decisions and outcomes rather than treating environment variables as economic memory:
 
-- `GrowthTarget` and `GrowthEvaluation` track daily/weekly settled-profit objectives, completed jobs, QA, revisions, GenX cost ratio, active markets, and profitable capabilities.
+- `GrowthTarget` and `GrowthEvaluation` track daily/weekly net-settled-profit objectives, completed jobs, QA, revisions, GenX cost ratio, active markets, and profitable capabilities. Growth stage measures evidence maturity; BOOTSTRAP never means low earnings are required.
 - Status is `AHEAD`, `ON_TRACK`, `BEHIND`, or `INSUFFICIENT_DATA`, with reason codes such as low award rate, capacity idle/saturated, payout blocked, high GenX cost, revision/worker degradation, auth failure, and queue congestion.
 - `PerformanceAggregate` maintains rolling market, capability, operation, worker/version, market-capability, and pricing views. It records attempts, awards, completion, QA/repair/revision/on-time/acceptance/settlement rates, settled payout and costs, execution and settlement latency, profit per minute/GenX credit, and observed reputation change.
 - Growth stages are `BOOTSTRAP`, `ESTABLISH`, `PROFIT`, and `SCALE`. Conservative sample requirements prevent one lucky bounty from becoming a strategy.
 - `OpportunityDecision`, `PricingStrategy`, and `StrategyAdjustment` preserve why work or pricing was selected. Learning is bounded; strategy changes are auditable.
 
+Net settled profit is calculated as USD `Payout.net` for payouts settled in the measurement window minus completed, persisted `GenXCall.cost_equivalent` attributed to those same settled jobs and completed in that window. `Payout.net` already excludes the recorded marketplace fee, so the fee is not subtracted twice. The repository has no persisted actual external/direct-cost source yet; dashboards and aggregate evidence state that coverage explicitly rather than substituting estimates.
+
+Paid-resource approval is profitability-relative. The normal per-job envelope scales with persisted gross reward, marketplace fee, expected GenX cost, expected external cost, known operational cost, expected cash profit, risk-adjusted profit, execution time, opportunity cost, utilization, and available GenX budget. Positive cash and risk-adjusted profit remain mandatory. `ABSOLUTE_MAX_PAID_COST_PER_JOB_USD` is a finite emergency runaway-spend circuit breaker, not a desired spend, growth-stage limit, or profit target. Fresh-clone paid execution remains disabled by the existing autonomy, market, and zero GenX switches.
+
 ### Utilization, micro-profit, opportunity cost, and reputation
 
 `CapacitySnapshot` records productive, active, available, and reserved slots; productive utilization; eligible waiting work; avoidable/unavoidable idle; foregone expected profit; and the reservation reason.
 
-When capacity is genuinely idle, positive micro-profit work can pass a lower reviewed profit-per-minute threshold so the system does not reject executable profit arbitrarily. When capacity is constrained, higher expected profit per scarce execution minute wins and existing obligations remain protected. Resource, deadline, policy, payout, capability, and safety gates are never relaxed merely to avoid idleness.
+When capacity is genuinely idle, positive micro-profit work can pass a lower reviewed profit-per-minute threshold so the system does not reject executable profit arbitrarily. When capacity is constrained, higher expected risk-adjusted profit per scarce execution minute wins and existing obligations remain protected or queued by the existing lifecycle. Resource concurrency limits protect the VPS; they are not growth-stage or revenue limits. Resource, deadline, policy, payout, capability, and safety gates are never relaxed merely to avoid idleness.
 
 Pricing uses total expected cost, platform fee, stage, utilization, advertised budget, competitive information, and adequate historical win-rate samples. It never offers below the calculated minimum profitable price. Exploration is capacity-bounded. Loss-making reputation investment is disabled by default, limited to bootstrap conditions, requires a positive recorded reputation signal, and has a separately configured daily loss budget.
 

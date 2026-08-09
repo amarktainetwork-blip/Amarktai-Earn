@@ -238,6 +238,17 @@ def build_acceptance_report(*, ci_proven: bool = False) -> dict:
             ci_proven=ci_proven, markers=(("control/services/profit_brain.py", "evaluate_growth_targets"), ("control/models.py", "class GrowthEvaluation"), ("tests/test_profit_brain_integration.py", "test_growth")),
         ),
         _contract_gate(
+            "uncapped_profit_governor", "Uncapped earning with economically bounded downside",
+            "CI proved targets and BOOTSTRAP are not earnings caps, paid-cost approval scales with profitable job value, losses and unavailable paid resources remain blocked, concurrency remains fail-closed, and net settled profit uses only settled cash and attributable persisted actual cost.",
+            ci_proven=ci_proven,
+            markers=(
+                ("control/acquisition.py", "paid_cost_envelope"),
+                ("control/services/profit_brain.py", "OBJECTIVE_FLOOR_NEVER_EARNINGS_CAP"),
+                ("control/services/profit_brain.py", "settled_profit_truth"),
+                ("tests/test_profit_brain_integration.py", "test_bootstrap_and_exceeded_targets_never_cap_profitable_work"),
+            ),
+        ),
+        _contract_gate(
             "utilization_economics", "Utilization-aware economics and no-avoidable-idle invariant",
             "CI proved capacity persistence, idle micro-profit acceptance, busy opportunity-cost preference, resource reservation, and avoidable-idle accounting.",
             ci_proven=ci_proven, markers=(("control/services/profit_brain.py", "capture_capacity"), ("control/services/profit_brain.py", "BETTER_COMMITTED_WORK_HAS_PRIORITY"), ("tests/test_profit_brain_integration.py", "avoidable_idle")),

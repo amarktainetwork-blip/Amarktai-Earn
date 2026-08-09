@@ -86,6 +86,16 @@ class PriceRecommendation:
     reason_codes: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class SettledProfitTruth:
+    settled_cash: Decimal
+    paid_execution_cost: Decimal
+    net_settled_profit: Decimal
+    settled_payouts: int
+    costed_genx_calls: int
+    coverage: tuple[str, ...]
+
+
 DEFAULT_TARGETS = {
     "TARGET_DAILY_SETTLED_PROFIT": ("DAILY", "10.00", "USD"),
     "TARGET_WEEKLY_SETTLED_PROFIT": ("WEEKLY", "50.00", "USD"),
@@ -113,6 +123,42 @@ def _money(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
+def settled_profit_truth(*, start, end=None) -> SettledProfitTruth:
+    """Return USD settled cash less attributable, finalized paid execution cost in the same window."""
+    payouts = Payout.objects.filter(
+        state=Payout.State.SETTLED,
+        currency="USD",
+        settled_at__isnull=False,
+        settled_at__gte=start,
+    )
+    if end is not None:
+        payouts = payouts.filter(settled_at__lt=end)
+    settled_cash = payouts.aggregate(value=Sum("net"))["value"] or ZERO
+    settled_job_ids = payouts.values("job_id")
+    genx_calls = GenXCall.objects.filter(
+        job_id__in=settled_job_ids,
+        status="COMPLETED",
+        completed_at__isnull=False,
+        completed_at__gte=start,
+        cost_equivalent__gt=0,
+    )
+    if end is not None:
+        genx_calls = genx_calls.filter(completed_at__lt=end)
+    paid_execution_cost = genx_calls.aggregate(value=Sum("cost_equivalent"))["value"] or ZERO
+    return SettledProfitTruth(
+        settled_cash=_money(settled_cash),
+        paid_execution_cost=_money(paid_execution_cost),
+        net_settled_profit=_money(settled_cash - paid_execution_cost),
+        settled_payouts=payouts.count(),
+        costed_genx_calls=genx_calls.count(),
+        coverage=(
+            "SETTLED_PAYOUT_NET_USD_ALREADY_EXCLUDES_MARKETPLACE_FEE",
+            "COMPLETED_GENX_COST_EQUIVALENT_USD_IN_WINDOW_FOR_SETTLED_JOBS",
+            "NO_PERSISTED_ACTUAL_EXTERNAL_OR_OTHER_DIRECT_COST_SOURCE",
+        ),
+    )
+
+
 def ensure_growth_targets() -> list[GrowthTarget]:
     rows = []
     for key, (period, default, unit) in DEFAULT_TARGETS.items():
@@ -122,9 +168,15 @@ def ensure_growth_targets() -> list[GrowthTarget]:
                 "period": period,
                 "target_value": _env_decimal(key, default),
                 "unit": unit,
-                "details": {"source": "repository_default_or_initial_environment"},
+                "details": {
+                    "source": "repository_default_or_initial_environment",
+                    "semantics": "OBJECTIVE_FLOOR_NEVER_EARNINGS_CAP",
+                },
             },
         )
+        if target.details.get("semantics") != "OBJECTIVE_FLOOR_NEVER_EARNINGS_CAP":
+            target.details = {**target.details, "semantics": "OBJECTIVE_FLOOR_NEVER_EARNINGS_CAP"}
+            target.save(update_fields=["details", "updated_at"])
         rows.append(target)
     return rows
 
@@ -474,7 +526,25 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
         executions = list(Execution.objects.filter(job_id__in=ids))
         qa = list(QAResult.objects.filter(job_id__in=ids).order_by("created_at"))
         payouts = list(Payout.objects.filter(job_id__in=ids))
-        genx = list(GenXCall.objects.filter(job_id__in=ids))
+        settled_payouts = list(
+            Payout.objects.filter(
+                job_id__in=ids,
+                state=Payout.State.SETTLED,
+                currency="USD",
+                settled_at__gte=start,
+                settled_at__lt=end,
+            )
+        )
+        settled_job_ids = [payout.job_id for payout in settled_payouts]
+        genx = list(
+            GenXCall.objects.filter(
+                job_id__in=settled_job_ids,
+                status="COMPLETED",
+                completed_at__isnull=False,
+                completed_at__gte=start,
+                completed_at__lt=end,
+            )
+        )
         revisions = Revision.objects.filter(job_id__in=ids).count()
         submissions = list(Submission.objects.filter(job_id__in=ids))
         first_qa = {}
@@ -491,18 +561,19 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
         first_pass = sum(1 for result in first_qa.values() if result.passed)
         repaired = len({execution.job_id for execution in executions if execution.attempt > 1})
         accepted = sum(1 for job in selected if job.state in {Job.State.ACCEPTED, Job.State.PAYOUT_PENDING, Job.State.SETTLED})
-        settled = sum(1 for payout in payouts if payout.state == Payout.State.SETTLED)
+        settled = len(settled_payouts)
         on_time = 0
         for job in selected:
             first_submission = next((row for row in submissions if row.job_id == job.id), None)
             if first_submission and (not job.deadline or first_submission.created_at <= job.deadline):
                 on_time += 1
-        gross = sum((payout.gross for payout in payouts if payout.state == Payout.State.SETTLED), ZERO)
-        fees = sum((payout.fee for payout in payouts if payout.state == Payout.State.SETTLED), ZERO)
+        gross = sum((payout.gross for payout in settled_payouts), ZERO)
+        fees = sum((payout.fee for payout in settled_payouts), ZERO)
         genx_cost = sum((call.cost_equivalent for call in genx), ZERO)
         expected_cost = sum((_decimal(job.jobscore.expected_genx_cost) + _decimal(job.jobscore.expected_external_cost) for job in selected if hasattr(job, "jobscore")), ZERO)
         actual_cost = genx_cost
-        profit = gross - fees - actual_cost
+        settled_cash = sum((payout.net for payout in settled_payouts), ZERO)
+        profit = settled_cash - actual_cost
         runtime_seconds = sum(
             (max(0, int((execution.ended_at - execution.started_at).total_seconds())) for execution in executions if execution.started_at and execution.ended_at),
             0,
@@ -557,7 +628,7 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
             gross_payout=_money(gross),
             platform_fees=_money(fees),
             genx_cost=genx_cost,
-            direct_cost=actual_cost,
+            direct_cost=ZERO,
             expected_cost=expected_cost,
             actual_cost=actual_cost,
             settled_profit=_money(profit),
@@ -570,7 +641,12 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
             reputation_delta=reputation_delta,
             sample_count=len(selected),
             growth_stage=stage.value,
-            details={"window_days": window_days},
+            details={
+                "window_days": window_days,
+                "settled_profit_formula": "settled_payout_net_usd_minus_completed_genx_cost_equivalent_usd",
+                "marketplace_fee_handling": "payout_net_already_excludes_fee; fee_not_subtracted_again",
+                "actual_external_direct_cost_coverage": "NO_PERSISTED_SOURCE",
+            },
             **group["defaults"],
         )
         rows.append(row)
@@ -580,16 +656,19 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
 def _growth_metrics(now) -> dict[str, Decimal]:
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = day_start - timedelta(days=day_start.weekday())
-    settled = Payout.objects.filter(state=Payout.State.SETTLED)
-    daily_profit = settled.filter(settled_at__gte=day_start).aggregate(v=Sum("net"))["v"] or ZERO
-    weekly_profit = settled.filter(settled_at__gte=week_start).aggregate(v=Sum("net"))["v"] or ZERO
+    settled = Payout.objects.filter(state=Payout.State.SETTLED, currency="USD")
+    daily_truth = settled_profit_truth(start=day_start, end=now + timedelta(microseconds=1))
+    weekly_truth = settled_profit_truth(start=week_start, end=now + timedelta(microseconds=1))
     completed_day = Job.objects.filter(updated_at__gte=day_start, state__in=[Job.State.SUBMITTED, Job.State.ACCEPTED, Job.State.PAYOUT_PENDING, Job.State.SETTLED]).count()
     since = now - timedelta(days=30)
     qa = QAResult.objects.filter(created_at__gte=since)
     completed = qa.values("job_id").distinct().count()
     revisions = Revision.objects.filter(created_at__gte=since).count()
     gross = settled.filter(settled_at__gte=since).aggregate(v=Sum("gross"))["v"] or ZERO
-    genx_cost = GenXCall.objects.filter(created_at__gte=since).aggregate(v=Sum("cost_equivalent"))["v"] or ZERO
+    genx_cost = GenXCall.objects.filter(
+        status="COMPLETED",
+        completed_at__gte=since,
+    ).aggregate(v=Sum("cost_equivalent"))["v"] or ZERO
     active_markets = Job.objects.filter(
         created_at__gte=since,
         marketplace__enabled=True,
@@ -597,14 +676,20 @@ def _growth_metrics(now) -> dict[str, Decimal]:
     ).values("marketplace_id").distinct().count()
     profitable_capabilities = PerformanceAggregate.objects.filter(window_end__gte=since, dimension_type="CAPABILITY", settled_profit__gt=0).values("dimension_key").distinct().count()
     return {
-        "TARGET_DAILY_SETTLED_PROFIT": _decimal(daily_profit),
-        "TARGET_WEEKLY_SETTLED_PROFIT": _decimal(weekly_profit),
+        "TARGET_DAILY_SETTLED_PROFIT": _decimal(daily_truth.net_settled_profit),
+        "TARGET_WEEKLY_SETTLED_PROFIT": _decimal(weekly_truth.net_settled_profit),
         "TARGET_COMPLETED_JOBS_DAY": Decimal(completed_day),
         "TARGET_MIN_QA_PASS_RATE": _ratio(qa.filter(passed=True).count(), qa.count()),
         "TARGET_MAX_REVISION_RATE": _ratio(revisions, completed),
         "TARGET_MAX_GENX_COST_RATIO": ZERO if gross <= 0 else (genx_cost / gross).quantize(Decimal("0.000001")),
         "TARGET_MIN_ACTIVE_MARKETS": Decimal(active_markets),
         "TARGET_MIN_PROFITABLE_CAPABILITIES": Decimal(profitable_capabilities),
+        "ACTUAL_DAILY_SETTLED_CASH": daily_truth.settled_cash,
+        "ACTUAL_DAILY_PAID_EXECUTION_COST": daily_truth.paid_execution_cost,
+        "ACTUAL_DAILY_NET_SETTLED_PROFIT": daily_truth.net_settled_profit,
+        "ACTUAL_WEEKLY_SETTLED_CASH": weekly_truth.settled_cash,
+        "ACTUAL_WEEKLY_PAID_EXECUTION_COST": weekly_truth.paid_execution_cost,
+        "ACTUAL_WEEKLY_NET_SETTLED_PROFIT": weekly_truth.net_settled_profit,
     }
 
 
