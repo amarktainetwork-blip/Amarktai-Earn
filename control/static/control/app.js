@@ -32,6 +32,7 @@
   let firstRender = true;
   let refreshing = false;
   let currentData = {};
+  let pendingData = null;
   let activeJobFilter = "active";
 
   function esc(value) {
@@ -72,6 +73,20 @@
     return Boolean(row.enabled && row.status === "LIVE" && row.payout_ready && row.south_africa_verified && row.auth === true && row.policy_automation_allowed === true && row.adapter_policy_verified && !readableBlockers(row).length);
   }
   function firstBlocker(row) { return readableBlockers(row)[0] || (marketReady(row) ? "Ready for autonomous work" : "Connection evidence is incomplete"); }
+  function isAgentActive(agent) {
+    return String(agent && agent.status || "").toUpperCase() === "EXECUTING" && Boolean(agent && agent.current_job);
+  }
+  function hasActiveInteraction() {
+    const focused = document.activeElement;
+    const visibleFocus = focused && root.contains(focused) && focused !== root && focused.getClientRects().length > 0;
+    return Boolean(root.querySelector(".drawer:not([hidden])") || root.querySelector("details[open]") || visibleFocus);
+  }
+  function applyPendingData() {
+    if (!pendingData || hasActiveInteraction()) return;
+    const data = pendingData;
+    pendingData = null;
+    render(data);
+  }
   function panel(title, subtitle, body, link) {
     return `<section class="panel"><div class="panel-head"><div><h2>${esc(title)}</h2>${subtitle ? `<p>${esc(subtitle)}</p>` : ""}</div>${link ? `<a class="panel-link" href="${esc(link.href)}">${esc(link.label)} →</a>` : ""}</div>${body}</section>`;
   }
@@ -109,12 +124,13 @@
 
   function renderAgentMini(agents, jobs) {
     const jobMap = new Map(jobs.map((job) => [job.job, job]));
-    const ranked = [...agents].sort((a, b) => Number(["EXECUTING", "WORKING", "REVIEWING"].includes(b.status)) - Number(["EXECUTING", "WORKING", "REVIEWING"].includes(a.status))).slice(0, 3);
+    const ranked = [...agents].sort((a, b) => Number(isAgentActive(b)) - Number(isAgentActive(a))).slice(0, 3);
     if (!ranked.length) return "";
     return `<div class="agent-mini-list">${ranked.map((agent) => {
-      const active = !["OFFLINE", "READY", "WAITING"].includes(agent.status);
+      const active = isAgentActive(agent);
+      const runtimeStatus = String(agent.status || "OFFLINE").toUpperCase();
       const job = jobMap.get(agent.current_job);
-      const copy = job ? job.title : active ? human(agent.status) : agent.production_enabled ? "Ready for work" : "Runtime not started";
+      const copy = active && job ? job.title : active ? "Executing recorded work" : runtimeStatus === "READY" ? "Ready for work" : runtimeStatus === "OFFLINE" ? "Runtime not started" : human(runtimeStatus);
       return `<div class="agent-mini"><span class="agent-mini-icon">${esc(titleForWorker(agent.worker_class).charAt(0))}</span><span><strong>${esc(titleForWorker(agent.worker_class))}</strong><small>${esc(copy)}</small></span><i class="agent-mini-state ${active ? "active" : ""}"></i></div>`;
     }).join("")}</div>`;
   }
@@ -161,19 +177,28 @@
     const alerts = (data.alerts || {}).rows || [];
     const earnings = (data.earnings || {}).rows || [];
     const mode = (overview.meta || {}).autonomous_mode || "OFF";
-    const activeAgents = agents.filter((row) => !["OFFLINE", "READY", "WAITING"].includes(row.status));
+    const activeAgents = agents.filter(isAgentActive);
     const activeJobs = jobs.filter((row) => ["CLAIMED", "AWARDED", "EXECUTING", "SUBMITTED", "ACCEPTED", "PAYOUT_PENDING"].includes(row.state));
-    const working = activeAgents.length > 0 || activeJobs.length > 0;
     const scanned = markets.reduce((total, row) => total + Number(row.opportunities_seen_24h || 0), 0);
     const blocked = Number(String(cardValue(overview.cards, "BLOCKED ACQUISITIONS 24H", "0")).replace(/\D/g, "")) || 0;
-    const acquired = markets.reduce((total, row) => total + Number(row.awards_total || 0), 0);
+    const applications = markets.reduce((total, row) => total + Number(row.applications_total || 0), 0);
+    const awards = markets.reduce((total, row) => total + Number(row.awards_total || 0), 0);
+    const agentsExecuting = activeAgents.length > 0;
+    const jobsActive = activeJobs.length > 0;
+    const workTitle = agentsExecuting ? "Your digital workforce is active" : jobsActive ? "Active work is waiting for runtime activity" : "Agents are standing by";
+    const workCopy = agentsExecuting
+      ? `${activeAgents.length} agent${activeAgents.length === 1 ? " has" : "s have"} confirmed EXECUTING status and a current job.`
+      : jobsActive
+        ? `${activeJobs.length} active job${activeJobs.length === 1 ? " is" : "s are"} recorded, but no agent has confirmed executing runtime evidence.`
+        : `No active jobs or executing agents are currently recorded. Autonomy is ${human(mode)}.`;
+    const workSignal = agentsExecuting ? "AGENT EXECUTING" : jobsActive ? "WORK WAITING" : "STANDING BY";
     const greeting = new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening";
-    root.innerHTML = `<section class="overview-welcome"><div><span class="eyebrow">OWNER OVERVIEW</span><h2>${greeting}</h2><p>Amarktai is monitoring opportunities and managing your autonomous workload.</p></div><div class="autonomy-pill ${modeClass(mode)}"><small>AUTONOMY STATE</small><strong>${esc(human(mode))}</strong></div></section>
+    root.innerHTML = `<section class="overview-welcome"><div><span class="eyebrow">OWNER OVERVIEW</span><h2>${greeting}</h2><p>Your autonomous earning system at a glance.</p></div><div class="autonomy-pill ${modeClass(mode)}"><small>AUTONOMY STATE</small><strong>${esc(human(mode))}</strong></div></section>
       ${renderMetrics(overview)}
-      <div class="dashboard-grid"><section class="panel system-working"><div class="working-header"><div><span class="working-kicker">AMARKTAI IS WORKING</span><h2 class="working-title">${working ? "Your digital workforce is active" : mode === "OFF" ? "Agents are ready, but autonomy is off" : "Ready for eligible work"}</h2><p class="working-copy">${working ? `${activeAgents.length} active agent${activeAgents.length === 1 ? "" : "s"} supporting ${activeJobs.length} live job${activeJobs.length === 1 ? "" : "s"}.` : "No activity is being invented. Real worker execution will appear here as runtime records are created."}</p></div><span class="working-signal ${working ? "active" : ""}"><i></i>${working ? "LIVE ACTIVITY" : "STANDING BY"}</span></div>${renderAgentMini(agents, jobs)}</section>
+      <div class="dashboard-grid"><section class="panel system-working"><div class="working-header"><div><span class="working-kicker">RUNTIME ACTIVITY</span><h2 class="working-title">${workTitle}</h2><p class="working-copy">${workCopy}</p></div><span class="working-signal ${agentsExecuting ? "active" : ""}"><i></i>${workSignal}</span></div>${renderAgentMini(agents, jobs)}</section>
       ${panel("Needs your attention", "Only meaningful owner actions", `<div class="panel-body">${renderAttention(alerts, 4)}</div>`, {href: "/ops/alerts/", label: "View alerts"})}</div>
       ${panel("Jobs in progress", "Real work moving through delivery and settlement", jobRows(jobs, 5), {href: "/ops/jobs/", label: "View all jobs"})}
-      <div class="section-grid"><section class="panel"><div class="panel-head"><div><h2>Opportunity pipeline</h2><p>Real discovery and acquisition decisions in the last 24 hours</p></div></div><div class="panel-body"><div class="pipeline"><div class="pipeline-step"><strong>${scanned}</strong><small>Scanned</small></div><span class="pipeline-arrow">›</span><div class="pipeline-step"><strong>${Math.max(0, scanned - blocked)}</strong><small>Eligible</small></div><span class="pipeline-arrow">›</span><div class="pipeline-step"><strong>${blocked}</strong><small>Blocked</small></div><span class="pipeline-arrow">›</span><div class="pipeline-step"><strong>${acquired}</strong><small>Acquired</small></div></div></div></section>
+      <div class="section-grid"><section class="panel"><div class="panel-head"><div><h2>Opportunity activity</h2><p>Independent persisted counts with their real reporting windows</p></div></div><div class="panel-body"><div class="pipeline"><div class="pipeline-step"><strong>${scanned}</strong><small>Opportunities seen · 24h</small></div><div class="pipeline-step"><strong>${blocked}</strong><small>Blocked preflights · 24h</small></div><div class="pipeline-step"><strong>${applications}</strong><small>Applications · all time</small></div><div class="pipeline-step"><strong>${awards}</strong><small>Awards · all time</small></div></div></div></section>
       ${panel("Earnings movement", "Settled and pending remain visually distinct", `<div class="panel-body chart-shell">${buildChart(earnings)}</div>`, {href: "/ops/money/", label: "Open money"})}</div>
       ${panel("Marketplace readiness", "Connection, policy, and payout evidence", `<div class="panel-body">${renderMarketStrip(markets)}</div>`, {href: "/ops/markets/", label: "Manage markets"})}
       ${jobDrawerShell()}`;
@@ -210,15 +235,15 @@
     const fields = [["Marketplace", human(row.market)], ["Reward", row.reward], ["Deadline", row.deadline ? new Date(row.deadline).toLocaleString() : "No deadline recorded"], ["State", human(row.state)], ["Current agent", row.worker && row.worker !== "—" ? titleForWorker(row.worker) : "Not assigned"], ["Execution", human(row.execution || "Not started")], ["Work plan", human(row.plan || "Not created")], ["Operation", human(row.operation || "Not selected")], ["QA", human(row.qa || "Not run")], ["Submission", human(row.submission || "Not submitted")], ["Revisions", String(row.open_revisions || 0)], ["Artifacts", String(row.artifacts || 0)]];
     content.innerHTML = `<div class="drawer-head"><div><span class="step-kicker">JOB DETAIL</span><h2 id="drawerTitle">${esc(row.title)}</h2></div><button class="drawer-close" type="button" aria-label="Close job detail">×</button></div><div class="drawer-grid">${fields.map(([label, value]) => `<div class="drawer-field"><small>${esc(label.toUpperCase())}</small><strong>${esc(value)}</strong></div>`).join("")}</div><div class="drawer-section"><h3>Delivery lifecycle</h3>${lifecycle(row)}</div><details class="ledger-disclosure"><summary>Advanced technical detail</summary><div class="panel-body"><div class="drawer-field"><small>JOB ID</small><strong>${esc(row.job)}</strong></div>${row.last_error ? `<div class="drawer-field"><small>LAST ERROR</small><strong>${esc(reason(row.last_error))}</strong></div>` : ""}</div></details>`;
     drawer.hidden = false; document.body.style.overflow = "hidden"; content.querySelector(".drawer-close").focus();
-    const close = () => { drawer.hidden = true; document.body.style.overflow = ""; };
+    const close = () => { drawer.hidden = true; document.body.style.overflow = ""; window.setTimeout(applyPendingData, 0); };
     content.querySelector(".drawer-close").addEventListener("click", close); drawer.addEventListener("click", (event) => { if (event.target === drawer) close(); }, {once: true});
     document.addEventListener("keydown", function escapeDrawer(event) { if (event.key === "Escape") { close(); document.removeEventListener("keydown", escapeDrawer); } });
   }
 
   function renderAgents(data) {
     const agents = (data.agents || {}).rows || []; const jobs = (data["live-work"] || {}).rows || []; const jobMap = new Map(jobs.map((job) => [job.job, job]));
-    const activeCount = agents.filter((row) => !["OFFLINE", "READY", "WAITING"].includes(row.status)).length;
-    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Your digital workforce</h2><p>${activeCount} active · ${agents.length} registered capabilities · no simulated activity</p></div></div>${agents.length ? `<div class="agent-grid">${agents.map((agent) => { const job = jobMap.get(agent.current_job); const active = !["OFFLINE", "READY", "WAITING"].includes(agent.status); const displayState = active ? agent.status : agent.production_enabled ? (agent.status === "OFFLINE" ? "OFFLINE" : "READY") : "BLOCKED"; const reasons = (agent.enablement_reason_codes || []).map(reason); return `<article class="agent-card"><div class="agent-card-top"><span class="agent-icon">${esc(titleForWorker(agent.worker_class).charAt(0))}</span><div class="agent-card-heading"><h3>${esc(titleForWorker(agent.worker_class))} Agent</h3>${stateBadge(displayState)}</div></div><p class="agent-card-copy">${esc(agent.description || "Registered autonomous worker capability")}</p><div class="agent-current"><small>CURRENT TASK</small><strong>${esc(job ? job.title : active ? human(agent.status) : agent.production_enabled ? "Waiting for runtime work" : reasons[0] || "Not available")}</strong></div>${reasons.length ? `<div class="reason-list">${reasons.slice(0, 3).map((item) => `<span class="reason-chip">${esc(item)}</span>`).join("")}</div>` : ""}<div class="agent-foot"><span>${Number((agent.operations || []).length)} operation${Number((agent.operations || []).length) === 1 ? "" : "s"}</span><span>${agent.last_heartbeat ? `Heartbeat ${timeAgo(agent.last_heartbeat)}` : "Runtime not started"}</span></div></article>`; }).join("")}</div>` : empty("No agents registered", "Worker registry entries will appear here when available.")}`;
+    const activeCount = agents.filter(isAgentActive).length;
+    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Your digital workforce</h2><p>${activeCount} executing · ${agents.length} registered capabilities · no simulated activity</p></div></div>${agents.length ? `<div class="agent-grid">${agents.map((agent) => { const job = jobMap.get(agent.current_job); const active = isAgentActive(agent); const runtimeStatus = String(agent.status || "OFFLINE").toUpperCase(); const displayState = active ? runtimeStatus : ["ERROR", "REPAIRING"].includes(runtimeStatus) ? runtimeStatus : agent.production_enabled ? runtimeStatus : "BLOCKED"; const reasons = (agent.enablement_reason_codes || []).map(reason); const taskCopy = active && job ? job.title : job ? `${human(runtimeStatus)} · ${job.title}` : runtimeStatus === "READY" ? "Waiting for runtime work" : runtimeStatus === "OFFLINE" ? "Runtime not started" : human(runtimeStatus); return `<article class="agent-card"><div class="agent-card-top"><span class="agent-icon">${esc(titleForWorker(agent.worker_class).charAt(0))}</span><div class="agent-card-heading"><h3>${esc(titleForWorker(agent.worker_class))} Agent</h3>${stateBadge(displayState)}</div></div><p class="agent-card-copy">${esc(agent.description || "Registered autonomous worker capability")}</p><div class="agent-current"><small>CURRENT TASK</small><strong>${esc(taskCopy)}</strong></div>${reasons.length ? `<div class="reason-list">${reasons.slice(0, 3).map((item) => `<span class="reason-chip">${esc(item)}</span>`).join("")}</div>` : ""}<div class="agent-foot"><span>${Number((agent.operations || []).length)} operation${Number((agent.operations || []).length) === 1 ? "" : "s"}</span><span>${agent.last_heartbeat ? `Heartbeat ${timeAgo(agent.last_heartbeat)}` : "Runtime not started"}</span></div></article>`; }).join("")}</div>` : empty("No agents registered", "Worker registry entries will appear here when available.")}`;
   }
 
   function renderMoney(data) {
@@ -230,7 +255,7 @@
 
   function renderMarkets(data) {
     const rows = (data.markets || {}).rows || [];
-    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Marketplace readiness</h2><p>Every readiness claim requires connection, policy, and South African payout evidence.</p></div></div>${rows.length ? `<div class="market-grid">${rows.map((row) => { const ready = marketReady(row); const items = [["Connection", row.api === true], ["Authentication", row.auth === true], ["South Africa verified", row.south_africa_verified], ["Payout ready", row.payout_ready], ["Automation approved", row.policy_automation_allowed === true && row.adapter_policy_verified], ["Acquisition switch", row.auto_acquisition_switch]]; return `<article class="market-card"><div class="market-card-head"><span class="market-logo">${esc(row.market.slice(0, 2))}</span><div class="market-card-title"><h3>${esc(human(row.market))}</h3><p>${esc(row.payout_method || "Payout method not verified")}</p></div>${stateBadge(row.status)}</div><div class="market-verdict ${ready ? "ready" : ""}">${esc(ready ? "READY FOR AUTONOMOUS WORK" : firstBlocker(row))}</div><div class="readiness-list">${items.map(([label, yes]) => `<div class="readiness-item ${yes ? "yes" : ""}"><i>${yes ? "✓" : "·"}</i>${esc(label)}</div>`).join("")}</div><div class="market-stats"><div><strong>${Number(row.opportunities_seen_24h || 0)}</strong><small>24H SEEN</small></div><div><strong>${Number(row.applications_total || 0)}</strong><small>APPLICATIONS</small></div><div><strong>${Number(row.awards_total || 0)}</strong><small>AWARDS</small></div><div><strong>$${esc(row.settled_net || "0.00")}</strong><small>SETTLED</small></div></div>${!ready ? `<div class="market-blocker">Next: ${esc(firstBlocker(row))}</div>` : ""}<details class="ledger-disclosure"><summary>Advanced integration detail</summary><div class="panel-body"><div class="drawer-field"><small>ADAPTER</small><strong>${esc(row.adapter || "Not configured")}</strong></div><div class="drawer-field"><small>POLICY CHECKED</small><strong>${esc(row.policy_checked || "Not verified")}</strong></div></div></details></article>`; }).join("")}</div>` : empty("No marketplaces configured", "Bootstrap real market records before enabling discovery or acquisition.")}`;
+    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Marketplace readiness</h2><p>Every readiness claim requires connection, policy, and South African payout evidence.</p></div></div>${rows.length ? `<div class="market-grid">${rows.map((row) => { const ready = marketReady(row); const items = [["Connection", row.api === true], ["Authentication", row.auth === true], ["South Africa verified", row.south_africa_verified], ["Payout ready", row.payout_ready], ["Automation approved", row.policy_automation_allowed === true && row.adapter_policy_verified], ["Acquisition switch", row.auto_acquisition_switch]]; return `<article class="market-card"><div class="market-card-head"><span class="market-logo">${esc(row.market.slice(0, 2))}</span><div class="market-card-title"><h3>${esc(human(row.market))}</h3><p>${esc(row.payout_method || "Payout method not verified")}</p></div>${stateBadge(row.status)}</div><div class="market-verdict ${ready ? "ready" : ""}">${esc(ready ? "READY FOR AUTONOMOUS WORK" : firstBlocker(row))}</div><div class="readiness-list">${items.map(([label, yes]) => `<div class="readiness-item ${yes ? "yes" : ""}"><i>${yes ? "✓" : "·"}</i>${esc(label)}</div>`).join("")}</div><div class="market-stats"><div><strong>${Number(row.opportunities_seen_24h || 0)}</strong><small>24H SEEN</small></div><div><strong>${Number(row.applications_total || 0)}</strong><small>APPLICATIONS · ALL TIME</small></div><div><strong>${Number(row.awards_total || 0)}</strong><small>AWARDS · ALL TIME</small></div><div><strong>${esc(row.settled_net || "0.00")}</strong><small>SETTLED VALUE</small></div></div>${!ready ? `<div class="market-blocker">Next: ${esc(firstBlocker(row))}</div>` : ""}<details class="ledger-disclosure"><summary>Advanced integration detail</summary><div class="panel-body"><div class="drawer-field"><small>ADAPTER</small><strong>${esc(row.adapter || "Not configured")}</strong></div><div class="drawer-field"><small>POLICY CHECKED</small><strong>${esc(row.policy_checked || "Not verified")}</strong></div></div></details></article>`; }).join("")}</div>` : empty("No marketplaces configured", "Bootstrap real market records before enabling discovery or acquisition.")}`;
   }
 
   function renderAlerts(data) {
@@ -279,17 +304,21 @@
   }
 
   function updateNavBadges(data) {
-    const jobs = ((data["live-work"] || {}).rows || []).filter((row) => ["CLAIMED", "AWARDED", "EXECUTING", "SUBMITTED", "ACCEPTED", "PAYOUT_PENDING"].includes(row.state)).length;
-    const alerts = ((data.alerts || {}).rows || []).filter((row) => !["RESOLVED", "ACKNOWLEDGED"].includes(row.status)).length;
-    [["navJobs", jobs], ["navAlerts", alerts]].forEach(([id, count]) => { const element = document.getElementById(id); if (element && count) { element.textContent = count > 99 ? "99+" : String(count); element.classList.add("visible"); } });
+    const jobs = data["live-work"] ? (data["live-work"].rows || []).filter((row) => ["CLAIMED", "AWARDED", "EXECUTING", "SUBMITTED", "ACCEPTED", "PAYOUT_PENDING"].includes(row.state)).length : null;
+    const alerts = data.alerts ? (data.alerts.rows || []).filter((row) => !["RESOLVED", "ACKNOWLEDGED"].includes(row.status)).length : null;
+    [["navJobs", jobs], ["navAlerts", alerts]].forEach(([id, count]) => { const element = document.getElementById(id); if (element && count !== null) { element.textContent = count ? (count > 99 ? "99+" : String(count)) : ""; element.classList.toggle("visible", count > 0); } });
   }
 
   async function refresh(manual) {
     if (refreshing) return; refreshing = true; refreshButton.classList.add("spinning");
     try {
-      const data = await loadSources(); render(data); updateNavBadges(data);
+      const data = await loadSources();
+      currentData = data;
+      updateNavBadges(data);
+      if (!manual && hasActiveInteraction()) pendingData = data;
+      else { render(data); pendingData = null; }
       skeleton.hidden = true; root.hidden = false; firstRender = false;
-      const now = new Date(); lastUpdated.textContent = now.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}); liveState.className = "live-state live"; liveState.querySelector("span").textContent = "Live";
+      const now = new Date(); lastUpdated.textContent = now.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}); liveState.className = "live-state live"; liveState.querySelector("span").textContent = "Data live";
       if (manual) showToast("Dashboard refreshed with persisted data.");
     } catch (loadError) {
       liveState.className = "live-state stale"; liveState.querySelector("span").textContent = "Data stale";
@@ -308,6 +337,8 @@
   function closeNav() { sidebar.classList.remove("open"); overlay.hidden = true; mobileMenu.setAttribute("aria-expanded", "false"); }
   mobileMenu.addEventListener("click", () => { const open = !sidebar.classList.contains("open"); sidebar.classList.toggle("open", open); overlay.hidden = !open; mobileMenu.setAttribute("aria-expanded", String(open)); });
   overlay.addEventListener("click", closeNav);
+  root.addEventListener("toggle", () => window.setTimeout(applyPendingData, 0), true);
+  root.addEventListener("focusout", () => window.setTimeout(applyPendingData, 0));
 
   refresh(false);
   window.setInterval(() => { if (!document.hidden) refresh(false); }, 20000);

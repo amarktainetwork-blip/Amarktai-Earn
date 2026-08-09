@@ -77,3 +77,40 @@ class OwnerUIIntegrationTests(TestCase):
         self.assertIn("Contract exposure, not received cash", app_script)
         self.assertIn("Earned, but not received cash", app_script)
         self.assertNotIn("fake", app_script.lower())
+
+    def test_opportunity_activity_never_presents_all_time_awards_as_a_24_hour_funnel(self):
+        app_script = Path(finders.find("control/app.js")).read_text(encoding="utf-8")
+        self.assertIn("Opportunities seen · 24h", app_script)
+        self.assertIn("Blocked preflights · 24h", app_script)
+        self.assertIn("Applications · all time", app_script)
+        self.assertIn("Awards · all time", app_script)
+        self.assertNotIn("scanned - blocked", app_script)
+        self.assertNotIn("Opportunity pipeline", app_script)
+
+    def test_agent_activity_requires_executing_status_and_a_current_job(self):
+        app_script = Path(finders.find("control/app.js")).read_text(encoding="utf-8")
+        self.assertIn('toUpperCase() === "EXECUTING" && Boolean(agent && agent.current_job)', app_script)
+        self.assertGreaterEqual(app_script.count("filter(isAgentActive)"), 2)
+        self.assertIn("const active = isAgentActive(agent)", app_script)
+        self.assertIn("Active work is waiting for runtime activity", app_script)
+        self.assertIn("no agent has confirmed executing runtime evidence", app_script)
+        self.assertNotIn('!["OFFLINE", "READY", "WAITING"].includes', app_script)
+
+    def test_polling_preserves_active_interaction_and_badges_clear_at_zero(self):
+        app_script = Path(finders.find("control/app.js")).read_text(encoding="utf-8")
+        self.assertIn('.drawer:not([hidden])', app_script)
+        self.assertIn('details[open]', app_script)
+        self.assertIn("if (!manual && hasActiveInteraction()) pendingData = data", app_script)
+        self.assertIn("function applyPendingData()", app_script)
+        self.assertIn("window.setTimeout(applyPendingData, 0)", app_script)
+        self.assertIn('element.textContent = count ? (count > 99 ? "99+" : String(count)) : ""', app_script)
+        self.assertIn('element.classList.toggle("visible", count > 0)', app_script)
+        self.assertIn("activeJobFilter", app_script)
+
+    def test_polling_and_market_value_labels_do_not_overclaim_runtime_or_currency(self):
+        app_script = Path(finders.find("control/app.js")).read_text(encoding="utf-8")
+        self.assertIn("Your autonomous earning system at a glance.", app_script)
+        self.assertIn('textContent = "Data live"', app_script)
+        self.assertIn("SETTLED VALUE", app_script)
+        self.assertNotIn('strong>$${esc(row.settled_net', app_script)
+        self.assertNotIn("monitoring opportunities and managing", app_script)
