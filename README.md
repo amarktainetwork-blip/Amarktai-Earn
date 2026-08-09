@@ -125,6 +125,8 @@ Internet-wide/random scanning, credential attacks, DDoS/stress, persistence, mal
 
 ## Market architecture and exact adapter truth
 
+The repository-level [two-sided revenue engine](docs/two-sided-revenue-engine.md) keeps demand-pull jobs and supply-push service orders on the same canonical economic, execution, QA, delivery, and settlement path. All new channels are fail-closed by default and require external account/payout proof before activation.
+
 All markets are disabled for autonomous acquisition by default. A source or adapter is not payout proof. The database stores source wiring, capabilities, checked documentation time, auth method, rate-limit knowledge, policy status, payout method, South African eligibility, and exact blockers.
 
 | Market | Source/adapter | Discovery | Apply/bid/claim | Submission/status | Payout truth | Current V1 truth |

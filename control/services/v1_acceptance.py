@@ -85,6 +85,12 @@ def _safe_defaults() -> AcceptanceCriterion:
         "SAFETY_BOUNTY_EXECUTION_ENABLED": "0",
         "REPUTATION_INVESTMENT_ENABLED": "0",
         "REPUTATION_INVESTMENT_DAILY_LIMIT": "0",
+        "NEVERMINED_AUTO_PUBLISH_ENABLED": "0",
+        "SKYFIRE_AUTO_PUBLISH_ENABLED": "0",
+        "HYRVE_AUTO_ACQUIRE_ENABLED": "0",
+        "HYRVE_AUTO_PUBLISH_ENABLED": "0",
+        "SERVICE_AUTO_PUBLISH_ENABLED": "0",
+        "INBOUND_SERVICE_AUTO_ACCEPT_ENABLED": "0",
     }
     values = {}
     for raw in _source_text(".env.example").splitlines():
@@ -222,6 +228,29 @@ def _readme_truth() -> AcceptanceCriterion:
     return _criterion("readme_truth", "README implementation truth", "PASS", "SOURCE", "README distinguishes implementation, CI proof, safe defaults, and external proof without claiming live revenue.")
 
 
+def _two_sided_revenue_contracts(*, ci_proven: bool) -> list[AcceptanceCriterion]:
+    definitions = (
+        ("two_sided_revenue_engine", "Two-sided revenue engine", "Demand-pull and supply-push use centralized market, economic, lifecycle, and upgrade-safe catalog truth.", (("markets/revenue_catalog.py", "LEGACY_PROFILE_ENRICHMENTS"), ("tests/test_two_sided_revenue_integration.py", "test_existing_six_profiles_receive_static_taxonomy_without_dynamic_truth_reset"))),
+        ("service_offering_truth", "Persisted service offering and listing truth", "CI proved SOURCE_PROVEN, EXECUTION_PROVEN, and runtime-gated SELLABLE progression plus fail-closed listings.", (("control/services/seller_services.py", "runtime_sellability_blockers"), ("tests/test_two_sided_revenue_integration.py", "test_proof_progression_and_runtime_sellability_gates_owner_count"))),
+        ("inbound_order_uses_canonical_job_lifecycle", "Inbound orders use canonical jobs", "CI proved one canonical Job per authenticated idempotent inbound order.", (("control/models.py", "class InboundOrder"), ("control/services/seller_services.py", "receive_inbound_order"))),
+        ("global_portfolio_ranking", "Global cross-source portfolio ranking", "CI ranked all channels while selecting only current eligible, action-allowed work within shared capacity.", (("control/services/revenue_portfolio.py", "would_select_if_enabled"), ("tests/test_two_sided_revenue_integration.py", "test_portfolio_ranks_blocked_work_but_selects_only_currently_safe_actions"))),
+        ("seller_pricing_profit_floor", "Seller pricing preserves the profit floor", "CI proved bounded busy/idle price movement never undercuts the economic floor.", (("control/services/seller_services.py", "recommend_offering_price"), ("tests/test_two_sided_revenue_integration.py", "test_pricing_is_bounded_by_profit_floor"))),
+        ("crypto_markets_offhost_only", "Crypto candidates are off-host only", "CI proved Webdock cannot initialize an off-host settlement candidate.", (("control/services/seller_protocols.py", "DisabledExternalSettlementBridge"), ("markets/revenue_catalog.py", "OFFHOST_SETTLEMENT_REQUIRED"))),
+        ("nevermined_fiat_only_on_webdock", "Nevermined is fiat-only on Webdock", "CI rejected crypto/on-chain Nevermined plans and performed no mutation.", (("control/services/seller_protocols.py", "NEVERMINED_WEBDOCK_FIAT_ONLY"), ("tests/test_two_sided_revenue_stdlib.py", "test_nevermined_webdock_rejects_crypto"))),
+        ("skyfire_noncrypto_gate", "Skyfire non-crypto settlement gate", "CI rejected unverified and COIN settlement paths.", (("control/services/seller_protocols.py", "SKYFIRE_NON_CRYPTO_SETTLEMENT_REQUIRED"), ("tests/test_two_sided_revenue_stdlib.py", "test_skyfire_rejects_coin_settlement"))),
+        ("hyrve_fail_closed_without_contract", "HYRVE fails closed without a public contract", "CI proved source_wired remains false and no mutation adapter exists.", (("markets/revenue_catalog.py", "PUBLIC_API_CONTRACT_NOT_VERIFIED"), ("tests/test_two_sided_revenue_integration.py", "test_hyrve_has_no_invented_source_contract"))),
+        ("service_capability_requires_execution_proof", "Service capability requires execution proof", "CI proved registry presence alone cannot produce a sellable service.", (("control/services/seller_services.py", "refresh_service_offering_proof"), ("tests/test_two_sided_revenue_integration.py", "test_service_requires_real_execution_and_qa_proof"))),
+        ("coding_service_blocked_when_sandbox_off", "Coding services follow sandbox safety", "CI proved coding proof stops at EXECUTION_PROVEN while sandbox coding is off and owner sellable counts remain truthful.", (("control/services/seller_services.py", "CODING_SERVICE_BLOCKED_SANDBOX_OFF"), ("tests/test_two_sided_revenue_integration.py", "test_proof_progression_and_runtime_sellability_gates_owner_count"))),
+        ("public_web_service_blocked_when_web_disabled", "Public-web services follow direct-web safety", "CI proved direct public-web proof stops at EXECUTION_PROVEN while web data is off.", (("control/services/seller_services.py", "PUBLIC_WEB_SERVICE_BLOCKED_WEB_DISABLED"), ("tests/test_two_sided_revenue_integration.py", "test_proof_progression_and_runtime_sellability_gates_owner_count"))),
+        ("market_policy_staleness_blocks_mutation", "Stale seller policy blocks mutation", "CI proved seller-side mutations fail closed after policy evidence expires.", (("control/services/seller_services.py", "MARKET_POLICY_STALE"), ("tests/test_two_sided_revenue_integration.py", "test_stale_policy_blocks_listing"))),
+        ("only_settled_is_cash", "Only authoritative settled evidence is cash", "CI proved canonical finance, ledger, treasury, idempotency, amount-mutation, and reversal truth for inbound settlement.", (("control/services/seller_services.py", "record_payout_state"), ("tests/test_two_sided_revenue_integration.py", "test_authoritative_settlement_uses_canonical_finance_and_reversal_truth"))),
+    )
+    return [
+        _contract_gate(identifier, title, evidence, ci_proven=ci_proven, markers=markers)
+        for identifier, title, evidence, markers in definitions
+    ]
+
+
 def build_acceptance_report(*, ci_proven: bool = False) -> dict:
     criteria = [
         _safe_defaults(),
@@ -248,6 +277,7 @@ def build_acceptance_report(*, ci_proven: bool = False) -> dict:
                 ("tests/test_profit_brain_integration.py", "test_bootstrap_and_exceeded_targets_never_cap_profitable_work"),
             ),
         ),
+        *_two_sided_revenue_contracts(ci_proven=ci_proven),
         _contract_gate(
             "genx_async_session_truth", "GenX asynchronous session and billing truth",
             "CI proved session acknowledgements remain SUBMITTED until their remote job is terminal, remote identities are persisted separately, missing usage remains unresolved and reserved, assistant-only output is selected safely, reconciliation is idempotent, and incomplete monetary coverage is never presented as final true profit.",

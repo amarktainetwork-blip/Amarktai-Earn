@@ -173,6 +173,17 @@ class MarketIntegrationProfile(Timestamped):
     source_urls = models.JSONField(default=list)
     blockers = models.JSONField(default=list)
     evidence = models.JSONField(default=dict)
+    revenue_channels = models.JSONField(default=list)
+    seller_capabilities = models.JSONField(default=dict)
+    automation_status = models.CharField(max_length=80, default="BLOCKED")
+    job_acquisition_mode = models.CharField(max_length=80, blank=True)
+    seller_mode = models.CharField(max_length=80, blank=True)
+    settlement_rail = models.CharField(max_length=120, blank=True)
+    currency = models.CharField(max_length=3, default="USD")
+    hosting_policy = models.CharField(max_length=40, default="UNVERIFIED")
+    api_contract_state = models.CharField(max_length=80, default="UNVERIFIED")
+    payout_proof_state = models.CharField(max_length=80, default="UNVERIFIED")
+    manual_onboarding_required = models.BooleanField(default=True)
 
     class Meta:
         constraints = [
@@ -182,6 +193,183 @@ class MarketIntegrationProfile(Timestamped):
                 name="market_acquisition_requires_verified_policy",
             )
         ]
+
+
+class ServiceOffering(Timestamped):
+    class PricingModel(models.TextChoices):
+        FIXED_PROJECT = "FIXED_PROJECT"
+        PER_CALL = "PER_CALL"
+        PER_UNIT = "PER_UNIT"
+        SUBSCRIPTION = "SUBSCRIPTION"
+        OUTCOME = "OUTCOME"
+
+    class ProofState(models.TextChoices):
+        UNPROVEN = "UNPROVEN"
+        SOURCE_PROVEN = "SOURCE_PROVEN"
+        EXECUTION_PROVEN = "EXECUTION_PROVEN"
+        SELLABLE = "SELLABLE"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    slug = models.SlugField(unique=True)
+    display_name = models.CharField(max_length=160)
+    description = models.TextField(blank=True)
+    capability = models.CharField(max_length=100)
+    operation = models.CharField(max_length=100)
+    worker_class = models.CharField(max_length=100)
+    pricing_model = models.CharField(max_length=24, choices=PricingModel.choices)
+    currency = models.CharField(max_length=3, default="USD")
+    advertised_price = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    minimum_profitable_price = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    platform_fee_rate = models.DecimalField(max_digits=8, decimal_places=6, default=0)
+    expected_genx_cost = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    max_genx_credits = models.DecimalField(max_digits=16, decimal_places=4, default=0)
+    expected_external_cost = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    expected_operational_cost = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    expected_minutes = models.PositiveIntegerField(default=1)
+    sla_minutes = models.PositiveIntegerField(default=1440)
+    input_schema = models.JSONField(default=dict)
+    output_schema = models.JSONField(default=dict)
+    terms_metadata = models.JSONField(default=dict)
+    proof_evidence = models.JSONField(default=dict)
+    enabled = models.BooleanField(default=False)
+    accepting_orders = models.BooleanField(default=False)
+    version = models.PositiveIntegerField(default=1)
+    proof_state = models.CharField(max_length=24, choices=ProofState.choices, default=ProofState.UNPROVEN)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(advertised_price__gte=0), name="service_advertised_price_nonnegative"),
+            models.CheckConstraint(condition=models.Q(minimum_profitable_price__gte=0), name="service_minimum_price_nonnegative"),
+            models.CheckConstraint(condition=models.Q(platform_fee_rate__gte=0) & models.Q(platform_fee_rate__lt=1), name="service_fee_rate_valid"),
+            models.CheckConstraint(condition=models.Q(expected_genx_cost__gte=0), name="service_genx_cost_nonnegative"),
+            models.CheckConstraint(condition=models.Q(max_genx_credits__gte=0), name="service_genx_credits_nonnegative"),
+            models.CheckConstraint(condition=models.Q(expected_external_cost__gte=0), name="service_external_cost_nonnegative"),
+            models.CheckConstraint(condition=models.Q(expected_operational_cost__gte=0), name="service_operational_cost_nonnegative"),
+        ]
+
+
+class MarketServiceListing(Timestamped):
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT"
+        READY = "READY"
+        PUBLISHED = "PUBLISHED"
+        PAUSED = "PAUSED"
+        BLOCKED = "BLOCKED"
+        STALE = "STALE"
+        FAILED = "FAILED"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    offering = models.ForeignKey(ServiceOffering, on_delete=models.PROTECT, related_name="market_listings")
+    marketplace = models.ForeignKey(Marketplace, on_delete=models.PROTECT, related_name="service_listings")
+    remote_listing_id = models.CharField(max_length=255, blank=True)
+    remote_reference = models.CharField(max_length=700, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    published_price = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    currency = models.CharField(max_length=3, default="USD")
+    pricing_model = models.CharField(max_length=24, choices=ServiceOffering.PricingModel.choices)
+    published_at = models.DateTimeField(null=True, blank=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    platform_metadata = models.JSONField(default=dict)
+    remote_version = models.CharField(max_length=80, blank=True)
+    policy_hash = models.CharField(max_length=128, blank=True)
+    failure_code = models.CharField(max_length=120, blank=True)
+    failure_detail = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["offering", "marketplace"], name="uniq_service_market_listing"),
+            models.CheckConstraint(condition=models.Q(published_price__gte=0), name="service_listing_price_nonnegative"),
+        ]
+
+
+class InboundOrder(Timestamped):
+    class Status(models.TextChoices):
+        RECEIVED = "RECEIVED"
+        PREFLIGHT_BLOCKED = "PREFLIGHT_BLOCKED"
+        READY = "READY"
+        ACCEPTED = "ACCEPTED"
+        DELIVERED = "DELIVERED"
+        PAYOUT_PENDING = "PAYOUT_PENDING"
+        SETTLED = "SETTLED"
+        REVERSED = "REVERSED"
+        FAILED = "FAILED"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    marketplace = models.ForeignKey(Marketplace, on_delete=models.PROTECT, related_name="inbound_orders")
+    listing = models.ForeignKey(MarketServiceListing, null=True, blank=True, on_delete=models.PROTECT, related_name="inbound_orders")
+    job = models.OneToOneField("Job", null=True, blank=True, on_delete=models.PROTECT, related_name="inbound_order")
+    remote_order_id = models.CharField(max_length=255)
+    idempotency_key = models.CharField(max_length=255)
+    buyer_reference = models.CharField(max_length=255, blank=True)
+    requirements = models.JSONField(default=dict)
+    input_assets = models.JSONField(default=list)
+    quoted_price = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default="USD")
+    platform_fee = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    funding_state = models.CharField(max_length=80, default="UNVERIFIED")
+    deadline = models.DateTimeField(null=True, blank=True)
+    remote_state = models.CharField(max_length=80, blank=True)
+    messages = models.JSONField(default=list)
+    usage = models.JSONField(default=dict)
+    settlement_reference = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.RECEIVED)
+    economic_preflight = models.JSONField(default=dict)
+    request_digest = models.CharField(max_length=64)
+    authenticated_at = models.DateTimeField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["marketplace", "remote_order_id"], name="uniq_market_inbound_order"),
+            models.UniqueConstraint(fields=["marketplace", "idempotency_key"], name="uniq_market_inbound_idempotency"),
+            models.CheckConstraint(condition=models.Q(quoted_price__gt=0), name="inbound_order_price_positive"),
+            models.CheckConstraint(condition=models.Q(platform_fee__gte=0) & models.Q(platform_fee__lte=models.F("quoted_price")), name="inbound_order_fee_valid"),
+        ]
+
+
+class InboundSettlementEvent(Timestamped):
+    class State(models.TextChoices):
+        AUTHORIZED = "AUTHORIZED"
+        ESCROW = "ESCROW"
+        PAYOUT_PENDING = "PAYOUT_PENDING"
+        SETTLED = "SETTLED"
+        REVERSED = "REVERSED"
+
+    order = models.ForeignKey(InboundOrder, on_delete=models.PROTECT, related_name="settlement_events")
+    remote_event_id = models.CharField(max_length=255)
+    state = models.CharField(max_length=24, choices=State.choices)
+    gross = models.DecimalField(max_digits=14, decimal_places=2)
+    fee = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    net = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default="USD")
+    authoritative = models.BooleanField(default=False)
+    evidence_source = models.CharField(max_length=120)
+    evidence = models.JSONField(default=dict)
+    observed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["order", "remote_event_id"], name="uniq_inbound_settlement_event"),
+            models.CheckConstraint(condition=models.Q(gross__gte=0), name="inbound_settlement_gross_nonnegative"),
+            models.CheckConstraint(condition=models.Q(fee__gte=0) & models.Q(fee__lte=models.F("gross")), name="inbound_settlement_fee_valid"),
+            models.CheckConstraint(condition=models.Q(net__gte=0), name="inbound_settlement_net_nonnegative"),
+        ]
+
+
+class PortfolioDecision(Timestamped):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    job = models.ForeignKey("Job", on_delete=models.CASCADE, related_name="portfolio_decisions")
+    inbound_order = models.ForeignKey(InboundOrder, null=True, blank=True, on_delete=models.SET_NULL, related_name="portfolio_decisions")
+    source_type = models.CharField(max_length=40)
+    revenue_channel = models.CharField(max_length=40)
+    rank = models.PositiveIntegerField()
+    score = models.DecimalField(max_digits=18, decimal_places=6)
+    selected = models.BooleanField(default=False)
+    expected_net_profit = models.DecimalField(max_digits=14, decimal_places=2)
+    risk_adjusted_profit = models.DecimalField(max_digits=14, decimal_places=2)
+    profit_per_minute = models.DecimalField(max_digits=14, decimal_places=4)
+    payout_probability = models.DecimalField(max_digits=7, decimal_places=6)
+    acceptance_probability = models.DecimalField(max_digits=7, decimal_places=6)
+    inputs = models.JSONField(default=dict)
 
 
 class Job(Timestamped):
