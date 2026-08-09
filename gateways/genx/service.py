@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from control.models import (
@@ -21,7 +22,11 @@ from control.models import (
 )
 from gateways.genx.client import GenXClient, GenXError
 from control.services.admission import AdmissionDenied, require_admission
-from gateways.genx.output import extract_text
+from gateways.genx.output import (
+    decode_text_result_url,
+    extract_session_assistant_text,
+    session_assistant_job_ids,
+)
 from gateways.genx.contracts import (
     ModelCandidate,
     assert_credit_budget,
@@ -165,7 +170,9 @@ class GenXGateway:
                 return existing, False
 
         reserved = effective_reserved_credits(
-            GenXCall.objects.filter(job=job).values_list("credits", "estimated_credits", "status")
+            GenXCall.objects.filter(job=job).values_list(
+                "credits", "estimated_credits", "status", "requested_metadata"
+            )
         )
         try:
             assert_credit_budget(
@@ -297,8 +304,9 @@ class GenXGateway:
         request_key: str,
         tools: list | None = None,
         preferred_model: str | None = None,
+        wait_timeout_seconds: int = 180,
     ) -> tuple[GenXCall, dict[str, Any]]:
-        """Run one documented GenX stateful session message with controller-side budget truth."""
+        """Submit one session message, then reconcile its asynchronous remote job."""
         selected = self.select_model(task_class=task_class, category="text", preferred_model=preferred_model)
         job = Job.objects.select_related("marketplace").get(pk=job_id)
         try:
@@ -325,13 +333,18 @@ class GenXGateway:
             metadata=metadata,
         )
         if not created:
-            if call.external_job_id.startswith("session:"):
-                session_id = call.external_job_id.split(":", 1)[1]
-                return call, self.client.session_messages(session_id)
-            return call, {}
+            # A request key is a paid-POST boundary. Never replay session creation or
+            # message submission, even if the prior process stopped mid-lifecycle.
+            return call, {
+                "assistant_text": str(call.requested_metadata.get("assistant_text") or ""),
+                "result_url": call.result_url,
+                "remote_job_id": str(call.requested_metadata.get("remote_job_id") or ""),
+            }
 
         started = time.monotonic()
         session_id = ""
+        message_id = ""
+        remote_job_id = ""
         phase = "CREATE_SESSION"
         try:
             GenXCall.objects.filter(pk=call.pk).update(status="SUBMITTING")
@@ -343,7 +356,19 @@ class GenXGateway:
             session_id = str(session.get("session_id") or session.get("id") or "")
             if not session_id:
                 raise GenXGatewayError("GenX session response did not contain a session ID")
-            GenXCall.objects.filter(pk=call.pk).update(external_job_id=f"session:{session_id}", status="SUBMITTED")
+            metadata = {
+                **metadata,
+                "session_id": session_id,
+                "message_id": "",
+                "remote_job_id": "",
+                "billing_truth": "PENDING",
+            }
+            GenXCall.objects.filter(pk=call.pk).update(
+                external_job_id=f"session:{session_id}",
+                status="SUBMITTING",
+                requested_metadata=metadata,
+            )
+            self._audit_session_phase("genx.session_created", call, metadata, status="CREATED")
             phase = "SEND_MESSAGE"
             response = self.client.session_message(
                 session_id,
@@ -351,27 +376,32 @@ class GenXGateway:
                 idempotency_key=request_key,
                 tools=tools,
             )
-            phase = "RECONCILE"
-            reconciled = self.reconcile(
+            remote_job_id = str(response.get("job_id") or "")
+            message_id = str(response.get("message_id") or "")
+            if not remote_job_id:
+                raise GenXGatewayError("GenX session message acknowledgement did not contain a job ID")
+            metadata = {
+                **metadata,
+                "message_id": message_id,
+                "remote_job_id": remote_job_id,
+                "billing_truth": "PENDING",
+            }
+            GenXCall.objects.filter(pk=call.pk).update(
+                external_job_id=remote_job_id,
+                status="SUBMITTED",
+                requested_metadata=metadata,
+            )
+            self._audit_session_phase("genx.session_message_submitted", call, metadata, status="SUBMITTED")
+            phase = "POLL_REMOTE_JOB"
+            final = self.client.wait(remote_job_id, timeout_seconds=wait_timeout_seconds)
+            if str(final.get("status") or "").lower() not in {"completed", "failed", "cancelled"}:
+                raise GenXGatewayError("GenX wait returned a non-terminal remote job")
+            reconciled = self.reconcile_remote_job_payload(
                 call.id,
-                {
-                    "status": "COMPLETED",
-                    "usage": response.get("usage") if isinstance(response.get("usage"), dict) else {},
-                    "billing": response.get("billing") if isinstance(response.get("billing"), dict) else {},
-                },
+                final,
+                source="POLL",
                 elapsed_ms=int((time.monotonic() - started) * 1000),
             )
-            phase = "CLOSE_SESSION"
-            try:
-                self.client.close_session(session_id)
-            except GenXError:
-                AuditEvent.objects.create(
-                    severity="WARNING",
-                    event_type="genx.session_close_failed",
-                    actor="genx-gateway",
-                    metadata={"call_id": str(call.id), "session_id": session_id},
-                )
-            return reconciled, response
         except (GenXError, GenXGatewayError, TimeoutError) as exc:
             create_rejection = (
                 phase == "CREATE_SESSION"
@@ -387,11 +417,16 @@ class GenXGateway:
             )
             confirmed_rejection = create_rejection or message_validation_rejection
             next_status = "FAILED" if confirmed_rejection else "UNKNOWN_REMOTE_STATE"
+            current = GenXCall.objects.get(pk=call.pk)
+            failure_metadata = dict(current.requested_metadata or metadata)
+            if confirmed_rejection:
+                failure_metadata["billing_truth"] = "NOT_APPLICABLE"
             GenXCall.objects.filter(pk=call.pk).update(
                 status=next_status,
                 latency_ms=int((time.monotonic() - started) * 1000),
                 completed_at=timezone.now() if confirmed_rejection else None,
                 error_code=exc.__class__.__name__,
+                requested_metadata=failure_metadata,
             )
             AuditEvent.objects.create(
                 severity="ERROR" if confirmed_rejection else "WARNING",
@@ -403,83 +438,305 @@ class GenXGateway:
                     "error_code": exc.__class__.__name__,
                     "phase": phase,
                     "http_status": exc.status_code if isinstance(exc, GenXError) else None,
+                    "session_id": session_id,
+                    "message_id": message_id,
+                    "remote_job_id": remote_job_id,
+                    "model": selected.model_id,
                 },
             )
             raise
 
+        self._audit_session_phase(
+            "genx.remote_job_terminal",
+            reconciled,
+            reconciled.requested_metadata,
+            status=reconciled.status,
+            source="POLL",
+        )
+        history: dict[str, Any] = {}
+        assistant_text = ""
+        try:
+            history = self.client.session_messages(session_id)
+            assistant_text = extract_session_assistant_text(
+                history,
+                job_id=remote_job_id,
+                message_id=message_id,
+            )
+        except GenXError as exc:
+            AuditEvent.objects.create(
+                severity="WARNING",
+                event_type="genx.session_history_unavailable",
+                actor="genx-gateway",
+                metadata={
+                    "call_id": str(call.id),
+                    "session_id": session_id,
+                    "remote_job_id": remote_job_id,
+                    "error_code": exc.__class__.__name__,
+                },
+            )
+        if not assistant_text:
+            assistant_text = decode_text_result_url(reconciled.result_url)
+        if assistant_text:
+            persisted = dict(reconciled.requested_metadata)
+            persisted["assistant_text"] = assistant_text
+            GenXCall.objects.filter(pk=reconciled.pk).update(requested_metadata=persisted)
+            reconciled.requested_metadata = persisted
+        try:
+            self.client.close_session(session_id)
+        except GenXError:
+            AuditEvent.objects.create(
+                severity="WARNING",
+                event_type="genx.session_close_failed",
+                actor="genx-gateway",
+                metadata={"call_id": str(call.id), "session_id": session_id, "remote_job_id": remote_job_id},
+            )
+        return reconciled, {
+            "submission": response,
+            "remote_job": final,
+            "session_history": history,
+            "assistant_text": assistant_text,
+            "result_url": reconciled.result_url,
+        }
+
+    @staticmethod
+    def _session_id(call: GenXCall) -> str:
+        value = str((call.requested_metadata or {}).get("session_id") or "")
+        if value:
+            return value
+        if call.external_job_id.startswith("session:"):
+            return call.external_job_id.split(":", 1)[1]
+        return ""
+
+    @staticmethod
+    def _remote_job_id(call: GenXCall) -> str:
+        value = str((call.requested_metadata or {}).get("remote_job_id") or "")
+        if value:
+            return value
+        if call.external_job_id and not call.external_job_id.startswith("session:"):
+            return call.external_job_id
+        return ""
+
+    @staticmethod
+    def _audit_session_phase(event_type, call, metadata, *, status, source=""):
+        AuditEvent.objects.create(
+            event_type=event_type,
+            actor="genx-gateway",
+            metadata={
+                "call_id": str(call.id),
+                "session_id": str(metadata.get("session_id") or ""),
+                "message_id": str(metadata.get("message_id") or ""),
+                "remote_job_id": str(metadata.get("remote_job_id") or ""),
+                "model": call.model,
+                "status": status,
+                "usage_source": source,
+                "billing_truth": str(metadata.get("billing_truth") or ""),
+            },
+        )
+
     def reconcile_pending(self, limit: int = 100) -> dict[str, int]:
         reconciled = 0
         unresolved = 0
-        calls = list(
-            GenXCall.objects.filter(status__in=["SUBMITTED", "UNKNOWN_REMOTE_STATE"])
-            .exclude(external_job_id="")
-            .order_by("created_at")[:limit]
-        )
+        candidates = GenXCall.objects.filter(
+            Q(status__in=["SUBMITTED", "UNKNOWN_REMOTE_STATE"]) | Q(status="COMPLETED")
+        ).order_by("created_at")
+        calls = []
+        for call in candidates:
+            billing_truth = str((call.requested_metadata or {}).get("billing_truth") or "")
+            if call.status != "COMPLETED" or billing_truth == "UNRESOLVED":
+                calls.append(call)
+            if len(calls) >= limit:
+                break
         for call in calls:
             try:
-                if call.external_job_id.startswith("session:"):
-                    session_id = call.external_job_id.split(":", 1)[1]
-                    payload = self.client.session_messages(session_id)
-                    if not extract_text(payload):
+                metadata = dict(call.requested_metadata or {})
+                is_session = metadata.get("transport") == "session" or call.external_job_id.startswith("session:")
+                session_id = self._session_id(call) if is_session else ""
+                remote_job_id = self._remote_job_id(call)
+                history: dict[str, Any] = {}
+                if is_session and not remote_job_id:
+                    if not session_id:
                         unresolved += 1
                         continue
-                    self.reconcile(
-                        call.id,
-                        {
-                            "status": "COMPLETED",
-                            "usage": payload.get("usage") if isinstance(payload.get("usage"), dict) else {},
-                            "billing": payload.get("billing") if isinstance(payload.get("billing"), dict) else {},
-                        },
+                    history = self.client.session_messages(session_id)
+                    discovered = session_assistant_job_ids(history)
+                    if len(discovered) != 1:
+                        self._open_identity_alert(call, discovered)
+                        unresolved += 1
+                        continue
+                    remote_job_id = discovered[0]
+                    metadata.update({"session_id": session_id, "remote_job_id": remote_job_id})
+                    GenXCall.objects.filter(pk=call.pk).update(
+                        external_job_id=remote_job_id,
+                        requested_metadata=metadata,
                     )
-                else:
-                    payload = self.client.job(call.external_job_id)
-                    self.reconcile(call.id, payload)
+                    call.external_job_id = remote_job_id
+                    call.requested_metadata = metadata
+                    self._audit_session_phase(
+                        "genx.remote_job_identity_recovered", call, metadata, status=call.status, source="POLL"
+                    )
+                if not remote_job_id:
+                    unresolved += 1
+                    continue
+                payload = self.client.job(remote_job_id)
+                if str(payload.get("status") or "").lower() not in {"completed", "failed", "cancelled"}:
+                    unresolved += 1
+                    continue
+                reconciled_call = self.reconcile_remote_job_payload(call.id, payload, source="POLL")
+                if is_session and session_id:
+                    if not history:
+                        history = self.client.session_messages(session_id)
+                    assistant_text = extract_session_assistant_text(history, job_id=remote_job_id)
+                    if not assistant_text:
+                        assistant_text = decode_text_result_url(reconciled_call.result_url)
+                    if assistant_text:
+                        updated_metadata = dict(reconciled_call.requested_metadata)
+                        updated_metadata["assistant_text"] = assistant_text
+                        GenXCall.objects.filter(pk=call.pk).update(requested_metadata=updated_metadata)
                 reconciled += 1
-            except GenXError:
+            except (GenXError, TimeoutError):
                 unresolved += 1
         return {"reconciled": reconciled, "unresolved": unresolved}
 
+    @staticmethod
+    def _open_identity_alert(call: GenXCall, discovered: list[str]):
+        existing = Alert.objects.filter(
+            alert_type="GENX_REMOTE_JOB_ID_AMBIGUOUS",
+            status="OPEN",
+            metadata__call_id=str(call.id),
+        ).first()
+        if not existing:
+            Alert.objects.create(
+                severity="WARNING",
+                alert_type="GENX_REMOTE_JOB_ID_AMBIGUOUS",
+                message="A historical GenX session has no single authoritative assistant job identity.",
+                metadata={"call_id": str(call.id), "assistant_job_ids": discovered},
+            )
+
     @transaction.atomic
-    def reconcile(self, call_id, payload: dict[str, Any], elapsed_ms: int = 0) -> GenXCall:
+    def reconcile_remote_job_payload(
+        self,
+        call_id,
+        payload: dict[str, Any],
+        source: str,
+        elapsed_ms: int = 0,
+    ) -> GenXCall:
+        """Idempotently apply authoritative remote execution and billing evidence."""
+        source = str(source).upper()
+        if source not in {"POLL", "WEBHOOK", "OPERATOR_EVIDENCE"}:
+            raise ValueError("unsupported GenX reconciliation source")
         call = GenXCall.objects.select_for_update().get(pk=call_id)
         was_terminal = call.status in {"COMPLETED", "FAILED", "CANCELLED"} and call.completed_at is not None
         status = str(payload.get("status") or "UNKNOWN").upper()
-        actual_credits = usage_credits(payload) or Decimal("0")
+        if status not in {"COMPLETED", "FAILED", "CANCELLED"}:
+            return call
+        metadata = dict(call.requested_metadata or {})
+        previous_billing_truth = str(metadata.get("billing_truth") or "")
+        previous_credits = call.credits
+        usage_value = usage_credits(payload)
+        if usage_value is not None and usage_value < 0:
+            usage_value = None
+        if usage_value is None and previous_billing_truth == "ACTUAL":
+            billing_truth = "ACTUAL"
+        elif usage_value is None:
+            billing_truth = "UNRESOLVED"
+        else:
+            billing_truth = "ACTUAL"
+            call.credits = usage_value
+        metadata.update({
+            "billing_truth": billing_truth,
+            "billing_source": source,
+            "remote_job_id": str(payload.get("job_id") or metadata.get("remote_job_id") or call.external_job_id),
+        })
         call.status = status
-        call.credits = actual_credits
-        call.usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
-        call.result_url = result_url(payload)
+        if usage_value is not None:
+            call.usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {
+                "credits": str(usage_value)
+            }
+        remote_result_url = result_url(payload)
+        if remote_result_url:
+            call.result_url = remote_result_url
         call.latency_ms = max(0, elapsed_ms)
-        call.completed_at = timezone.now() if status in {"COMPLETED", "FAILED", "CANCELLED"} else None
+        call.completed_at = call.completed_at or timezone.now()
         call.error_code = str(payload.get("error_code") or "")[:120]
+        call.requested_metadata = metadata
         call.save(
-            update_fields=["status", "credits", "usage", "result_url", "latency_ms", "completed_at", "error_code", "updated_at"]
+            update_fields=[
+                "status", "credits", "usage", "requested_metadata", "result_url",
+                "latency_ms", "completed_at", "error_code", "updated_at",
+            ]
         )
 
         if not was_terminal:
             stat, _ = ModelStat.objects.select_for_update().get_or_create(model=call.model, task_class=call.task_class)
             stat.attempts += 1
-            stat.credits += actual_credits
+            if usage_value is not None:
+                stat.credits += usage_value
             stat.total_latency_ms += call.latency_ms
             stat.save(update_fields=["attempts", "credits", "total_latency_ms", "updated_at"])
+        elif usage_value is not None and previous_billing_truth != "ACTUAL":
+            stat, _ = ModelStat.objects.select_for_update().get_or_create(model=call.model, task_class=call.task_class)
+            stat.credits += usage_value - previous_credits
+            stat.save(update_fields=["credits", "updated_at"])
+        elif usage_value is not None and previous_billing_truth == "ACTUAL" and previous_credits != usage_value:
+            stat, _ = ModelStat.objects.select_for_update().get_or_create(model=call.model, task_class=call.task_class)
+            stat.credits += usage_value - previous_credits
+            stat.save(update_fields=["credits", "updated_at"])
 
-        if not was_terminal and status == "COMPLETED" and actual_credits == 0:
-            Alert.objects.create(
-                severity="WARNING",
-                alert_type="GENX_USAGE_MISSING",
-                message="Completed GenX call returned no parseable credit usage; cost truth requires reconciliation.",
-                metadata={"call_id": str(call.id), "external_job_id": call.external_job_id},
-            )
-        if not was_terminal and actual_credits > call.max_allowed_credits:
-            Alert.objects.create(
-                severity="CRITICAL",
+        if status == "COMPLETED" and billing_truth == "UNRESOLVED":
+            existing = Alert.objects.filter(
+                alert_type="GENX_USAGE_MISSING", status="OPEN", metadata__call_id=str(call.id)
+            ).first()
+            if not existing:
+                Alert.objects.create(
+                    severity="WARNING",
+                    alert_type="GENX_USAGE_MISSING",
+                    message="Completed GenX call returned no authoritative credit usage; its estimate remains reserved.",
+                    metadata={
+                        "call_id": str(call.id),
+                        "external_job_id": call.external_job_id,
+                        "remote_job_id": metadata.get("remote_job_id"),
+                    },
+                )
+            if previous_billing_truth != "UNRESOLVED":
+                AuditEvent.objects.create(
+                    severity="WARNING",
+                    event_type="genx.billing_unresolved",
+                    actor="genx-gateway",
+                    metadata={
+                        "call_id": str(call.id), "remote_job_id": metadata.get("remote_job_id"),
+                        "model": call.model, "status": status, "usage_source": source,
+                        "billing_truth": billing_truth,
+                    },
+                )
+        if usage_value is not None:
+            Alert.objects.filter(
+                alert_type="GENX_USAGE_MISSING", status="OPEN", metadata__call_id=str(call.id)
+            ).update(status="RESOLVED", resolved_at=timezone.now())
+            if previous_billing_truth != "ACTUAL" or previous_credits != usage_value:
+                AuditEvent.objects.create(
+                    event_type="genx.billing_reconciled",
+                    actor="genx-gateway",
+                    metadata={
+                        "call_id": str(call.id), "remote_job_id": metadata.get("remote_job_id"),
+                        "model": call.model, "status": status, "usage_source": source,
+                        "billing_truth": billing_truth, "credits": str(usage_value),
+                    },
+                )
+        if usage_value is not None and usage_value > call.max_allowed_credits:
+            Alert.objects.get_or_create(
                 alert_type="GENX_CALL_BUDGET_OVERRUN",
-                message="A completed GenX call exceeded its controller-side credit estimate ceiling.",
-                metadata={"call_id": str(call.id), "actual": str(actual_credits), "limit": str(call.max_allowed_credits)},
+                status="OPEN",
+                metadata={"call_id": str(call.id), "actual": str(usage_value), "limit": str(call.max_allowed_credits)},
+                defaults={
+                    "severity": "CRITICAL",
+                    "message": "A completed GenX call exceeded its controller-side credit estimate ceiling.",
+                },
             )
         if call.job_id:
             total = effective_reserved_credits(
-                GenXCall.objects.filter(job_id=call.job_id).values_list("credits", "estimated_credits", "status")
+                GenXCall.objects.filter(job_id=call.job_id).values_list(
+                    "credits", "estimated_credits", "status", "requested_metadata"
+                )
             )
             score = JobScore.objects.select_for_update().get(job_id=call.job_id)
             if not was_terminal and score.max_genx_credits > 0 and total > score.max_genx_credits:
@@ -495,10 +752,25 @@ class GenXGateway:
             actor="genx-gateway",
             metadata={
                 "call_id": str(call.id),
+                "session_id": str(metadata.get("session_id") or ""),
+                "message_id": str(metadata.get("message_id") or ""),
+                "remote_job_id": str(metadata.get("remote_job_id") or ""),
                 "status": status,
-                "credits": str(actual_credits),
+                "credits": str(usage_value) if usage_value is not None else None,
                 "model": call.model,
                 "latency_ms": call.latency_ms,
+                "usage_source": source,
+                "billing_truth": billing_truth,
             },
         )
         return call
+
+    def reconcile(
+        self,
+        call_id,
+        payload: dict[str, Any],
+        elapsed_ms: int = 0,
+        source: str = "POLL",
+    ) -> GenXCall:
+        """Compatibility boundary for generate/proxy callers and future authenticated sources."""
+        return self.reconcile_remote_job_payload(call_id, payload, source=source, elapsed_ms=elapsed_ms)

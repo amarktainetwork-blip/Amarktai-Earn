@@ -151,6 +151,10 @@ def overview_snapshot() -> dict:
     ).count()
     paid_execution_cost_30d = truth_30d.paid_execution_cost
     recorded_net_profit_30d = truth_30d.net_settled_profit
+    paid_cost_label = "PAID EXECUTION COST 30D" if truth_30d.cost_coverage_complete else "RECORDED PAID EXECUTION COST 30D — COVERAGE INCOMPLETE"
+    today_profit_label = "TRUE RECORDED NET SETTLED PROFIT TODAY" if truth_today.cost_coverage_complete else "RECORDED NET SETTLED PROFIT TODAY — COST COVERAGE INCOMPLETE"
+    profit_7d_label = "TRUE RECORDED NET SETTLED PROFIT 7D" if truth_7d.cost_coverage_complete else "RECORDED NET SETTLED PROFIT 7D — COST COVERAGE INCOMPLETE"
+    profit_30d_label = "TRUE RECORDED NET SETTLED PROFIT 30D" if truth_30d.cost_coverage_complete else "RECORDED NET SETTLED PROFIT 30D — COST COVERAGE INCOMPLETE"
     recorded_net_margin_30d = None if settled_gross_30d <= 0 else (recorded_net_profit_30d / settled_gross_30d * 100).quantize(Decimal("0.01"))
     return {
         "section": "overview",
@@ -162,11 +166,11 @@ def overview_snapshot() -> dict:
             {"label": "PENDING PAYOUT", "value": f"${_money(pending)}", "truth": "not received cash"},
             {"label": "AWARDED/ACCEPTED EXPOSURE", "value": f"${_money(exposure)}", "truth": "contract value at risk; not received cash"},
             {"label": "EXPECTED PROFIT 24H", "value": f"${_money(expected_profit)}", "truth": "modelled allowed opportunities; not revenue"},
-            {"label": "PAID EXECUTION COST 30D", "value": f"${_money(paid_execution_cost_30d)}", "truth": "completed persisted GenX cost attributable to USD-settled jobs in the same window; no persisted actual external-cost source"},
-            {"label": "TRUE RECORDED NET SETTLED PROFIT TODAY", "value": f"${_money(truth_today.net_settled_profit)}", "truth": "settled payout net less attributable completed GenX cost; marketplace fee is already excluded by payout net"},
-            {"label": "TRUE RECORDED NET SETTLED PROFIT 7D", "value": f"${_money(truth_7d.net_settled_profit)}", "truth": "settled payout net less attributable completed GenX cost in the same window"},
-            {"label": "TRUE RECORDED NET SETTLED PROFIT 30D", "value": f"${_money(recorded_net_profit_30d)}", "truth": "settled payout net less attributable completed GenX cost in the same window"},
-            {"label": "RECORDED NET MARGIN 30D", "value": "INSUFFICIENT_DATA" if recorded_net_margin_30d is None else f"{recorded_net_margin_30d}%", "truth": "true recorded net settled profit divided by settled gross; marketplace fee counted once"},
+            {"label": paid_cost_label, "value": f"${_money(paid_execution_cost_30d)}", "truth": "recorded finalized GenX monetary cost attributable to payouts settled in the window and known by the reporting cutoff; incomplete coverage is explicit"},
+            {"label": today_profit_label, "value": f"${_money(truth_today.net_settled_profit)}", "truth": "settled payout net less recorded attributable GenX monetary cost; incomplete coverage is never presented as final profit"},
+            {"label": profit_7d_label, "value": f"${_money(truth_7d.net_settled_profit)}", "truth": "payout net settled in-window less all attributable monetary cost known by cutoff"},
+            {"label": profit_30d_label, "value": f"${_money(recorded_net_profit_30d)}", "truth": "payout net settled in-window less all attributable monetary cost known by cutoff"},
+            {"label": "RECORDED NET MARGIN 30D", "value": "INSUFFICIENT_DATA" if recorded_net_margin_30d is None or not truth_30d.cost_coverage_complete else f"{recorded_net_margin_30d}%", "truth": "available only when attributable GenX monetary cost coverage is complete; marketplace fee counted once"},
             {"label": "TARGET STATUS", "value": growth.status if growth else "INSUFFICIENT_DATA", "truth": (", ".join(growth.reason_codes) if growth else "no persisted evaluation") + "; targets are objective floors, never earnings caps"},
             {"label": "PRODUCTIVE UTILIZATION", "value": f"{(capacity.utilization * 100):.2f}%" if capacity else "NO SNAPSHOT", "truth": capacity.utilization_state if capacity else "no persisted capacity snapshot"},
             {"label": "AVOIDABLE IDLE", "value": f"{capacity.avoidable_idle_minutes} min" if capacity else "NO SNAPSHOT", "truth": capacity.idle_reason if capacity else "no persisted capacity snapshot"},
@@ -186,6 +190,8 @@ def overview_snapshot() -> dict:
             "revenue_truth": "Expected opportunity values are never earnings. Accepted/pending values are not cash. Only SETTLED is received cash.",
             "target_semantics": "TARGETS_ARE_OBJECTIVE_FLOORS_NEVER_EARNINGS_CAPS",
             "settled_profit_cost_coverage": list(truth_30d.coverage),
+            "settled_profit_cost_coverage_complete": truth_30d.cost_coverage_complete,
+            "unresolved_genx_monetary_cost_calls": truth_30d.unresolved_genx_cost_calls,
         },
     }
 

@@ -40,6 +40,7 @@ from control.services.profit_brain import (
     settled_profit_truth,
 )
 from control.services.agentgigs import score_open_jobs
+from control.ops import overview_snapshot
 
 
 class ProfitBrainIntegrationTests(TestCase):
@@ -195,8 +196,10 @@ class ProfitBrainIntegrationTests(TestCase):
             completed_at=now, cost_equivalent="2",
         )
         GenXCall.objects.create(
-            request_key="truth-cost-outside", job=first, model="fixture", status="COMPLETED",
-            completed_at=start - timedelta(minutes=1), cost_equivalent="99",
+            request_key="truth-cost-before-settlement-window", job=first, model="fixture", status="COMPLETED",
+            # The payout settles in-window, so its valid job cost remains attributable
+            # even though execution completed before the reporting window began.
+            completed_at=start - timedelta(minutes=1), cost_equivalent="4",
         )
         GenXCall.objects.create(
             request_key="truth-cost-failed", job=first, model="fixture", status="FAILED",
@@ -211,33 +214,152 @@ class ProfitBrainIntegrationTests(TestCase):
             completed_at=now, cost_equivalent="10",
         )
 
-        truth = settled_profit_truth(start=start, end=now + timedelta(seconds=1))
+        truth = settled_profit_truth(start=start, end=now + timedelta(days=1))
 
         self.assertEqual(truth.settled_cash, Decimal("135.00"))
-        self.assertEqual(truth.paid_execution_cost, Decimal("7.00"))
-        self.assertEqual(truth.net_settled_profit, Decimal("128.00"))
+        self.assertEqual(truth.paid_execution_cost, Decimal("11.00"))
+        self.assertEqual(truth.net_settled_profit, Decimal("124.00"))
         self.assertEqual(truth.settled_payouts, 2)
-        self.assertEqual(truth.costed_genx_calls, 2)
+        self.assertEqual(truth.costed_genx_calls, 3)
         self.assertIn("SETTLED_PAYOUT_NET_USD_ALREADY_EXCLUDES_MARKETPLACE_FEE", truth.coverage)
         self.assertIn("NO_PERSISTED_ACTUAL_EXTERNAL_OR_OTHER_DIRECT_COST_SOURCE", truth.coverage)
+        self.assertFalse(truth.cost_coverage_complete)
+        self.assertEqual(truth.unresolved_genx_cost_calls, 1)
+
+    def test_settled_profit_attributes_pre_window_during_window_and_combined_job_costs(self):
+        now = timezone.now()
+        before_job = self._job("as-of-before", state=Job.State.SETTLED)
+        Payout.objects.create(
+            job=before_job, gross="100", fee="0", net="100", state=Payout.State.SETTLED,
+            settled_at=now + timedelta(days=1), currency="USD",
+        )
+        GenXCall.objects.create(
+            request_key="as-of-before-cost", job=before_job, model="fixture", status="COMPLETED",
+            completed_at=now - timedelta(days=1), cost_equivalent="5",
+        )
+        before_truth = settled_profit_truth(start=now, end=now + timedelta(days=2))
+        self.assertEqual(before_truth.paid_execution_cost, Decimal("5.00"))
+        self.assertEqual(before_truth.net_settled_profit, Decimal("95.00"))
+
+        during_job = self._job("as-of-during", state=Job.State.SETTLED)
+        Payout.objects.create(
+            job=during_job, gross="100", fee="0", net="100", state=Payout.State.SETTLED,
+            settled_at=now + timedelta(days=4), currency="USD",
+        )
+        GenXCall.objects.create(
+            request_key="as-of-during-cost", job=during_job, model="fixture", status="COMPLETED",
+            completed_at=now + timedelta(days=3, hours=12), cost_equivalent="3",
+        )
+        during_truth = settled_profit_truth(start=now + timedelta(days=3), end=now + timedelta(days=5))
+        self.assertEqual(during_truth.paid_execution_cost, Decimal("3.00"))
+        self.assertEqual(during_truth.net_settled_profit, Decimal("97.00"))
+
+        combined_job = self._job("as-of-combined", state=Job.State.SETTLED)
+        Payout.objects.create(
+            job=combined_job, gross="100", fee="0", net="100", state=Payout.State.SETTLED,
+            settled_at=now + timedelta(days=7), currency="USD",
+        )
+        GenXCall.objects.create(
+            request_key="as-of-combined-before", job=combined_job, model="fixture", status="COMPLETED",
+            completed_at=now + timedelta(days=5), cost_equivalent="5",
+        )
+        GenXCall.objects.create(
+            request_key="as-of-combined-during", job=combined_job, model="fixture", status="COMPLETED",
+            completed_at=now + timedelta(days=6, hours=12), cost_equivalent="3",
+        )
+        combined_truth = settled_profit_truth(start=now + timedelta(days=6), end=now + timedelta(days=8))
+        self.assertEqual(combined_truth.paid_execution_cost, Decimal("8.00"))
+        self.assertEqual(combined_truth.net_settled_profit, Decimal("92.00"))
+        self.assertTrue(combined_truth.cost_coverage_complete)
+
+    def test_settled_profit_excludes_future_unrelated_and_unsettled_cost_and_counts_fee_once(self):
+        now = timezone.now()
+        start = now
+        end = now + timedelta(days=2)
+        settled = self._job("as-of-settled", state=Job.State.SETTLED)
+        unrelated = self._job("as-of-unrelated", state=Job.State.SETTLED)
+        pending = self._job("as-of-pending", state=Job.State.PAYOUT_PENDING)
+        Payout.objects.create(
+            job=settled, gross="100", fee="10", net="90", state=Payout.State.SETTLED,
+            settled_at=now + timedelta(days=1), currency="USD",
+        )
+        Payout.objects.create(
+            job=pending, gross="50", fee="5", net="45", state=Payout.State.PAYOUT_PENDING,
+            pending_at=now + timedelta(days=1), currency="USD",
+        )
+        GenXCall.objects.create(
+            request_key="as-of-known-cost", job=settled, model="fixture", status="COMPLETED",
+            completed_at=start - timedelta(days=1), cost_equivalent="5",
+        )
+        future = GenXCall.objects.create(
+            request_key="as-of-future-cost", job=settled, model="fixture", status="COMPLETED",
+            completed_at=end + timedelta(seconds=1), cost_equivalent="50",
+        )
+        GenXCall.objects.filter(pk=future.pk).update(created_at=end + timedelta(seconds=1))
+        GenXCall.objects.create(
+            request_key="as-of-unrelated-cost", job=unrelated, model="fixture", status="COMPLETED",
+            completed_at=now, cost_equivalent="30",
+        )
+        GenXCall.objects.create(
+            request_key="as-of-unsettled-cost", job=pending, model="fixture", status="COMPLETED",
+            completed_at=now, cost_equivalent="20",
+        )
+
+        truth = settled_profit_truth(start=start, end=end)
+
+        self.assertEqual(truth.settled_cash, Decimal("90.00"))
+        self.assertEqual(truth.paid_execution_cost, Decimal("5.00"))
+        self.assertEqual(truth.net_settled_profit, Decimal("85.00"))
+        self.assertTrue(truth.cost_coverage_complete)
+
+    def test_unresolved_genx_monetary_cost_makes_profit_and_growth_coverage_incomplete(self):
+        now = timezone.now()
+        job = self._job("unresolved-cost", state=Job.State.SETTLED)
+        Payout.objects.create(
+            job=job, gross="100", fee="10", net="90", state=Payout.State.SETTLED,
+            settled_at=now, currency="USD",
+        )
+        GenXCall.objects.create(
+            request_key="unresolved-cost-call", job=job, model="fixture", status="COMPLETED",
+            completed_at=now, credits="0", cost_equivalent="0", estimated_credits="0.25",
+            requested_metadata={"billing_truth": "UNRESOLVED"},
+        )
+
+        truth = settled_profit_truth(start=now - timedelta(days=1), end=now + timedelta(days=1))
+        growth = evaluate_growth_targets(persist=False)
+
+        self.assertEqual(truth.net_settled_profit, Decimal("90.00"))
+        self.assertFalse(truth.cost_coverage_complete)
+        self.assertIn("ATTRIBUTABLE_GENX_MONETARY_COST_COVERAGE_INCOMPLETE", truth.coverage)
+        self.assertEqual(growth.status, "INSUFFICIENT_DATA")
+        self.assertIn("SETTLED_PROFIT_COST_COVERAGE_INCOMPLETE", growth.reason_codes)
+        overview = overview_snapshot()
+        labels = {row["label"]: row for row in overview["cards"]}
+        incomplete_label = "RECORDED NET SETTLED PROFIT 30D — COST COVERAGE INCOMPLETE"
+        self.assertIn(incomplete_label, labels)
+        self.assertIn("RECORDED PAID EXECUTION COST 30D — COVERAGE INCOMPLETE", labels)
+        self.assertEqual(labels["RECORDED NET MARGIN 30D"]["value"], "INSUFFICIENT_DATA")
+        self.assertFalse(overview["meta"]["settled_profit_cost_coverage_complete"])
 
     def test_performance_and_reputation_use_observed_records(self):
         job = self._job("settled", profit="8", ppm="1", state=Job.State.SETTLED)
         worker = Worker.objects.create(id="profit-worker", worker_class="structured_data", version="1.0.0", status="READY")
-        started = timezone.now() - timedelta(minutes=5)
+        observed_at = timezone.now() - timedelta(seconds=1)
+        started = observed_at - timedelta(minutes=5)
         execution = Execution.objects.create(
             job=job, worker=worker, attempt=1, status="QA_PASSED", started_at=started,
-            ended_at=timezone.now(), result={"operation": "json_to_csv"},
+            ended_at=observed_at, result={"operation": "json_to_csv"},
         )
         QAResult.objects.create(job=job, execution=execution, check_type="csv", passed=True, score="1")
         Payout.objects.create(
             job=job, gross="10", fee="1", net="9", state=Payout.State.SETTLED,
-            settled_at=timezone.now(), currency="USD",
+            settled_at=observed_at, currency="USD",
         )
-        GenXCall.objects.create(
+        performance_call = GenXCall.objects.create(
             request_key="performance-actual-cost", job=job, worker=worker, model="fixture",
-            status="COMPLETED", completed_at=timezone.now(), cost_equivalent="2",
+            status="COMPLETED", completed_at=observed_at, cost_equivalent="2",
         )
+        GenXCall.objects.filter(pk=performance_call.pk).update(created_at=observed_at)
         rows = refresh_performance(window_days=30)
         market_row = next(row for row in rows if row.dimension_type == "MARKET")
         capability_row = next(row for row in rows if row.dimension_type == "MARKET_CAPABILITY")

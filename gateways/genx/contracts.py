@@ -178,16 +178,22 @@ def rank_models(candidates: list[ModelCandidate]) -> list[ModelCandidate]:
     return sorted(candidates, key=key)
 
 
-def effective_reserved_credits(calls: Iterable[tuple[Any, Any, str]]) -> Decimal:
+def effective_reserved_credits(calls: Iterable[tuple[Any, ...]]) -> Decimal:
     """Sum charged credits, or estimates while a non-terminal call is still reserved."""
     total = ZERO
-    for actual_value, estimated_value, status in calls:
+    for row in calls:
+        actual_value, estimated_value, status = row[:3]
+        metadata = row[3] if len(row) > 3 and isinstance(row[3], dict) else {}
         status_upper = str(status).upper()
         if status_upper in {"FAILED", "CANCELLED"}:
             continue
         actual = _decimal(actual_value) or ZERO
         estimated = _decimal(estimated_value) or ZERO
-        total += actual if actual > ZERO else estimated
+        billing_truth = str(metadata.get("billing_truth") or "").upper()
+        if billing_truth == "ACTUAL":
+            total += actual
+        else:
+            total += actual if actual > ZERO else estimated
     return total
 
 

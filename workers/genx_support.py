@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from control.models import GenXModelCatalog, Job
-from gateways.genx.output import extract_session_sources, extract_text
+from gateways.genx.output import extract_session_assistant_text, extract_session_sources, extract_text
 from gateways.genx.service import GenXGateway, GenXGatewayError
 
 
@@ -139,12 +139,20 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
         request_key=_request_key(request, "research_web", hashlib.sha256(message.encode()).hexdigest()[:12]),
         tools=[{"type": "web_search"}],
     )
-    text = extract_text(response)
-    if not text and call.external_job_id.startswith("session:"):
-        text = extract_text(gateway.client.session_messages(call.external_job_id.split(":", 1)[1]))
+    text = str(response.get("assistant_text") or "") if isinstance(response, dict) else ""
+    if not text:
+        text = extract_text(response)
+    session_id = str((call.requested_metadata or {}).get("session_id") or "")
+    if not text and session_id:
+        history = gateway.client.session_messages(session_id)
+        text = extract_session_assistant_text(
+            history,
+            job_id=str((call.requested_metadata or {}).get("remote_job_id") or "") or None,
+        )
     if not text:
         raise GenXWorkerError("GenX research session returned no report text")
-    sources = extract_session_sources(response)
+    source_payload = response.get("session_history", response) if isinstance(response, dict) else response
+    sources = extract_session_sources(source_payload)
     if not sources:
         import re
         sources = list(dict.fromkeys(re.findall(r"https://[^\s)\]>]+", text)))

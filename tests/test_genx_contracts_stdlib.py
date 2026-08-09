@@ -78,6 +78,13 @@ class GenXContractTests(unittest.TestCase):
             (Decimal("0"), Decimal("99"), "FAILED"),
         ])
         self.assertEqual(reserved, Decimal("3.7"))
+        self.assertEqual(
+            effective_reserved_credits([
+                (Decimal("0"), Decimal("2.5"), "COMPLETED", {"billing_truth": "UNRESOLVED"}),
+                (Decimal("0"), Decimal("9"), "COMPLETED", {"billing_truth": "ACTUAL"}),
+            ]),
+            Decimal("2.5"),
+        )
         assert_credit_budget(
             already_reserved=reserved,
             estimated=Decimal("1.0"),

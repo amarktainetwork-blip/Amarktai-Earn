@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import base64
+import binascii
+from urllib.parse import unquote_to_bytes
 from typing import Any
 
 
@@ -35,6 +38,83 @@ def _walk_text(payload: Any, depth: int = 0) -> str:
 
 def extract_text(payload: Any) -> str:
     return _walk_text(payload)
+
+
+def _message_identity(message: dict[str, Any], key: str) -> str:
+    value = message.get(key)
+    if value:
+        return str(value)
+    metadata = message.get("metadata")
+    if isinstance(metadata, dict) and metadata.get(key):
+        return str(metadata[key])
+    return ""
+
+
+def session_assistant_job_ids(history: Any) -> list[str]:
+    """Return distinct job identities from assistant messages only."""
+    if not isinstance(history, dict) or not isinstance(history.get("messages"), list):
+        return []
+    result = []
+    for message in history["messages"]:
+        if not isinstance(message, dict) or str(message.get("role", "")).lower() != "assistant":
+            continue
+        job_id = _message_identity(message, "job_id")
+        if job_id and job_id not in result:
+            result.append(job_id)
+    return result
+
+
+def extract_session_assistant_text(
+    history: Any,
+    *,
+    job_id: str | None = None,
+    message_id: str | None = None,
+) -> str:
+    """Extract assistant output without ever crossing an explicit identity boundary."""
+    if not isinstance(history, dict) or not isinstance(history.get("messages"), list):
+        return ""
+    assistants = [
+        message
+        for message in history["messages"]
+        if isinstance(message, dict) and str(message.get("role", "")).lower() == "assistant"
+    ]
+    if job_id is not None:
+        assistants = [message for message in assistants if _message_identity(message, "job_id") == str(job_id)]
+    elif message_id is not None:
+        assistants = [message for message in assistants if _message_identity(message, "message_id") == str(message_id)]
+    for assistant in reversed(assistants):
+        found = _walk_text(assistant.get("content"))
+        if found:
+            return found
+    return ""
+
+
+def decode_text_result_url(value: Any, *, max_bytes: int = 1024 * 1024) -> str:
+    """Decode bounded inline plain-text results without fetching arbitrary URLs."""
+    if not isinstance(value, str) or not value.startswith(("data:", "data/")) or "," not in value:
+        return ""
+    header, encoded = value[5:].split(",", 1) if value.startswith("data:") else value[5:].split(",", 1)
+    if value.startswith("data/"):
+        header = "plain" + (";" + header.split(";", 1)[1] if ";" in header else "")
+    media_parts = header.split(";") if header else []
+    media_type = media_parts[0].lower() if media_parts else "text/plain"
+    if media_type not in {"plain", "text/plain"}:
+        return ""
+    try:
+        if any(part.lower() == "base64" for part in media_parts[1:]):
+            if len(encoded) > ((max_bytes + 2) // 3) * 4 + 8:
+                return ""
+            raw = base64.b64decode(encoded, validate=True)
+        else:
+            raw = unquote_to_bytes(encoded)
+    except (ValueError, binascii.Error):
+        return ""
+    if len(raw) > max_bytes:
+        return ""
+    try:
+        return raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return ""
 
 
 def extract_session_sources(payload: Any) -> list[str]:
