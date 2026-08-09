@@ -27,10 +27,12 @@ from .models import (
     GenXCall,
     GrowthEvaluation,
     GrowthTarget,
+    InboundOrder,
     Job,
     Claim,
     LedgerEntry,
     Marketplace,
+    MarketServiceListing,
     MarketplaceCredential,
     ModelStat,
     Node,
@@ -45,6 +47,7 @@ from .models import (
     ReauthenticationGrant,
     ReputationSnapshot,
     ResourceSnapshot,
+    ServiceOffering,
     ServiceHeartbeat,
     ProgramScopeVersion,
     RefreshSession,
@@ -143,6 +146,9 @@ def overview_snapshot() -> dict:
     exposure = Job.objects.filter(
         state__in=[Job.State.CLAIMED, Job.State.AWARDED, Job.State.EXECUTING, Job.State.SUBMITTED, Job.State.ACCEPTED],
     ).aggregate(v=Sum("reward"))["v"] or Decimal("0")
+    inbound_exposure = InboundOrder.objects.filter(
+        status__in=[InboundOrder.Status.RECEIVED, InboundOrder.Status.READY, InboundOrder.Status.ACCEPTED, InboundOrder.Status.DELIVERED, InboundOrder.Status.PAYOUT_PENDING],
+    ).aggregate(v=Sum("quoted_price"))["v"] or Decimal("0")
     expected_profit = OpportunityDecision.objects.filter(
         allowed=True, created_at__gte=now - timedelta(hours=24),
     ).aggregate(v=Sum("risk_adjusted_profit"))["v"] or Decimal("0")
@@ -165,6 +171,7 @@ def overview_snapshot() -> dict:
             {"label": "SETTLED 30D", "value": f"${_money(settled_30d)}", "truth": "reconciled received cash only"},
             {"label": "PENDING PAYOUT", "value": f"${_money(pending)}", "truth": "not received cash"},
             {"label": "AWARDED/ACCEPTED EXPOSURE", "value": f"${_money(exposure)}", "truth": "contract value at risk; not received cash"},
+            {"label": "INBOUND SERVICE EXPOSURE", "value": f"${_money(inbound_exposure)}", "truth": "received/eligible/accepted seller-side orders; not settled cash"},
             {"label": "EXPECTED PROFIT 24H", "value": f"${_money(expected_profit)}", "truth": "modelled allowed opportunities; not revenue"},
             {"label": paid_cost_label, "value": f"${_money(paid_execution_cost_30d)}", "truth": "recorded finalized GenX monetary cost attributable to payouts settled in the window and known by the reporting cutoff; incomplete coverage is explicit"},
             {"label": today_profit_label, "value": f"${_money(truth_today.net_settled_profit)}", "truth": "settled payout net less recorded attributable GenX monetary cost; incomplete coverage is never presented as final profit"},
@@ -325,6 +332,10 @@ def markets_snapshot() -> dict:
         except Exception:
             profile = None
         preflight = AcquisitionPreflight.objects.filter(job__marketplace=market).order_by("-created_at").first()
+        listing_counts = {
+            row["status"]: row["count"]
+            for row in MarketServiceListing.objects.filter(marketplace=market).values("status").annotate(count=Count("id"))
+        }
         blockers = []
         if not market.enabled:
             blockers.append("MARKET_DISABLED")
@@ -338,10 +349,28 @@ def markets_snapshot() -> dict:
             blockers.append("AUTOMATION_POLICY_NOT_APPROVED")
         if profile:
             blockers.extend(profile.blockers)
+        listing_blockers = list(
+            MarketServiceListing.objects.filter(marketplace=market).exclude(failure_code="").values_list("failure_code", flat=True)
+        )
+        blockers.extend(listing_blockers)
         if preflight and not preflight.allowed:
             blockers.extend(preflight.reason_codes)
+        channels = profile.revenue_channels if profile else []
+        if profile and profile.hosting_policy == "OFFHOST_SETTLEMENT_REQUIRED":
+            category = "OFF-HOST FUTURE CHANNELS"
+        elif "MANUAL_STOREFRONT" in channels:
+            category = "MANUAL STOREFRONTS"
+        elif "SERVICE_LISTING" in channels or "PAY_PER_CALL_API" in channels:
+            category = "SERVICE CHANNELS"
+        elif "BOUNTY" in channels or market.slug in {"taskbounty", "opire", "algora"}:
+            category = "BOUNTY SOURCES"
+        else:
+            category = "JOB SOURCES"
+        max_age = max(1, int(os.getenv("MARKET_POLICY_MAX_AGE_DAYS", "30")))
+        policy_current = bool(policy and policy.checked_at >= timezone.now() - timedelta(days=max_age))
         rows.append({
             "market": market.slug,
+            "category": category,
             "status": market.status,
             "enabled": market.enabled,
             "payout_ready": market.payout_ready,
@@ -355,6 +384,13 @@ def markets_snapshot() -> dict:
             "adapter": profile.adapter_name if profile else "",
             "adapter_version": profile.adapter_version if profile else "",
             "source_wired": profile.source_wired if profile else False,
+            "revenue_channels": channels,
+            "seller_capabilities": profile.seller_capabilities if profile else {},
+            "hosting_policy": profile.hosting_policy if profile else "UNVERIFIED",
+            "api_contract_state": profile.api_contract_state if profile else "UNVERIFIED",
+            "payout_proof_state": profile.payout_proof_state if profile else "UNVERIFIED",
+            "manual_onboarding_required": profile.manual_onboarding_required if profile else True,
+            "settlement_rail": profile.settlement_rail if profile else "",
             "adapter_capabilities": profile.capabilities if profile else {},
             "adapter_sources": profile.source_urls if profile else [],
             "adapter_docs_checked": _dt(profile.docs_checked_at) if profile else None,
@@ -365,6 +401,12 @@ def markets_snapshot() -> dict:
             "policy_automation_allowed": policy.automation_allowed if policy else None,
             "policy_webdock_compatible": policy.webdock_compatible if policy else None,
             "policy_checked": _dt(policy.checked_at) if policy else None,
+            "policy_current": policy_current,
+            "connected": bool(health and health.auth_ok),
+            "discovery_ready": bool(market.enabled and profile and profile.source_wired and profile.capabilities.get("discover")),
+            "seller_listing_ready": bool(market.enabled and listing_counts.get(MarketServiceListing.Status.PUBLISHED, 0)),
+            "autonomy_allowed": bool(policy and policy.automation_allowed and profile and profile.policy_verified),
+            "service_listings": listing_counts,
             "blockers": list(dict.fromkeys(blockers)),
             "api": health.api_ok if health else None,
             "auth": health.auth_ok if health else None,
@@ -385,7 +427,16 @@ def markets_snapshot() -> dict:
             "latest_preflight": "ALLOWED" if preflight and preflight.allowed else "BLOCKED" if preflight else "NO DECISION",
             "latest_preflight_reasons": preflight.reason_codes if preflight else [],
         })
-    return {"section": "markets", "rows": rows}
+    return {
+        "section": "markets",
+        "rows": rows,
+        "meta": {
+            "categories": ["JOB SOURCES", "SERVICE CHANNELS", "BOUNTY SOURCES", "MANUAL STOREFRONTS", "OFF-HOST FUTURE CHANNELS"],
+            "service_offerings": ServiceOffering.objects.count(),
+            "sellable_offerings": ServiceOffering.objects.filter(proof_state=ServiceOffering.ProofState.SELLABLE, enabled=True).count(),
+            "truth": "A channel is never called ready from catalog presence alone; payout, South Africa, policy, auth, capability, and hosting evidence remain independent gates.",
+        },
+    }
 
 
 def earnings_snapshot(limit: int = 100) -> dict:

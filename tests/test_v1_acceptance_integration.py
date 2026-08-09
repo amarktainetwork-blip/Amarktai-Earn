@@ -37,6 +37,15 @@ class V1AcceptanceIntegrationTests(TestCase):
         self.assertEqual(by_id["media_runtime"]["status"], "PASS")
         self.assertEqual(by_id["uncapped_profit_governor"]["status"], "PASS")
         self.assertEqual(by_id["genx_async_session_truth"]["status"], "PASS")
+        for identifier in (
+            "two_sided_revenue_engine", "service_offering_truth", "inbound_order_uses_canonical_job_lifecycle",
+            "global_portfolio_ranking", "seller_pricing_profit_floor", "crypto_markets_offhost_only",
+            "nevermined_fiat_only_on_webdock", "skyfire_noncrypto_gate", "hyrve_fail_closed_without_contract",
+            "service_capability_requires_execution_proof", "coding_service_blocked_when_sandbox_off",
+            "public_web_service_blocked_when_web_disabled", "market_policy_staleness_blocks_mutation",
+            "only_settled_is_cash",
+        ):
+            self.assertEqual(by_id[identifier]["status"], "PASS", identifier)
 
     def test_non_ci_invocation_keeps_ci_only_claims_blocked(self):
         with patch("control.services.v1_acceptance.redis.Redis.from_url", return_value=self.redis_client):
