@@ -40,6 +40,7 @@ from control.services.profit_brain import (
     settled_profit_truth,
 )
 from control.services.agentgigs import score_open_jobs
+from control.ops import overview_snapshot
 
 
 class ProfitBrainIntegrationTests(TestCase):
@@ -220,23 +221,55 @@ class ProfitBrainIntegrationTests(TestCase):
         self.assertEqual(truth.costed_genx_calls, 2)
         self.assertIn("SETTLED_PAYOUT_NET_USD_ALREADY_EXCLUDES_MARKETPLACE_FEE", truth.coverage)
         self.assertIn("NO_PERSISTED_ACTUAL_EXTERNAL_OR_OTHER_DIRECT_COST_SOURCE", truth.coverage)
+        self.assertFalse(truth.cost_coverage_complete)
+        self.assertEqual(truth.unresolved_genx_cost_calls, 1)
+
+    def test_unresolved_genx_monetary_cost_makes_profit_and_growth_coverage_incomplete(self):
+        now = timezone.now()
+        job = self._job("unresolved-cost", state=Job.State.SETTLED)
+        Payout.objects.create(
+            job=job, gross="100", fee="10", net="90", state=Payout.State.SETTLED,
+            settled_at=now, currency="USD",
+        )
+        GenXCall.objects.create(
+            request_key="unresolved-cost-call", job=job, model="fixture", status="COMPLETED",
+            completed_at=now, credits="0", cost_equivalent="0", estimated_credits="0.25",
+            requested_metadata={"billing_truth": "UNRESOLVED"},
+        )
+
+        truth = settled_profit_truth(start=now - timedelta(days=1), end=now + timedelta(seconds=1))
+        growth = evaluate_growth_targets(persist=False)
+
+        self.assertEqual(truth.net_settled_profit, Decimal("90.00"))
+        self.assertFalse(truth.cost_coverage_complete)
+        self.assertIn("ATTRIBUTABLE_GENX_MONETARY_COST_COVERAGE_INCOMPLETE", truth.coverage)
+        self.assertEqual(growth.status, "INSUFFICIENT_DATA")
+        self.assertIn("SETTLED_PROFIT_COST_COVERAGE_INCOMPLETE", growth.reason_codes)
+        overview = overview_snapshot()
+        labels = {row["label"]: row for row in overview["cards"]}
+        incomplete_label = "RECORDED NET SETTLED PROFIT 30D — COST COVERAGE INCOMPLETE"
+        self.assertIn(incomplete_label, labels)
+        self.assertIn("RECORDED PAID EXECUTION COST 30D — COVERAGE INCOMPLETE", labels)
+        self.assertEqual(labels["RECORDED NET MARGIN 30D"]["value"], "INSUFFICIENT_DATA")
+        self.assertFalse(overview["meta"]["settled_profit_cost_coverage_complete"])
 
     def test_performance_and_reputation_use_observed_records(self):
         job = self._job("settled", profit="8", ppm="1", state=Job.State.SETTLED)
         worker = Worker.objects.create(id="profit-worker", worker_class="structured_data", version="1.0.0", status="READY")
-        started = timezone.now() - timedelta(minutes=5)
+        observed_at = timezone.now() - timedelta(seconds=1)
+        started = observed_at - timedelta(minutes=5)
         execution = Execution.objects.create(
             job=job, worker=worker, attempt=1, status="QA_PASSED", started_at=started,
-            ended_at=timezone.now(), result={"operation": "json_to_csv"},
+            ended_at=observed_at, result={"operation": "json_to_csv"},
         )
         QAResult.objects.create(job=job, execution=execution, check_type="csv", passed=True, score="1")
         Payout.objects.create(
             job=job, gross="10", fee="1", net="9", state=Payout.State.SETTLED,
-            settled_at=timezone.now(), currency="USD",
+            settled_at=observed_at, currency="USD",
         )
         GenXCall.objects.create(
             request_key="performance-actual-cost", job=job, worker=worker, model="fixture",
-            status="COMPLETED", completed_at=timezone.now(), cost_equivalent="2",
+            status="COMPLETED", completed_at=observed_at, cost_equivalent="2",
         )
         rows = refresh_performance(window_days=30)
         market_row = next(row for row in rows if row.dimension_type == "MARKET")

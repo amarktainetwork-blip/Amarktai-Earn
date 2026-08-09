@@ -130,12 +130,20 @@ class Phase8BAgentIntegrationTests(TestCase):
 
 class GenXSessionAccountingIntegrationTests(TestCase):
     class FakeGenXClient:
-        def __init__(self, *, message_error=None, close_error=None):
+        def __init__(self, *, message_error=None, close_error=None, wait_error=None, final_payload=None):
             self.created = 0
             self.messages = 0
             self.closed = 0
+            self.waited = []
             self.message_error = message_error
             self.close_error = close_error
+            self.wait_error = wait_error
+            self.final_payload = final_payload or {
+                "job_id": "job-ci-1",
+                "status": "completed",
+                "result_url": "data/plain;base64,T0s=",
+                "usage": {"input_tokens": 10, "output_tokens": 5, "credits": "0.2000"},
+            }
 
         def create_session(self, model, *, system_prompt="", title=""):
             self.created += 1
@@ -145,14 +153,19 @@ class GenXSessionAccountingIntegrationTests(TestCase):
             self.messages += 1
             if self.message_error:
                 raise self.message_error
-            return {
-                "message": {"content": "Research result with sources https://example.com/a https://example.org/b"},
-                "usage": {"input_tokens": 10, "output_tokens": 5},
-                "billing": {"credits_charged": "0.2000"},
-            }
+            return {"session_id": session_id, "message_id": "message-ci-1", "job_id": "job-ci-1", "status": "queued"}
+
+        def wait(self, job_id, timeout_seconds=180):
+            self.waited.append(job_id)
+            if self.wait_error:
+                raise self.wait_error
+            return self.final_payload
 
         def session_messages(self, session_id):
-            return {"messages": [{"content": "Recovered research result"}], "usage": {"credits": "0.2000"}}
+            return {"messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Research the market."}]},
+                {"role": "assistant", "job_id": "job-ci-1", "content": [{"type": "text", "text": "Research result with sources https://example.com/a https://example.org/b"}]},
+            ]}
 
         def close_session(self, session_id):
             self.closed += 1
@@ -207,14 +220,18 @@ class GenXSessionAccountingIntegrationTests(TestCase):
         call, response = self._run(client, "phase8b-session-idempotency")
         self.assertEqual(call.status, "COMPLETED")
         self.assertEqual(call.credits, Decimal("0.2000"))
-        self.assertEqual(call.usage, {"input_tokens": 10, "output_tokens": 5})
+        self.assertEqual(call.usage, {"input_tokens": 10, "output_tokens": 5, "credits": "0.2000"})
         self.assertEqual(call.model, "dynamic-text-ci")
         self.assertEqual(call.task_class, "research_web")
-        self.assertEqual(call.external_job_id, "session:session-ci-1")
+        self.assertEqual(call.external_job_id, "job-ci-1")
+        self.assertEqual(call.requested_metadata["session_id"], "session-ci-1")
+        self.assertEqual(call.requested_metadata["message_id"], "message-ci-1")
+        self.assertEqual(call.requested_metadata["remote_job_id"], "job-ci-1")
+        self.assertEqual(call.requested_metadata["billing_truth"], "ACTUAL")
         self.assertEqual(client.created, 1)
         self.assertEqual(client.messages, 1)
         self.assertEqual(client.closed, 1)
-        self.assertIn("Research result", str(response))
+        self.assertIn("Research result", response["assistant_text"])
         stat = ModelStat.objects.get(model="dynamic-text-ci", task_class="research_web")
         self.assertEqual(stat.attempts, 1)
         self.assertEqual(stat.credits, Decimal("0.2000"))
@@ -225,6 +242,7 @@ class GenXSessionAccountingIntegrationTests(TestCase):
         self.assertEqual(replay.id, call.id)
         self.assertEqual(client.created, 1)
         self.assertEqual(client.messages, 1)
+        self.assertEqual(client.waited, ["job-ci-1"])
         self.assertEqual(GenXCall.objects.filter(request_key="phase8b-session-idempotency").count(), 1)
 
     def test_message_validation_rejections_are_failed_with_session_identity_retained(self):
@@ -259,8 +277,11 @@ class GenXSessionAccountingIntegrationTests(TestCase):
         self.assertEqual(call.status, "UNKNOWN_REMOTE_STATE")
         self.assertIsNone(call.completed_at)
         self.assertEqual(call.external_job_id, "session:session-ci-1")
+        self.assertEqual(call.requested_metadata["session_id"], "session-ci-1")
+        self.assertEqual(call.requested_metadata["billing_truth"], "PENDING")
         self.assertEqual(call.credits, Decimal("0"))
         self.assertEqual(client.messages, 1)
+        self.assertEqual(client.waited, [])
         event = AuditEvent.objects.get(
             event_type="genx.session_unknown_remote_state",
             metadata__call_id=str(call.id),
@@ -300,7 +321,7 @@ class GenXSessionAccountingIntegrationTests(TestCase):
 
         self.assertEqual(call.status, "COMPLETED")
         self.assertEqual(call.credits, Decimal("0.2000"))
-        self.assertIn("Research result", str(response))
+        self.assertIn("Research result", response["assistant_text"])
         self.assertEqual(client.messages, 1)
         self.assertEqual(client.closed, 1)
         self.assertTrue(

@@ -249,6 +249,17 @@ def build_acceptance_report(*, ci_proven: bool = False) -> dict:
             ),
         ),
         _contract_gate(
+            "genx_async_session_truth", "GenX asynchronous session and billing truth",
+            "CI proved session acknowledgements remain SUBMITTED until their remote job is terminal, remote identities are persisted separately, missing usage remains unresolved and reserved, assistant-only output is selected safely, reconciliation is idempotent, and incomplete monetary coverage is never presented as final true profit.",
+            ci_proven=ci_proven,
+            markers=(
+                ("gateways/genx/service.py", "reconcile_remote_job_payload"),
+                ("gateways/genx/output.py", "extract_session_assistant_text"),
+                ("tests/test_genx_async_session_integration.py", "test_completed_without_usage_keeps_reservation"),
+                ("control/services/profit_brain.py", "ATTRIBUTABLE_GENX_MONETARY_COST_COVERAGE_INCOMPLETE"),
+            ),
+        ),
+        _contract_gate(
             "utilization_economics", "Utilization-aware economics and no-avoidable-idle invariant",
             "CI proved capacity persistence, idle micro-profit acceptance, busy opportunity-cost preference, resource reservation, and avoidable-idle accounting.",
             ci_proven=ci_proven, markers=(("control/services/profit_brain.py", "capture_capacity"), ("control/services/profit_brain.py", "BETTER_COMMITTED_WORK_HAS_PRIORITY"), ("tests/test_profit_brain_integration.py", "avoidable_idle")),

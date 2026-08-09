@@ -93,6 +93,8 @@ class SettledProfitTruth:
     net_settled_profit: Decimal
     settled_payouts: int
     costed_genx_calls: int
+    unresolved_genx_cost_calls: int
+    cost_coverage_complete: bool
     coverage: tuple[str, ...]
 
 
@@ -123,6 +125,21 @@ def _money(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
+def _genx_monetary_cost_known(call: GenXCall) -> bool:
+    metadata = call.requested_metadata if isinstance(call.requested_metadata, dict) else {}
+    monetary_truth = str(metadata.get("cost_equivalent_truth") or "").upper()
+    if monetary_truth in {"ACTUAL", "ACTUAL_USD", "AUTHORITATIVE"}:
+        return True
+    if call.cost_equivalent > ZERO:
+        return call.status in {"COMPLETED", "FAILED", "CANCELLED"}
+    return call.status in {"FAILED", "CANCELLED"} and str(metadata.get("billing_truth") or "").upper() == "NOT_APPLICABLE"
+
+
+def _genx_cost_coverage(calls) -> tuple[bool, int]:
+    unresolved = sum(1 for call in calls if not _genx_monetary_cost_known(call))
+    return unresolved == 0, unresolved
+
+
 def settled_profit_truth(*, start, end=None) -> SettledProfitTruth:
     """Return USD settled cash less attributable, finalized paid execution cost in the same window."""
     payouts = Payout.objects.filter(
@@ -135,6 +152,7 @@ def settled_profit_truth(*, start, end=None) -> SettledProfitTruth:
         payouts = payouts.filter(settled_at__lt=end)
     settled_cash = payouts.aggregate(value=Sum("net"))["value"] or ZERO
     settled_job_ids = payouts.values("job_id")
+    attributable_genx_calls = list(GenXCall.objects.filter(job_id__in=settled_job_ids))
     genx_calls = GenXCall.objects.filter(
         job_id__in=settled_job_ids,
         status="COMPLETED",
@@ -145,17 +163,26 @@ def settled_profit_truth(*, start, end=None) -> SettledProfitTruth:
     if end is not None:
         genx_calls = genx_calls.filter(completed_at__lt=end)
     paid_execution_cost = genx_calls.aggregate(value=Sum("cost_equivalent"))["value"] or ZERO
+    cost_coverage_complete, unresolved_cost_calls = _genx_cost_coverage(attributable_genx_calls)
+    coverage = [
+        "SETTLED_PAYOUT_NET_USD_ALREADY_EXCLUDES_MARKETPLACE_FEE",
+        "COMPLETED_GENX_COST_EQUIVALENT_USD_IN_WINDOW_FOR_SETTLED_JOBS",
+        "NO_PERSISTED_ACTUAL_EXTERNAL_OR_OTHER_DIRECT_COST_SOURCE",
+    ]
+    coverage.append(
+        "ATTRIBUTABLE_GENX_MONETARY_COST_COVERAGE_COMPLETE"
+        if cost_coverage_complete
+        else "ATTRIBUTABLE_GENX_MONETARY_COST_COVERAGE_INCOMPLETE"
+    )
     return SettledProfitTruth(
         settled_cash=_money(settled_cash),
         paid_execution_cost=_money(paid_execution_cost),
         net_settled_profit=_money(settled_cash - paid_execution_cost),
         settled_payouts=payouts.count(),
         costed_genx_calls=genx_calls.count(),
-        coverage=(
-            "SETTLED_PAYOUT_NET_USD_ALREADY_EXCLUDES_MARKETPLACE_FEE",
-            "COMPLETED_GENX_COST_EQUIVALENT_USD_IN_WINDOW_FOR_SETTLED_JOBS",
-            "NO_PERSISTED_ACTUAL_EXTERNAL_OR_OTHER_DIRECT_COST_SOURCE",
-        ),
+        unresolved_genx_cost_calls=unresolved_cost_calls,
+        cost_coverage_complete=cost_coverage_complete,
+        coverage=tuple(coverage),
     )
 
 
@@ -606,8 +633,12 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
         reputation_delta = None if len(reputation_values) < 2 else reputation_values[-1] - reputation_values[0]
         qa_rate = _ratio(first_pass, completed or len(first_qa))
         settlement_rate = _ratio(settled, accepted or completed)
+        monetary_coverage_complete, unresolved_monetary_calls = _genx_cost_coverage(
+            GenXCall.objects.filter(job_id__in={payout.job_id for payout in settled_payouts})
+        )
         stage = classify_growth_stage(
-            sample_count=len(selected), completed_jobs=completed, settled_profit=profit,
+            sample_count=len(selected), completed_jobs=completed,
+            settled_profit=profit if monetary_coverage_complete else ZERO,
             qa_rate=qa_rate, settlement_rate=settlement_rate,
         )
         row = PerformanceAggregate.objects.create(
@@ -646,6 +677,9 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
                 "settled_profit_formula": "settled_payout_net_usd_minus_completed_genx_cost_equivalent_usd",
                 "marketplace_fee_handling": "payout_net_already_excludes_fee; fee_not_subtracted_again",
                 "actual_external_direct_cost_coverage": "NO_PERSISTED_SOURCE",
+                "genx_monetary_cost_coverage_complete": monetary_coverage_complete,
+                "unresolved_genx_monetary_cost_calls": unresolved_monetary_calls,
+                "settled_profit_truth": "COST_COMPLETE" if monetary_coverage_complete else "RECORDED_PARTIAL_COST_COVERAGE_INCOMPLETE",
             },
             **group["defaults"],
         )
@@ -690,6 +724,8 @@ def _growth_metrics(now) -> dict[str, Decimal]:
         "ACTUAL_WEEKLY_SETTLED_CASH": weekly_truth.settled_cash,
         "ACTUAL_WEEKLY_PAID_EXECUTION_COST": weekly_truth.paid_execution_cost,
         "ACTUAL_WEEKLY_NET_SETTLED_PROFIT": weekly_truth.net_settled_profit,
+        "DAILY_SETTLED_PROFIT_COST_COVERAGE_COMPLETE": Decimal(int(daily_truth.cost_coverage_complete)),
+        "WEEKLY_SETTLED_PROFIT_COST_COVERAGE_COMPLETE": Decimal(int(weekly_truth.cost_coverage_complete)),
     }
 
 
@@ -717,6 +753,12 @@ def evaluate_growth_targets(*, persist: bool = True) -> GrowthEvaluation:
     else:
         floor = min(ratios or [ZERO])
         status = TargetStatus.AHEAD if floor >= Decimal("1.20") else TargetStatus.ON_TRACK if floor >= Decimal("1") else TargetStatus.BEHIND
+        if (
+            metrics.get("DAILY_SETTLED_PROFIT_COST_COVERAGE_COMPLETE") == ZERO
+            or metrics.get("WEEKLY_SETTLED_PROFIT_COST_COVERAGE_COMPLETE") == ZERO
+        ):
+            status = TargetStatus.INSUFFICIENT_DATA
+            reasons.append("SETTLED_PROFIT_COST_COVERAGE_INCOMPLETE")
         latest_capacity = CapacitySnapshot.objects.order_by("-created_at").first()
         if latest_capacity and latest_capacity.avoidable_idle_minutes > 0:
             reasons.append("CAPACITY_IDLE")

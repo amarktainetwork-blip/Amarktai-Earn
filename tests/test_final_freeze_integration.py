@@ -121,7 +121,7 @@ class ExpandedV1FreezeIntegrationTests(TestCase):
         for identifier in (
             "growth_governor", "utilization_economics", "adaptive_economic_learning", "multifile_composite",
             "expanded_worker_qa", "synthetic_data_factory", "authorized_safety_research", "multi_market_adapters",
-            "dashboard_economic_truth", "uncapped_profit_governor",
+            "dashboard_economic_truth", "uncapped_profit_governor", "genx_async_session_truth",
         ):
             self.assertEqual(by_id[identifier]["status"], "PASS", by_id[identifier])
         self.assertEqual(by_id["live_market_account"]["status"], "EXTERNAL_PROOF_REQUIRED")
