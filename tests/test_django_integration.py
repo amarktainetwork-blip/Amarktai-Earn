@@ -1,4 +1,6 @@
 import json
+from decimal import Decimal
+
 import pyotp
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -6,10 +8,132 @@ from django.contrib.auth.hashers import make_password
 from django.test import Client, TestCase
 from django.utils import timezone
 
-from control.models import Job, Marketplace, OwnerSecurityProfile, RecoveryCode, RefreshSession, WebhookEvent
+from control.models import (
+    GenXAccountSnapshot,
+    GenXModelCatalog,
+    Job,
+    Marketplace,
+    OwnerSecurityProfile,
+    RecoveryCode,
+    RefreshSession,
+    WebhookEvent,
+)
 from control.secrets import encrypt_secret
 from control.services.locks import JobLockUnavailable, acquire_job_lock, release_job_lock
+from gateways.genx.service import GenXGateway
 from markets.agentgigs.webhooks import signature_for
+
+
+class FakeCatalogClient:
+    def __init__(self, *, models, pricing, credits):
+        self.models_payload = models
+        self.pricing_payload = pricing
+        self.credits_payload = credits
+        self.calls = []
+
+    def list_models(self, category=None):
+        self.calls.append(("list_models", category))
+        return self.models_payload
+
+    def pricing(self, category=None):
+        self.calls.append(("pricing", category))
+        return self.pricing_payload
+
+    def credits(self):
+        self.calls.append(("credits", None))
+        return self.credits_payload
+
+    def generate(self, *args, **kwargs):
+        raise AssertionError("catalog sync must never generate content")
+
+
+class GenXCatalogIntegrationTests(TestCase):
+    def test_string_models_merge_pricing_metadata_and_snapshot_credits(self):
+        pricing_rows = [
+            {
+                "model": "text-model-a",
+                "category": "text",
+                "provider": "provider-a",
+                "pricing": {"credits": 1},
+            },
+            {
+                "model": "image-model-b",
+                "category": "image",
+                "provider": "provider-b",
+                "pricing": {"credits": 2},
+            },
+        ]
+        credits_payload = {"data": {"available_credits": "42.5"}}
+        client = FakeCatalogClient(
+            models={"data": ["text-model-a", "image-model-b"]},
+            pricing={"data": pricing_rows},
+            credits=credits_payload,
+        )
+
+        result = GenXGateway(client=client).sync_catalog()
+
+        self.assertEqual(result, {"models_seen": 2, "available_credits": Decimal("42.5")})
+        self.assertEqual(GenXModelCatalog.objects.filter(active=True).count(), 2)
+        text_model = GenXModelCatalog.objects.get(model_id="text-model-a")
+        image_model = GenXModelCatalog.objects.get(model_id="image-model-b")
+        self.assertEqual((text_model.category, text_model.provider), ("text", "provider-a"))
+        self.assertEqual((image_model.category, image_model.provider), ("image", "provider-b"))
+        self.assertEqual(text_model.model_payload, {"id": "text-model-a"})
+        self.assertEqual(image_model.model_payload, {"id": "image-model-b"})
+        self.assertEqual(text_model.pricing_payload, pricing_rows[0])
+        self.assertEqual(image_model.pricing_payload, pricing_rows[1])
+        self.assertEqual(text_model.price_hint, Decimal("1"))
+        self.assertEqual(image_model.price_hint, Decimal("2"))
+        snapshot = GenXAccountSnapshot.objects.get()
+        self.assertEqual(snapshot.available_credits, Decimal("42.5"))
+        self.assertEqual(snapshot.raw, credits_payload)
+        self.assertEqual(client.calls, [("list_models", None), ("pricing", None), ("credits", None)])
+
+    def test_stale_deactivation_remains_category_scoped(self):
+        GenXModelCatalog.objects.create(model_id="stale-text", category="text", active=True)
+        GenXModelCatalog.objects.create(model_id="untouched-image", category="image", active=True)
+        client = FakeCatalogClient(
+            models={"data": ["current-text"]},
+            pricing={
+                "data": [
+                    {
+                        "model": "current-text",
+                        "category": "text",
+                        "provider": "provider-a",
+                        "pricing": {"credits": 1},
+                    }
+                ]
+            },
+            credits={"available_credits": 10},
+        )
+
+        GenXGateway(client=client).sync_catalog(category="text")
+
+        self.assertFalse(GenXModelCatalog.objects.get(model_id="stale-text").active)
+        self.assertTrue(GenXModelCatalog.objects.get(model_id="untouched-image").active)
+        self.assertTrue(GenXModelCatalog.objects.get(model_id="current-text").active)
+
+    def test_empty_authoritative_model_ids_do_not_create_pricing_only_models(self):
+        client = FakeCatalogClient(
+            models={"data": [None, False, 0, "", "   "]},
+            pricing={
+                "data": [
+                    {
+                        "model": "pricing-only",
+                        "category": "text",
+                        "provider": "provider-a",
+                        "pricing": {"credits": 1},
+                    }
+                ]
+            },
+            credits={"available_credits": 10},
+        )
+
+        result = GenXGateway(client=client).sync_catalog()
+
+        self.assertEqual(result["models_seen"], 0)
+        self.assertFalse(GenXModelCatalog.objects.exists())
+        self.assertEqual(GenXAccountSnapshot.objects.count(), 1)
 
 
 class OwnerAuthIntegrationTests(TestCase):

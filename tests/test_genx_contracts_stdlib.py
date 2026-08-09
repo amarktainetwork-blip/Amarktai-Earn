@@ -17,14 +17,42 @@ from gateways.genx.contracts import (
 
 class GenXContractTests(unittest.TestCase):
     def test_records_support_common_api_shapes(self):
+        self.assertEqual(records([{"id": "root-dict"}, "root-string"]), [{"id": "root-dict"}, {"id": "root-string"}])
         self.assertEqual(records({"models": [{"id": "m1"}]}), [{"id": "m1"}])
         self.assertEqual(records({"data": {"m2": {"category": "text"}}}), [{"category": "text", "id": "m2"}])
+
+    def test_records_normalize_string_model_ids(self):
+        self.assertEqual(
+            records({"data": ["text-model-a", "image-model-b"]}),
+            [{"id": "text-model-a"}, {"id": "image-model-b"}],
+        )
+
+    def test_records_ignore_unsupported_list_scalars(self):
+        self.assertEqual(
+            records({"data": [None, False, 0, 1.5, [], "", "   ", {"id": "dict-model"}, " string-model "]}),
+            [{"id": "dict-model"}, {"id": "string-model"}],
+        )
 
     def test_pricing_and_price_hint_are_shape_tolerant(self):
         payload = {"pricing": {"m1": {"input_credits_per_million": "12.5", "output_credits_per_million": "30"}}}
         indexed = pricing_index(payload)
         self.assertIn("m1", indexed)
         self.assertEqual(price_hint(indexed["m1"]), Decimal("12.5"))
+
+    def test_pricing_index_supports_structured_data_rows(self):
+        payload = {
+            "data": [
+                {
+                    "model": "text-model-a",
+                    "category": "text",
+                    "provider": "provider-a",
+                    "pricing": {"credits": 1},
+                }
+            ]
+        }
+        indexed = pricing_index(payload)
+        self.assertEqual(indexed["text-model-a"], payload["data"][0])
+        self.assertEqual(price_hint(indexed["text-model-a"]), Decimal("1"))
 
     def test_credits_and_result_usage_are_extracted_without_inventing_cost(self):
         self.assertEqual(available_credits({"wallet": {"available_credits": "912.25"}}), Decimal("912.25"))

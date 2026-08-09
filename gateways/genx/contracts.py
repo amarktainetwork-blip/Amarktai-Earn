@@ -17,15 +17,25 @@ def _decimal(value: Any) -> Decimal | None:
     return result if result.is_finite() else None
 
 
+def _list_records(value: list[Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            result.append(item)
+        elif isinstance(item, str) and item.strip():
+            result.append({"id": item.strip()})
+    return result
+
+
 def records(payload: Any, keys: Iterable[str] = ("models", "data", "items", "pricing")) -> list[dict[str, Any]]:
     if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
+        return _list_records(payload)
     if not isinstance(payload, dict):
         return []
     for key in keys:
         value = payload.get(key)
         if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
+            return _list_records(value)
         if isinstance(value, dict):
             result = []
             for item_key, item_value in value.items():
