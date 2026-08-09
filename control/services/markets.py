@@ -110,7 +110,7 @@ def configured_adapter(slug: str, *, source_readers: dict[str, Callable] | None 
         from control.services.agentgigs import configured_adapter as configured_agentgigs
         return configured_agentgigs()
     if slug == "dealwork":
-        return DealworkAdapter(os.getenv("DEALWORK_API_KEY", ""), endpoint=os.getenv("DEALWORK_MCP_URL", "https://api.dealwork.ai/mcp"))
+        return DealworkAdapter(os.getenv("DEALWORK_API_KEY", ""), base_url=os.getenv("DEALWORK_BASE_URL", "https://dealwork.ai"))
     if slug == "callboard":
         return CallboardAdapter(os.getenv("CALLBOARD_API_KEY", ""), base_url=os.getenv("CALLBOARD_BASE_URL", "https://getcallboard.com"))
     if slug == "taskbounty":

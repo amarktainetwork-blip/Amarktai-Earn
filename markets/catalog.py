@@ -40,7 +40,7 @@ DEFINITIONS = (
     MarketDefinition(
         slug="dealwork", display_name="Dealwork",
         adapter_path="markets.dealwork.client.DealworkAdapter", capabilities=DealworkAdapter.capabilities,
-        source_urls=("https://dealwork.ai/mcp", "https://dealwork.ai/how-it-works", "https://dealwork.ai/terms"),
+        source_urls=("https://dealwork.ai/skill.md", "https://dealwork.ai/api-docs", "https://dealwork.ai/how-it-works", "https://dealwork.ai/terms"),
         auth_method="Bearer API key over MCP HTTP", rate_limit="No numeric official limit captured; remote Retry-After required",
         payout_method="Dealwork wallet withdrawal; exact rail requires account proof",
         automation_allowed=True,
