@@ -6,6 +6,71 @@ import uuid
 from django.db import migrations, models
 
 
+_NO_SELLER_CAPABILITIES = {
+    "publish_service": False,
+    "update_service": False,
+    "pause_service": False,
+    "receive_orders": False,
+    "order_status": False,
+    "service_messages": False,
+    "service_delivery": False,
+    "usage_metering": False,
+    "seller_payment": False,
+    "seller_webhooks": False,
+    "subscription_sales": False,
+    "pay_per_call": False,
+    "project_sales": False,
+}
+
+_LEGACY_PROFILE_ENRICHMENTS = {
+    "agentgigs": {
+        "revenue_channels": ["POSTED_JOB"], "job_acquisition_mode": "REST_API",
+        "seller_mode": "NONE_VERIFIED", "settlement_rail": "STRIPE_CONNECT_ACCOUNT_PROOF_REQUIRED",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "OFFICIAL_REST_CONTRACT",
+    },
+    "dealwork": {
+        "revenue_channels": ["POSTED_JOB"], "job_acquisition_mode": "MCP_JOB_TOOLS",
+        "seller_mode": "SERVICE_LISTING_CONTRACT_UNVERIFIED", "settlement_rail": "WALLET_WITHDRAWAL_RAIL_UNVERIFIED",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "OFFICIAL_MCP_JOB_CONTRACT",
+    },
+    "callboard": {
+        "revenue_channels": ["POSTED_JOB"], "job_acquisition_mode": "OPENAPI_V2",
+        "seller_mode": "NONE_VERIFIED", "settlement_rail": "STRIPE_CONNECT_ACCOUNT_PROOF_REQUIRED",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "OFFICIAL_OPENAPI_CONTRACT",
+    },
+    "taskbounty": {
+        "revenue_channels": ["BOUNTY"], "job_acquisition_mode": "REST_API",
+        "seller_mode": "NONE_VERIFIED", "settlement_rail": "USD_BANK_TRANSFER_ONLY",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "OFFICIAL_REST_CONTRACT",
+    },
+    "opire": {
+        "revenue_channels": ["BOUNTY"], "job_acquisition_mode": "SOURCE_WIRED_IMPORT_MANUAL_WORKFLOW",
+        "seller_mode": "NO_SOLVER_MUTATION_CONTRACT", "settlement_rail": "STRIPE_REWARD_CREATOR_PAYMENT_UNVERIFIED",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "SOURCE_IMPORT_ONLY_NO_SOLVER_MUTATION",
+    },
+    "algora": {
+        "revenue_channels": ["BOUNTY"], "job_acquisition_mode": "SOURCE_WIRED_IMPORT",
+        "seller_mode": "SOLVER_MUTATION_CONTRACT_UNVERIFIED", "settlement_rail": "PAYOUT_ONBOARDING_RAIL_UNVERIFIED",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "SOURCE_IMPORT_ONLY_SOLVER_MUTATION_UNVERIFIED",
+    },
+}
+
+
+def _enrich_legacy_market_profiles(apps, schema_editor):
+    MarketIntegrationProfile = apps.get_model("control", "MarketIntegrationProfile")
+    for slug, values in _LEGACY_PROFILE_ENRICHMENTS.items():
+        MarketIntegrationProfile.objects.filter(marketplace__slug=slug).update(
+            seller_capabilities=dict(_NO_SELLER_CAPABILITIES),
+            currency="USD",
+            manual_onboarding_required=True,
+            **values,
+        )
+
+
+def _noop_reverse(apps, schema_editor):
+    pass
+
+
 class Migration(migrations.Migration):
     dependencies = [("control", "0009_safetyfinding_bountyprogram_programscopeversion_and_more")]
 
@@ -21,6 +86,7 @@ class Migration(migrations.Migration):
         migrations.AddField(model_name="marketintegrationprofile", name="seller_capabilities", field=models.JSONField(default=dict)),
         migrations.AddField(model_name="marketintegrationprofile", name="seller_mode", field=models.CharField(blank=True, max_length=80)),
         migrations.AddField(model_name="marketintegrationprofile", name="settlement_rail", field=models.CharField(blank=True, max_length=120)),
+        migrations.RunPython(_enrich_legacy_market_profiles, _noop_reverse),
         migrations.CreateModel(
             name="MarketServiceListing",
             fields=[
@@ -50,7 +116,7 @@ class Migration(migrations.Migration):
                 ("remote_state", models.CharField(blank=True, max_length=80)), ("messages", models.JSONField(default=list)),
                 ("usage", models.JSONField(default=dict)),
                 ("settlement_reference", models.CharField(blank=True, max_length=255)),
-                ("status", models.CharField(choices=[("RECEIVED", "Received"), ("PREFLIGHT_BLOCKED", "Preflight Blocked"), ("READY", "Ready"), ("ACCEPTED", "Accepted"), ("DELIVERED", "Delivered"), ("PAYOUT_PENDING", "Payout Pending"), ("SETTLED", "Settled"), ("FAILED", "Failed")], default="RECEIVED", max_length=24)),
+                ("status", models.CharField(choices=[("RECEIVED", "Received"), ("PREFLIGHT_BLOCKED", "Preflight Blocked"), ("READY", "Ready"), ("ACCEPTED", "Accepted"), ("DELIVERED", "Delivered"), ("PAYOUT_PENDING", "Payout Pending"), ("SETTLED", "Settled"), ("REVERSED", "Reversed"), ("FAILED", "Failed")], default="RECEIVED", max_length=24)),
                 ("economic_preflight", models.JSONField(default=dict)), ("request_digest", models.CharField(max_length=64)), ("authenticated_at", models.DateTimeField()),
                 ("job", models.OneToOneField(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name="inbound_order", to="control.job")),
                 ("marketplace", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="inbound_orders", to="control.marketplace")),

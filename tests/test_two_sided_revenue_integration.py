@@ -8,16 +8,20 @@ from django.utils import timezone
 
 from control.economics import EconomicsInput
 from control.models import (
+    AcquisitionPreflight,
     Execution,
     GenXAccountSnapshot,
     InboundOrder,
     Job,
+    LedgerEntry,
+    MarketIntegrationProfile,
     MarketServiceListing,
     Marketplace,
     Payout,
     PortfolioDecision,
     QAResult,
     ServiceOffering,
+    TreasuryBalance,
     Worker,
 )
 from control.ops import markets_snapshot, overview_snapshot
@@ -25,6 +29,7 @@ from control.services.jobs import score_and_persist, transition_job
 from control.services.profit_brain import UtilizationState, settled_profit_truth
 from control.services.revenue_portfolio import persist_portfolio_ranking
 from control.services.seller_services import (
+    is_offering_currently_sellable,
     listing_blockers,
     pause_service_listing,
     receive_inbound_order,
@@ -37,6 +42,7 @@ from control.services.seller_services import (
     refresh_listing_truth,
     refresh_service_offering_proof,
     service_capability_blockers,
+    sync_candidate_service_offerings,
     version_service_offering,
 )
 from control.services.markets import bootstrap_market_integrations
@@ -71,7 +77,7 @@ class TwoSidedRevenueIntegrationTests(TestCase):
             proof_state=ServiceOffering.ProofState.SOURCE_PROVEN,
         )
 
-    def _prove(self, offering):
+    def _record_execution_proof(self, offering):
         proof_market, _ = Marketplace.objects.get_or_create(slug="proof-market", defaults={"display_name": "Proof"})
         proof_job = Job.objects.create(
             marketplace=proof_market, external_id=f"proof-{offering.slug}", title="Proof",
@@ -84,6 +90,13 @@ class TwoSidedRevenueIntegrationTests(TestCase):
             job=proof_job, worker=worker, status="COMPLETED", result={"operation": offering.operation},
         )
         QAResult.objects.create(job=proof_job, execution=execution, check_type="independent", passed=True, score="1")
+        return offering
+
+    def _prove(self, offering):
+        self._record_execution_proof(offering)
+        refresh_service_offering_proof(offering)
+        offering.refresh_from_db()
+        self.assertEqual(offering.proof_state, ServiceOffering.ProofState.EXECUTION_PROVEN)
         refresh_service_offering_proof(offering)
         offering.refresh_from_db()
         self.assertEqual(offering.proof_state, ServiceOffering.ProofState.SELLABLE)
@@ -154,6 +167,54 @@ class TwoSidedRevenueIntegrationTests(TestCase):
         self.assertEqual(before, after)
         self.assertTrue(all(values == (False, False, False, False) for values in after.values()))
 
+    def test_existing_six_profiles_receive_static_taxonomy_without_dynamic_truth_reset(self):
+        expected_channels = {
+            "agentgigs": ["POSTED_JOB"], "dealwork": ["POSTED_JOB"], "callboard": ["POSTED_JOB"],
+            "taskbounty": ["BOUNTY"], "opire": ["BOUNTY"], "algora": ["BOUNTY"],
+        }
+        profiles = MarketIntegrationProfile.objects.filter(marketplace__slug__in=expected_channels)
+        profiles.update(
+            revenue_channels=[], seller_capabilities={}, hosting_policy="UNVERIFIED",
+            api_contract_state="UNVERIFIED", job_acquisition_mode="", seller_mode="", settlement_rail="",
+        )
+        agentgigs = Marketplace.objects.get(slug="agentgigs").integration_profile
+        agentgigs.payout_proof_state = "OPERATOR_EVIDENCE_PRESERVED"
+        agentgigs.automation_status = "OPERATOR_MANAGED_STATUS"
+        agentgigs.blockers = ["OPERATOR_MANAGED_BLOCKER"]
+        agentgigs.evidence = {"operator": {"identity": "preserve-me"}}
+        agentgigs.save()
+
+        first = bootstrap_revenue_market_catalog()
+        second = bootstrap_revenue_market_catalog()
+        self.assertGreaterEqual(first["updated"], 6)
+        self.assertEqual(second["updated"], 0)
+        for slug, channels in expected_channels.items():
+            market = Marketplace.objects.get(slug=slug)
+            profile = market.integration_profile
+            self.assertEqual(profile.revenue_channels, channels)
+            self.assertEqual(profile.hosting_policy, "WEBDOCK_SAFE")
+            self.assertTrue(profile.api_contract_state != "UNVERIFIED")
+            self.assertTrue(profile.seller_capabilities)
+            self.assertFalse(any(profile.seller_capabilities.values()))
+            self.assertFalse(market.enabled)
+            self.assertFalse(market.payout_ready)
+            self.assertFalse(market.south_africa_verified)
+            self.assertFalse(profile.autonomous_acquisition_enabled)
+        agentgigs.refresh_from_db()
+        self.assertEqual(agentgigs.payout_proof_state, "OPERATOR_EVIDENCE_PRESERVED")
+        self.assertEqual(agentgigs.automation_status, "OPERATOR_MANAGED_STATUS")
+        self.assertEqual(agentgigs.blockers, ["OPERATOR_MANAGED_BLOCKER"])
+        self.assertEqual(agentgigs.evidence, {"operator": {"identity": "preserve-me"}})
+        self.assertNotIn("SERVICE_LISTING", Marketplace.objects.get(slug="dealwork").integration_profile.revenue_channels)
+
+    def test_service_candidate_sync_reports_existing_rows_as_unchanged(self):
+        first = sync_candidate_service_offerings()
+        second = sync_candidate_service_offerings()
+        self.assertGreater(first["created"], 0)
+        self.assertEqual(second["created"], 0)
+        self.assertEqual(second["unchanged"], second["total"])
+        self.assertNotIn("updated", second)
+
     def test_nevermined_publish_is_blocked_without_external_proof(self):
         offering = self._offering()
         listing = self._listing(offering)
@@ -194,12 +255,36 @@ class TwoSidedRevenueIntegrationTests(TestCase):
         self._prove(offering)
         self.assertNotIn("SERVICE_EXECUTION_NOT_PROVEN", service_capability_blockers(offering))
 
-    def test_coding_and_public_web_services_respect_runtime_switches(self):
+    def test_proof_progression_and_runtime_sellability_gates_owner_count(self):
         coding = self._offering(operation="code_change_small", worker_class="code_small", slug="coding-fixture")
         public_web = self._offering(operation="public_web_extract", worker_class="public_web_data", slug="web-fixture")
+        self._record_execution_proof(coding)
+        self._record_execution_proof(public_web)
         with patch.dict(os.environ, {"SANDBOX_CODING_ENABLED": "0", "PUBLIC_WEB_DATA_ENABLED": "0"}):
+            refresh_service_offering_proof(coding)
+            refresh_service_offering_proof(public_web)
+            coding.refresh_from_db(); public_web.refresh_from_db()
+            self.assertEqual(coding.proof_state, ServiceOffering.ProofState.EXECUTION_PROVEN)
+            self.assertEqual(public_web.proof_state, ServiceOffering.ProofState.EXECUTION_PROVEN)
+            refresh_service_offering_proof(coding)
+            refresh_service_offering_proof(public_web)
+            coding.refresh_from_db(); public_web.refresh_from_db()
+            self.assertEqual(coding.proof_state, ServiceOffering.ProofState.EXECUTION_PROVEN)
+            self.assertEqual(public_web.proof_state, ServiceOffering.ProofState.EXECUTION_PROVEN)
             self.assertIn("CODING_SERVICE_BLOCKED_SANDBOX_OFF", service_capability_blockers(coding))
             self.assertIn("PUBLIC_WEB_SERVICE_BLOCKED_WEB_DISABLED", service_capability_blockers(public_web))
+            self.assertFalse(is_offering_currently_sellable(coding))
+            self.assertFalse(is_offering_currently_sellable(public_web))
+            self.assertEqual(markets_snapshot()["meta"]["sellable_offerings"], 0)
+        with patch.dict(os.environ, {"SANDBOX_CODING_ENABLED": "1", "PUBLIC_WEB_DATA_ENABLED": "1"}):
+            refresh_service_offering_proof(coding)
+            refresh_service_offering_proof(public_web)
+            coding.refresh_from_db(); public_web.refresh_from_db()
+            self.assertEqual(coding.proof_state, ServiceOffering.ProofState.SELLABLE)
+            self.assertEqual(public_web.proof_state, ServiceOffering.ProofState.SELLABLE)
+            self.assertTrue(is_offering_currently_sellable(coding))
+            self.assertTrue(is_offering_currently_sellable(public_web))
+            self.assertEqual(markets_snapshot()["meta"]["sellable_offerings"], 2)
 
     def test_inbound_order_is_one_canonical_job_and_idempotent(self):
         market = self._ready_market()
@@ -309,7 +394,84 @@ class TwoSidedRevenueIntegrationTests(TestCase):
             [posted, inbound], available_slots=2, productive_minutes_available=Decimal("300"),
         )
         self.assertEqual(ranked[0].candidate.job_id, str(inbound.id))
+        self.assertFalse(any(row.selected for row in ranked))
+        self.assertTrue(all("NO_VALID_ACQUISITION_PREFLIGHT" in row.candidate.selection_blockers for row in ranked))
         self.assertEqual(set(PortfolioDecision.objects.values_list("source_type", flat=True)), {"POSTED_OPPORTUNITY", "INBOUND_SERVICE_ORDER"})
+
+    def test_portfolio_ranks_blocked_work_but_selects_only_currently_safe_actions(self):
+        safe_market = self._ready_market()
+        safe_profile = safe_market.integration_profile
+        safe_profile.autonomous_acquisition_enabled = True
+        safe_profile.save()
+
+        payout_blocked_market = self._ready_market(Marketplace.objects.get(slug="skyfire"))
+        payout_blocked_market.payout_ready = False
+        payout_blocked_market.save()
+        payout_blocked_profile = payout_blocked_market.integration_profile
+        payout_blocked_profile.autonomous_acquisition_enabled = True
+        payout_blocked_profile.save()
+
+        stale_market = self._ready_market(Marketplace.objects.get(slug="callboard"))
+        stale_profile = stale_market.integration_profile
+        stale_profile.autonomous_acquisition_enabled = True
+        stale_profile.save()
+        stale_policy = stale_market.policy_versions.order_by("-checked_at").first()
+        stale_policy.checked_at = timezone.now() - timedelta(days=31)
+        stale_policy.save()
+
+        def scored_job(market, external_id, reward, minutes):
+            job = Job.objects.create(
+                marketplace=market, external_id=external_id, title=external_id, task_class="analysis", reward=reward,
+                normalized_payload={"source_type": "POSTED_OPPORTUNITY", "revenue_channel": "POSTED_JOB"},
+            )
+            score_and_persist(job, EconomicsInput(
+                gross_reward=Decimal(reward), marketplace_fee=Decimal("0"), p_acquire=Decimal("1"), p_accept=Decimal("0.95"),
+                p_payment=Decimal("0.95"), estimated_worker_minutes=Decimal(minutes),
+            ))
+            return job
+
+        payout_blocked = scored_job(payout_blocked_market, "payout-blocked-rank", "1000", "10")
+        AcquisitionPreflight.objects.create(
+            job=payout_blocked, autonomy_mode="LOW_RISK", eligible=True, allowed=True,
+        )
+        no_preflight = scored_job(safe_market, "no-preflight-rank", "500", "10")
+        stale = scored_job(stale_market, "stale-policy-rank", "250", "10")
+        AcquisitionPreflight.objects.create(job=stale, autonomy_mode="LOW_RISK", eligible=True, allowed=True)
+        safe = scored_job(safe_market, "safe-rank", "50", "10")
+        AcquisitionPreflight.objects.create(job=safe, autonomy_mode="LOW_RISK", eligible=True, allowed=True)
+
+        offering = self._prove(self._offering(slug="inbound-selection-fixture"))
+        inbound_order, _ = self._receive(
+            self._listing(offering, safe_market), remote="selection-inbound", key="selection-inbound", price="40", fee="2",
+        )
+        self.assertTrue(inbound_order.economic_preflight["eligible"])
+        self.assertFalse(inbound_order.economic_preflight["action_allowed"])
+
+        env = {
+            "AUTONOMOUS_MODE": "LOW_RISK",
+            "NEVERMINED_AUTO_ACQUIRE_ENABLED": "1",
+            "SKYFIRE_AUTO_ACQUIRE_ENABLED": "1",
+            "CALLBOARD_AUTO_ACQUIRE_ENABLED": "1",
+            "INBOUND_SERVICE_AUTO_ACCEPT_ENABLED": "0",
+        }
+        with patch.dict(os.environ, env):
+            ranked = persist_portfolio_ranking(
+                [payout_blocked, no_preflight, stale, safe, inbound_order.job],
+                available_slots=3,
+                productive_minutes_available=Decimal("100"),
+            )
+        by_job = {row.candidate.job_id: row for row in ranked}
+        self.assertEqual(ranked[0].candidate.job_id, str(payout_blocked.id))
+        self.assertFalse(by_job[str(payout_blocked.id)].selected)
+        self.assertIn("PAYOUT_NOT_READY", by_job[str(payout_blocked.id)].candidate.selection_blockers)
+        self.assertFalse(by_job[str(no_preflight.id)].selected)
+        self.assertIn("NO_VALID_ACQUISITION_PREFLIGHT", by_job[str(no_preflight.id)].candidate.selection_blockers)
+        self.assertFalse(by_job[str(stale.id)].selected)
+        self.assertIn("MARKET_AUTOMATION_POLICY_STALE", by_job[str(stale.id)].candidate.selection_blockers)
+        self.assertFalse(by_job[str(inbound_order.job_id)].selected)
+        self.assertTrue(by_job[str(inbound_order.job_id)].would_select_if_enabled)
+        self.assertIn("INBOUND_SERVICE_AUTO_ACCEPT_DISABLED", by_job[str(inbound_order.job_id)].candidate.selection_blockers)
+        self.assertTrue(by_job[str(safe.id)].selected)
 
     def test_stale_policy_blocks_listing(self):
         market = self._ready_market()
@@ -344,6 +506,8 @@ class TwoSidedRevenueIntegrationTests(TestCase):
         self.assertFalse(record_inbound_service_message(order, remote_id="message-1", content="requirements", actor="market:fixture"))
         self.assertTrue(record_inbound_usage(order, remote_event_id="usage-1", units=Decimal("3"), unit_type="request", authoritative_evidence={"fixture": True}))
         self.assertFalse(record_inbound_usage(order, remote_event_id="usage-1", units=Decimal("3"), unit_type="request", authoritative_evidence={"fixture": True}))
+        with self.assertRaisesRegex(ValueError, "INBOUND_USAGE_IDEMPOTENCY_CONFLICT"):
+            record_inbound_usage(order, remote_event_id="usage-1", units=Decimal("4"), unit_type="request", authoritative_evidence={"fixture": True})
         for state in (Job.State.AWARDED, Job.State.EXECUTING, Job.State.SUBMITTED):
             transition_job(order.job_id, state, actor="test")
         record_inbound_delivery(order, remote_reference="delivery-1", actor="market:fixture")
@@ -353,7 +517,7 @@ class TwoSidedRevenueIntegrationTests(TestCase):
         listing = pause_service_listing(listing, reason="owner pause")
         self.assertEqual(listing.status, MarketServiceListing.Status.PAUSED)
 
-    def test_only_authoritative_settlement_becomes_cash(self):
+    def test_authoritative_settlement_uses_canonical_finance_and_reversal_truth(self):
         market = self._ready_market()
         offering = self._prove(self._offering())
         order, _ = self._receive(self._listing(offering, market), price="100", fee="10")
@@ -368,23 +532,65 @@ class TwoSidedRevenueIntegrationTests(TestCase):
             currency="USD", authoritative=True, evidence_source="fixture", evidence={"escrow": True},
         )
         self.assertFalse(Payout.objects.filter(job=order.job).exists())
-        reconcile_inbound_settlement(
+        pending_event, pending_created = reconcile_inbound_settlement(
             order, remote_event_id="pending", state="PAYOUT_PENDING", gross=Decimal("100"), fee=Decimal("10"),
             currency="USD", authoritative=True, evidence_source="fixture", evidence={"payout": "pending"},
         )
-        self.assertEqual(Payout.objects.get(job=order.job).state, Payout.State.PAYOUT_PENDING)
+        self.assertTrue(pending_created)
+        payout = Payout.objects.get(job=order.job)
+        self.assertEqual(payout.state, Payout.State.PAYOUT_PENDING)
+        self.assertTrue(LedgerEntry.objects.filter(entry_key=f"payout:{payout.id}:earned", event_type="PAYOUT_EARNED").exists())
+        treasury = TreasuryBalance.objects.get(account=market.slug, currency="USD")
+        self.assertEqual(treasury.pending, Decimal("90"))
+        self.assertEqual(treasury.settled, Decimal("0"))
         reporting_start = timezone.now() - timedelta(days=1)
         self.assertEqual(settled_profit_truth(start=reporting_start).settled_cash, Decimal("0"))
-        reconcile_inbound_settlement(
+        settled_event, settled_created = reconcile_inbound_settlement(
             order, remote_event_id="bank-confirmed", state="SETTLED", gross=Decimal("100"), fee=Decimal("10"),
             currency="USD", authoritative=True, evidence_source="bank-reconciliation", evidence={"irreversible": True},
         )
+        self.assertTrue(settled_created)
         payout = Payout.objects.get(job=order.job)
         order.refresh_from_db(); order.job.refresh_from_db()
         self.assertEqual(payout.state, Payout.State.SETTLED)
         self.assertEqual(order.status, InboundOrder.Status.SETTLED)
         self.assertEqual(order.job.state, Job.State.SETTLED)
+        self.assertTrue(LedgerEntry.objects.filter(entry_key=f"payout:{payout.id}:settled", event_type="PAYOUT_SETTLED").exists())
+        treasury.refresh_from_db()
+        self.assertEqual(treasury.pending, Decimal("0"))
+        self.assertEqual(treasury.settled, Decimal("90"))
         self.assertEqual(settled_profit_truth(start=reporting_start).settled_cash, Decimal("90"))
+
+        duplicate, duplicate_created = reconcile_inbound_settlement(
+            order, remote_event_id="bank-confirmed", state="SETTLED", gross=Decimal("100"), fee=Decimal("10"),
+            currency="USD", authoritative=True, evidence_source="bank-reconciliation", evidence={"irreversible": True},
+        )
+        self.assertFalse(duplicate_created)
+        self.assertEqual(duplicate.id, settled_event.id)
+        with self.assertRaisesRegex(ValueError, "INBOUND_SETTLEMENT_IDEMPOTENCY_CONFLICT"):
+            reconcile_inbound_settlement(
+                order, remote_event_id="bank-confirmed", state="REVERSED", gross=Decimal("100"), fee=Decimal("10"),
+                currency="USD", authoritative=True, evidence_source="bank-reconciliation", evidence={"reversal": True},
+            )
+        with self.assertRaisesRegex(ValueError, "payout amount mutation requires an explicit adjustment workflow"):
+            reconcile_inbound_settlement(
+                order, remote_event_id="adjusted-without-workflow", state="SETTLED", gross=Decimal("80"), fee=Decimal("5"),
+                currency="USD", authoritative=True, evidence_source="bank-reconciliation", evidence={"irreversible": True},
+            )
+        self.assertFalse(order.settlement_events.filter(remote_event_id="adjusted-without-workflow").exists())
+
+        reversal, reversal_created = reconcile_inbound_settlement(
+            order, remote_event_id="bank-reversal", state="REVERSED", gross=Decimal("100"), fee=Decimal("10"),
+            currency="USD", authoritative=True, evidence_source="bank-reconciliation", evidence={"reversal": True},
+        )
+        self.assertTrue(reversal_created)
+        payout.refresh_from_db(); order.refresh_from_db(); treasury.refresh_from_db()
+        self.assertEqual(payout.state, Payout.State.REVERSED)
+        self.assertEqual(order.status, InboundOrder.Status.REVERSED)
+        self.assertEqual(treasury.settled, Decimal("0"))
+        self.assertEqual(settled_profit_truth(start=reporting_start).settled_cash, Decimal("0"))
+        self.assertTrue(LedgerEntry.objects.filter(entry_key=f"payout:{payout.id}:reversed", event_type="PAYOUT_REVERSED").exists())
+        self.assertTrue(order.settlement_events.filter(pk=settled_event.pk, state="SETTLED").exists())
 
     def test_owner_markets_and_money_show_two_sided_truth(self):
         market = self._ready_market()

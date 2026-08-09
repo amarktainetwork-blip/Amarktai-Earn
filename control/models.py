@@ -291,6 +291,7 @@ class InboundOrder(Timestamped):
         DELIVERED = "DELIVERED"
         PAYOUT_PENDING = "PAYOUT_PENDING"
         SETTLED = "SETTLED"
+        REVERSED = "REVERSED"
         FAILED = "FAILED"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

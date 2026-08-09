@@ -9,15 +9,15 @@ There is no second execution engine. Both paths use the worker registry, WorkPla
 
 ## Persisted truth
 
-`ServiceOffering` represents a registered operation that may be sold. Registry presence alone is insufficient: `SELLABLE` requires a completed execution for the same operation and worker plus a persisted passing QA result. Coding and direct public-web offerings retain their existing runtime feature gates.
+`ServiceOffering` represents a registered operation that may be sold. Registry and source truth produce `SOURCE_PROVEN`; a completed matching execution plus independent passing QA produces `EXECUTION_PROVEN`; only a later runtime-safety evaluation can produce `SELLABLE`. Coding remains `EXECUTION_PROVEN` while sandbox coding is off, and direct public-web work remains `EXECUTION_PROVEN` while public-web data is off. Owner sellable counts also require explicit enablement and order acceptance.
 
 `MarketServiceListing` maps an offering to a marketplace. It stays blocked without current policy, verified seller capability, authentication, payout readiness, South African payout proof, Webdock-safe settlement, operation proof, and explicit publish switches.
 
 `InboundOrder` maps one remote order and idempotency key to exactly one canonical `Job`. The internal receiver requires authenticated market identity, a replay-window timestamp, bounded JSON, safe pre-staged asset references, and matching digests for retries. No generic unauthenticated execution endpoint is exposed.
 
-`InboundSettlementEvent` keeps authorization, escrow, pending, settled, and reversal evidence separate. Authorization and escrow never create settled cash. A payout becomes `SETTLED` only from an authoritative event and the canonical job follows `ACCEPTED → PAYOUT_PENDING → SETTLED`.
+`InboundSettlementEvent` keeps authorization, escrow, pending, settled, and reversal evidence separate. Authorization and escrow never create payout cash records. Authoritative pending, settlement, and reversal events reuse `record_payout_state`, preserving amount-mutation protection, append-only ledger evidence, treasury recomputation, and canonical job transitions. Conflicting reuse of a remote event ID fails closed. Reversal preserves historical settlement evidence while removing the payout from settled cash.
 
-`PortfolioDecision` records a global ranking across posted work, bounties, and inbound orders. Ranking considers risk-adjusted profit, profit per productive minute, payment and acceptance probability, deadlines, reputation/learning value, concentration, and capacity. It does not privilege an integration by age.
+`PortfolioDecision` records a global ranking across posted work, bounties, and inbound orders. Ranking remains broad, including profitable blocked work for SHADOW visibility. `selected=True` is narrower: it requires a current eligible and action-allowed preflight, current market/payout/South-Africa/policy truth, relevant runtime switches, and available slots/minutes. `would_select_if_enabled` preserves shadow planning without pretending an action-disabled job is scheduled.
 
 ## Integration truth
 
@@ -29,4 +29,4 @@ There is no second execution engine. Both paths use the worker registry, WorkPla
 - AgentMarket and Chowdr: internal/test credits are non-cash and never enter revenue or payout accounting.
 - Crypto/on-chain candidates: `OFFHOST_SETTLEMENT_REQUIRED`. `ExternalSettlementBridge` is an intentionally disabled future HTTPS boundary; this repository contains no Webdock wallet, chain, testnet, or transaction implementation.
 
-All new credentials are blank and every publish/acquire/accept switch is off in `.env.example`. Catalog bootstrap creates disabled, payout-blocked, South-Africa-unverified records only.
+All new credentials are blank and every publish/acquire/accept switch is off in `.env.example`. Catalog bootstrap creates disabled, payout-blocked, South-Africa-unverified records only. Its catalog-owned-field enrichment backfills the original six production profiles without overwriting marketplace enablement, payout/South-Africa state, autonomous acquisition, operator evidence, blockers, or payout proof; repeat runs are idempotent.

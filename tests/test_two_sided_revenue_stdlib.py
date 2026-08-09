@@ -85,6 +85,7 @@ class TwoSidedRevenueDeterministicTests(unittest.TestCase):
                 job_id=f"job-{index}", source_type=source, revenue_channel=channel,
                 expected_net_profit=Decimal(profit), risk_adjusted_profit=Decimal(profit), productive_minutes=Decimal(minutes),
                 payout_probability=Decimal("0.9"), acceptance_probability=Decimal("0.9"),
+                eligible=True, action_allowed=True,
             )
             for index, (source, channel, profit, minutes) in enumerate((
                 ("POSTED_OPPORTUNITY", "POSTED_JOB", "20", "20"),

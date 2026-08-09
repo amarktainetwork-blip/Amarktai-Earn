@@ -59,6 +59,7 @@ from .models import (
 )
 from control.services.autonomy import current_mode
 from control.services.profit_brain import settled_profit_truth
+from control.services.seller_services import is_offering_currently_sellable
 
 SECTIONS = (
     "overview",
@@ -427,13 +428,17 @@ def markets_snapshot() -> dict:
             "latest_preflight": "ALLOWED" if preflight and preflight.allowed else "BLOCKED" if preflight else "NO DECISION",
             "latest_preflight_reasons": preflight.reason_codes if preflight else [],
         })
+    sellable_offerings = sum(
+        1 for offering in ServiceOffering.objects.all()
+        if is_offering_currently_sellable(offering)
+    )
     return {
         "section": "markets",
         "rows": rows,
         "meta": {
             "categories": ["JOB SOURCES", "SERVICE CHANNELS", "BOUNTY SOURCES", "MANUAL STOREFRONTS", "OFF-HOST FUTURE CHANNELS"],
             "service_offerings": ServiceOffering.objects.count(),
-            "sellable_offerings": ServiceOffering.objects.filter(proof_state=ServiceOffering.ProofState.SELLABLE, enabled=True).count(),
+            "sellable_offerings": sellable_offerings,
             "truth": "A channel is never called ready from catalog presence alone; payout, South Africa, policy, auth, capability, and hosting evidence remain independent gates.",
         },
     }

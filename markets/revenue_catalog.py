@@ -8,6 +8,7 @@ import json
 from django.db import transaction
 
 from control.models import MarketIntegrationProfile, Marketplace, MarketPolicyVersion
+from markets.catalog import BY_SLUG as LEGACY_BY_SLUG
 
 
 REVENUE_CHANNELS = (
@@ -249,6 +250,39 @@ DEFINITIONS = WEBDOCK_DEFINITIONS + OFFHOST_DEFINITIONS
 BY_SLUG = {definition.slug: definition for definition in DEFINITIONS}
 POLICY_CHECKED_AT = datetime(2026, 8, 9, 12, 0, tzinfo=datetime_timezone.utc)
 
+LEGACY_PROFILE_ENRICHMENTS = {
+    "agentgigs": {
+        "revenue_channels": ["POSTED_JOB"], "job_acquisition_mode": "REST_API",
+        "seller_mode": "NONE_VERIFIED", "settlement_rail": "STRIPE_CONNECT_ACCOUNT_PROOF_REQUIRED",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "OFFICIAL_REST_CONTRACT",
+    },
+    "dealwork": {
+        "revenue_channels": ["POSTED_JOB"], "job_acquisition_mode": "MCP_JOB_TOOLS",
+        "seller_mode": "SERVICE_LISTING_CONTRACT_UNVERIFIED", "settlement_rail": "WALLET_WITHDRAWAL_RAIL_UNVERIFIED",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "OFFICIAL_MCP_JOB_CONTRACT",
+    },
+    "callboard": {
+        "revenue_channels": ["POSTED_JOB"], "job_acquisition_mode": "OPENAPI_V2",
+        "seller_mode": "NONE_VERIFIED", "settlement_rail": "STRIPE_CONNECT_ACCOUNT_PROOF_REQUIRED",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "OFFICIAL_OPENAPI_CONTRACT",
+    },
+    "taskbounty": {
+        "revenue_channels": ["BOUNTY"], "job_acquisition_mode": "REST_API",
+        "seller_mode": "NONE_VERIFIED", "settlement_rail": "USD_BANK_TRANSFER_ONLY",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "OFFICIAL_REST_CONTRACT",
+    },
+    "opire": {
+        "revenue_channels": ["BOUNTY"], "job_acquisition_mode": "SOURCE_WIRED_IMPORT_MANUAL_WORKFLOW",
+        "seller_mode": "NO_SOLVER_MUTATION_CONTRACT", "settlement_rail": "STRIPE_REWARD_CREATOR_PAYMENT_UNVERIFIED",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "SOURCE_IMPORT_ONLY_NO_SOLVER_MUTATION",
+    },
+    "algora": {
+        "revenue_channels": ["BOUNTY"], "job_acquisition_mode": "SOURCE_WIRED_IMPORT",
+        "seller_mode": "SOLVER_MUTATION_CONTRACT_UNVERIFIED", "settlement_rail": "PAYOUT_ONBOARDING_RAIL_UNVERIFIED",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "SOURCE_IMPORT_ONLY_SOLVER_MUTATION_UNVERIFIED",
+    },
+}
+
 
 def policy_hash(definition: RevenueMarketDefinition) -> str:
     payload = {
@@ -262,10 +296,101 @@ def policy_hash(definition: RevenueMarketDefinition) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def _apply_catalog_owned_fields(profile: MarketIntegrationProfile, values: dict) -> bool:
+    changed: list[str] = []
+    for field, value in values.items():
+        if getattr(profile, field) != value:
+            setattr(profile, field, value)
+            changed.append(field)
+    if changed:
+        profile.save(update_fields=[*changed, "updated_at"])
+    return bool(changed)
+
+
+def _revenue_profile_static_truth(definition: RevenueMarketDefinition) -> dict:
+    catalog_evidence = {
+        "notes": definition.evidence_notes,
+        "cash_accounting": "ONLY_AUTHORITATIVE_SETTLED_PAYOUT_IS_CASH",
+        "policy_hash": policy_hash(definition),
+    }
+    return {
+        "adapter_name": definition.adapter_name,
+        "adapter_version": "v1",
+        "source_wired": definition.source_wired,
+        "docs_checked_at": POLICY_CHECKED_AT,
+        "auth_method": definition.auth_method,
+        "rate_limit": "No live calls; future adapter must apply documented limits and retry policy",
+        "payout_method": definition.settlement_rail,
+        "capabilities": {},
+        "source_urls": list(definition.source_urls),
+        "revenue_channels": list(definition.channels),
+        "seller_capabilities": dict(definition.seller_capabilities),
+        "job_acquisition_mode": definition.job_acquisition_mode,
+        "seller_mode": definition.seller_mode,
+        "settlement_rail": definition.settlement_rail,
+        "currency": definition.currency,
+        "hosting_policy": definition.hosting_policy,
+        "api_contract_state": definition.api_contract_state,
+        "manual_onboarding_required": definition.manual_onboarding_required,
+        "evidence": {"catalog_truth": catalog_evidence},
+    }
+
+
+def _merge_catalog_evidence(existing, catalog_truth: dict) -> dict:
+    evidence = dict(existing) if isinstance(existing, dict) else {}
+    return {**evidence, "catalog_truth": dict(catalog_truth.get("catalog_truth") or {})}
+
+
 @transaction.atomic
 def bootstrap_revenue_market_catalog() -> dict[str, int]:
-    created = updated = 0
+    created = profiles_created = updated = unchanged = 0
     checked_at = POLICY_CHECKED_AT
+    for slug, enrichment in LEGACY_PROFILE_ENRICHMENTS.items():
+        definition = LEGACY_BY_SLUG[slug]
+        market, market_created = Marketplace.objects.get_or_create(
+            slug=slug,
+            defaults={
+                "display_name": definition.display_name,
+                "status": Marketplace.Status.PAYOUT_BLOCKED,
+                "enabled": False,
+                "payout_ready": False,
+                "south_africa_verified": False,
+                "payment_model": definition.payout_method,
+            },
+        )
+        created += int(market_created)
+        legacy_static = {
+            **enrichment,
+            "seller_capabilities": _seller_capabilities(),
+            "currency": "USD",
+            "manual_onboarding_required": True,
+        }
+        profile, profile_created = MarketIntegrationProfile.objects.get_or_create(
+            marketplace=market,
+            defaults={
+                "adapter_name": definition.adapter_path,
+                "adapter_version": "v1",
+                "source_wired": True,
+                "autonomous_acquisition_enabled": False,
+                "policy_verified": bool(definition.capabilities.policy_verified),
+                "docs_checked_at": checked_at,
+                "auth_method": definition.auth_method,
+                "rate_limit": definition.rate_limit,
+                "payout_method": definition.payout_method,
+                "capabilities": definition.capabilities.as_dict(),
+                "source_urls": list(definition.source_urls),
+                "blockers": list(definition.blockers),
+                "evidence": definition.evidence,
+                "automation_status": "BLOCKED",
+                **legacy_static,
+            },
+        )
+        profiles_created += int(profile_created)
+        if not profile_created:
+            if _apply_catalog_owned_fields(profile, legacy_static):
+                updated += 1
+            else:
+                unchanged += 1
     for definition in DEFINITIONS:
         market, was_created = Marketplace.objects.get_or_create(
             slug=definition.slug,
@@ -279,38 +404,27 @@ def bootstrap_revenue_market_catalog() -> dict[str, int]:
             },
         )
         created += int(was_created)
-        _, profile_created = MarketIntegrationProfile.objects.get_or_create(
+        static_truth = _revenue_profile_static_truth(definition)
+        profile, profile_created = MarketIntegrationProfile.objects.get_or_create(
             marketplace=market,
             defaults={
-                "adapter_name": definition.adapter_name,
-                "adapter_version": "v1",
-                "source_wired": definition.source_wired,
+                **static_truth,
                 "autonomous_acquisition_enabled": False,
-                "policy_verified": False,
-                "docs_checked_at": checked_at,
-                "auth_method": definition.auth_method,
-                "rate_limit": "No live calls; future adapter must apply documented limits and retry policy",
-                "payout_method": definition.settlement_rail,
-                "capabilities": {},
-                "source_urls": list(definition.source_urls),
-                "blockers": list(definition.blockers),
-                "evidence": {"notes": definition.evidence_notes, "cash_accounting": "ONLY_AUTHORITATIVE_SETTLED_PAYOUT_IS_CASH"},
-                "revenue_channels": list(definition.channels),
-                "seller_capabilities": definition.seller_capabilities,
                 "automation_status": "BLOCKED",
-                "job_acquisition_mode": definition.job_acquisition_mode,
-                "seller_mode": definition.seller_mode,
-                "settlement_rail": definition.settlement_rail,
-                "currency": definition.currency,
-                "hosting_policy": definition.hosting_policy,
-                "api_contract_state": definition.api_contract_state,
+                "policy_verified": False,
+                "blockers": list(definition.blockers),
                 "payout_proof_state": definition.payout_proof_state,
-                "manual_onboarding_required": definition.manual_onboarding_required,
             },
         )
-        updated += 0
+        profiles_created += int(profile_created)
+        if not profile_created:
+            static_truth["evidence"] = _merge_catalog_evidence(profile.evidence, static_truth["evidence"])
+            if _apply_catalog_owned_fields(profile, static_truth):
+                updated += 1
+            else:
+                unchanged += 1
         digest = policy_hash(definition)
-        MarketPolicyVersion.objects.update_or_create(
+        MarketPolicyVersion.objects.get_or_create(
             marketplace=market,
             policy_hash=digest,
             defaults={
@@ -327,4 +441,10 @@ def bootstrap_revenue_market_catalog() -> dict[str, int]:
                 },
             },
         )
-    return {"created": created, "updated": updated, "total": len(DEFINITIONS)}
+    return {
+        "created": created,
+        "profiles_created": profiles_created,
+        "updated": updated,
+        "unchanged": unchanged,
+        "total": len(LEGACY_PROFILE_ENRICHMENTS) + len(DEFINITIONS),
+    }

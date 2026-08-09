@@ -6,8 +6,10 @@ from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
 import os
+import shutil
 
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -27,7 +29,8 @@ from control.models import (
     QAResult,
     ServiceOffering,
 )
-from control.services.jobs import score_and_persist, transition_job
+from control.services.jobs import score_and_persist
+from control.services.finance import record_payout_state
 from control.services.profit_brain import (
     GrowthStage,
     UtilizationState,
@@ -76,13 +79,18 @@ def _money(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
+def _canonical_digest(value) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _service_slug(operation: str) -> str:
     return operation.replace("_", "-")[:50]
 
 
 def sync_candidate_service_offerings() -> dict[str, int]:
     """Map only registered, independently-QA-profiled operations into disabled candidates."""
-    created = updated = 0
+    created = unchanged = 0
     for operation in SERVICE_CANDIDATE_OPERATIONS:
         try:
             spec = operation_spec(operation)
@@ -125,11 +133,11 @@ def sync_candidate_service_offerings() -> dict[str, int]:
             },
         )
         created += int(was_created)
-        updated += int(not was_created)
-    return {"created": created, "updated": updated, "total": len(SERVICE_CANDIDATE_OPERATIONS)}
+        unchanged += int(not was_created)
+    return {"created": created, "unchanged": unchanged, "total": created + unchanged}
 
 
-def service_capability_blockers(offering: ServiceOffering) -> list[str]:
+def source_capability_blockers(offering: ServiceOffering) -> list[str]:
     reasons: list[str] = []
     try:
         spec = operation_spec(offering.operation)
@@ -142,48 +150,91 @@ def service_capability_blockers(offering: ServiceOffering) -> list[str]:
     try:
         spec.build()
     except Exception:
-        reasons.append("WORKER_RUNTIME_UNAVAILABLE")
+        reasons.append("WORKER_SOURCE_IMPLEMENTATION_UNAVAILABLE")
+    return list(dict.fromkeys(reasons))
+
+
+def _latest_execution_proof(offering: ServiceOffering):
+    try:
+        spec = operation_spec(offering.operation)
+    except WorkerRegistryError:
+        return None
+    return QAResult.objects.filter(
+        passed=True,
+        execution__isnull=False,
+        execution__status__in=["COMPLETED", "SUCCEEDED"],
+        execution__result__operation=offering.operation,
+        execution__worker__worker_class=offering.worker_class,
+        job_id=F("execution__job_id"),
+    ).exclude(check_type="").select_related("execution", "job").order_by("-created_at").first()
+
+
+def execution_proof_blockers(offering: ServiceOffering) -> list[str]:
+    return [] if _latest_execution_proof(offering) else ["SERVICE_EXECUTION_NOT_PROVEN"]
+
+
+def runtime_sellability_blockers(offering: ServiceOffering) -> list[str]:
+    reasons: list[str] = []
+    try:
+        spec = operation_spec(offering.operation)
+        spec.build()
+    except Exception:
+        return ["WORKER_RUNTIME_UNAVAILABLE"]
+    if any(shutil.which(command) is None for command in spec.runtime_commands):
+        reasons.append("WORKER_RUNTIME_COMMAND_UNAVAILABLE")
     if offering.worker_class in {"code_small", "code_heavy", "ci_testing"} and os.getenv("SANDBOX_CODING_ENABLED", "0") != "1":
         reasons.append("CODING_SERVICE_BLOCKED_SANDBOX_OFF")
     if offering.worker_class == "public_web_data" and os.getenv("PUBLIC_WEB_DATA_ENABLED", "0") != "1":
         reasons.append("PUBLIC_WEB_SERVICE_BLOCKED_WEB_DISABLED")
-    proof_id = offering.proof_evidence.get("qa_result_id") if isinstance(offering.proof_evidence, dict) else None
-    proof_exists = bool(proof_id and QAResult.objects.filter(
-        id=proof_id,
-        passed=True,
-        execution__status__in=["COMPLETED", "SUCCEEDED"],
-        execution__result__operation=offering.operation,
-        execution__worker__worker_class=offering.worker_class,
-    ).exists())
-    if offering.proof_state != ServiceOffering.ProofState.SELLABLE or not proof_exists:
-        reasons.append("SERVICE_EXECUTION_NOT_PROVEN")
+    return list(dict.fromkeys(reasons))
+
+
+def activation_blockers(offering: ServiceOffering) -> list[str]:
+    reasons: list[str] = []
     if not offering.enabled:
         reasons.append("SERVICE_OFFERING_DISABLED")
     if not offering.accepting_orders:
         reasons.append("SERVICE_NOT_ACCEPTING_ORDERS")
+    return reasons
+
+
+def offering_sellability_blockers(offering: ServiceOffering) -> list[str]:
+    return list(dict.fromkeys(
+        source_capability_blockers(offering)
+        + execution_proof_blockers(offering)
+        + runtime_sellability_blockers(offering)
+    ))
+
+
+def is_offering_currently_sellable(offering: ServiceOffering) -> bool:
+    return (
+        offering.proof_state == ServiceOffering.ProofState.SELLABLE
+        and not offering_sellability_blockers(offering)
+        and not activation_blockers(offering)
+    )
+
+
+def service_capability_blockers(offering: ServiceOffering) -> list[str]:
+    reasons = offering_sellability_blockers(offering)
+    if offering.proof_state != ServiceOffering.ProofState.SELLABLE:
+        reasons.append("SERVICE_PROOF_STATE_NOT_SELLABLE")
+    reasons.extend(activation_blockers(offering))
     return list(dict.fromkeys(reasons))
 
 
 @transaction.atomic
 def refresh_service_offering_proof(offering: ServiceOffering) -> ServiceOffering:
-    """Promote only from a real completed execution with passing QA for this operation."""
-    try:
-        spec = operation_spec(offering.operation)
-        spec.build()
-    except Exception:
+    """Advance one truthful proof stage at a time; runtime gates control SELLABLE."""
+    source_reasons = source_capability_blockers(offering)
+    if source_reasons:
         offering.proof_state = ServiceOffering.ProofState.UNPROVEN
         offering.save(update_fields=["proof_state", "updated_at"])
         return offering
-    proof = QAResult.objects.filter(
-        passed=True,
-        execution__status__in=["COMPLETED", "SUCCEEDED"],
-        execution__result__operation=offering.operation,
-        execution__worker__worker_class=offering.worker_class,
-    ).select_related("execution", "job").order_by("-created_at").first()
+    spec = operation_spec(offering.operation)
+    proof = _latest_execution_proof(offering)
     if not proof:
         offering.proof_state = ServiceOffering.ProofState.SOURCE_PROVEN
     else:
-        offering.proof_state = ServiceOffering.ProofState.SELLABLE
         offering.proof_evidence = {
             **offering.proof_evidence,
             "job_id": str(proof.job_id),
@@ -192,6 +243,12 @@ def refresh_service_offering_proof(offering: ServiceOffering) -> ServiceOffering
             "qa_profile": spec.qa_profile,
             "proved_at": proof.created_at.isoformat(),
         }
+        if offering.proof_state in {ServiceOffering.ProofState.UNPROVEN, ServiceOffering.ProofState.SOURCE_PROVEN}:
+            offering.proof_state = ServiceOffering.ProofState.EXECUTION_PROVEN
+        elif runtime_sellability_blockers(offering):
+            offering.proof_state = ServiceOffering.ProofState.EXECUTION_PROVEN
+        else:
+            offering.proof_state = ServiceOffering.ProofState.SELLABLE
     offering.save(update_fields=["proof_state", "proof_evidence", "updated_at"])
     return offering
 
@@ -489,11 +546,24 @@ def record_inbound_usage(
     order = InboundOrder.objects.select_for_update().get(pk=order.pk)
     usage = dict(order.usage or {})
     events = list(usage.get("events") or [])
-    if any(str(event.get("remote_event_id") or "") == remote_event_id for event in events if isinstance(event, dict)):
+    existing = next((
+        event for event in events
+        if isinstance(event, dict) and str(event.get("remote_event_id") or "") == remote_event_id
+    ), None)
+    evidence_digest = _canonical_digest(authoritative_evidence)
+    if existing:
+        existing_digest = str(existing.get("evidence_digest") or _canonical_digest(existing.get("evidence") or {}))
+        if (
+            _decimal(existing.get("units")) != units
+            or str(existing.get("unit_type") or "") != unit_type[:80]
+            or existing_digest != evidence_digest
+        ):
+            raise ValueError("INBOUND_USAGE_IDEMPOTENCY_CONFLICT")
         return False
     events.append({
         "remote_event_id": remote_event_id[:255], "units": str(units), "unit_type": unit_type[:80],
-        "evidence": authoritative_evidence, "observed_at": timezone.now().isoformat(),
+        "evidence": authoritative_evidence, "evidence_digest": evidence_digest,
+        "observed_at": timezone.now().isoformat(),
     })
     usage["events"] = events[-1000:]
     usage["total_units"] = str(sum((_decimal(event.get("units")) for event in events), ZERO))
@@ -737,6 +807,36 @@ def run_inbound_economic_preflight(order: InboundOrder) -> AcquisitionPreflight:
     return preflight
 
 
+def _record_authoritative_inbound_payout(
+    order: InboundOrder,
+    *,
+    target_state: str,
+    gross: Decimal,
+    fee: Decimal,
+    currency: str,
+    remote_event_id: str,
+):
+    payout = Payout.objects.select_for_update().filter(job_id=order.job_id, currency=currency).first()
+    if payout is None and target_state in {Payout.State.PAYOUT_PENDING, Payout.State.SETTLED}:
+        record_payout_state(
+            job_id=order.job_id,
+            target_state=Payout.State.EARNED,
+            gross=gross,
+            fee=fee,
+            currency=currency,
+            external_reference=remote_event_id,
+        )
+    return record_payout_state(
+        job_id=order.job_id,
+        target_state=target_state,
+        gross=gross,
+        fee=fee,
+        currency=currency,
+        external_reference=remote_event_id,
+        settled_at=timezone.now() if target_state == Payout.State.SETTLED else None,
+    )
+
+
 @transaction.atomic
 def reconcile_inbound_settlement(
     order: InboundOrder,
@@ -754,49 +854,63 @@ def reconcile_inbound_settlement(
     state = state.upper()
     if state not in InboundSettlementEvent.State.values:
         raise ValueError("INBOUND_SETTLEMENT_STATE_INVALID")
+    remote_event_id = remote_event_id.strip()[:255]
+    evidence_source = evidence_source.strip()[:120]
     if not remote_event_id or not evidence_source:
         raise ValueError("INBOUND_SETTLEMENT_EVIDENCE_REQUIRED")
+    currency = currency.upper()[:3]
     gross = _money(_decimal(gross)); fee = _money(_decimal(fee)); net = _money(gross - fee)
-    if gross < 0 or fee < 0 or net < 0 or currency.upper() != order.currency:
+    if gross < 0 or fee < 0 or net < 0 or currency != order.currency:
         raise ValueError("INBOUND_SETTLEMENT_AMOUNT_INVALID")
-    if authoritative and state in {InboundSettlementEvent.State.PAYOUT_PENDING, InboundSettlementEvent.State.SETTLED} and order.job.state not in {Job.State.ACCEPTED, Job.State.PAYOUT_PENDING}:
+    if authoritative and state == InboundSettlementEvent.State.PAYOUT_PENDING and order.job.state not in {Job.State.ACCEPTED, Job.State.PAYOUT_PENDING}:
+        raise ValueError("INBOUND_SETTLEMENT_JOB_NOT_ACCEPTED")
+    if authoritative and state == InboundSettlementEvent.State.SETTLED and order.job.state not in {Job.State.ACCEPTED, Job.State.PAYOUT_PENDING, Job.State.SETTLED}:
         raise ValueError("INBOUND_SETTLEMENT_JOB_NOT_ACCEPTED")
     if authoritative and state == InboundSettlementEvent.State.SETTLED:
         if not isinstance(evidence, dict) or evidence.get("irreversible") is not True:
             raise ValueError("AUTHORITATIVE_SETTLEMENT_PROOF_REQUIRED")
         if not order.marketplace.payout_ready or not order.marketplace.south_africa_verified:
             raise ValueError("AUTHORITATIVE_PAYOUT_ROUTE_NOT_READY")
+    evidence_digest = _canonical_digest(evidence)
     event, created = InboundSettlementEvent.objects.get_or_create(
         order=order,
         remote_event_id=remote_event_id,
         defaults={
-            "state": state, "gross": gross, "fee": fee, "net": net, "currency": currency.upper(),
+            "state": state, "gross": gross, "fee": fee, "net": net, "currency": currency,
             "authoritative": authoritative, "evidence_source": evidence_source, "evidence": evidence,
         },
     )
     if not created:
-        return event, False
-    if authoritative and state in {InboundSettlementEvent.State.PAYOUT_PENDING, InboundSettlementEvent.State.SETTLED}:
-        payout_state = Payout.State.PAYOUT_PENDING if state == InboundSettlementEvent.State.PAYOUT_PENDING else Payout.State.SETTLED
-        now = timezone.now()
-        payout, _ = Payout.objects.update_or_create(
-            job=order.job,
-            currency=currency.upper(),
-            defaults={
-                "gross": gross, "fee": fee, "net": net,
-                "external_reference": remote_event_id,
-                "state": payout_state,
-                "earned_at": order.created_at,
-                "pending_at": now,
-                "settled_at": now if payout_state == Payout.State.SETTLED else None,
-            },
+        existing_truth = (
+            event.state, event.gross, event.fee, event.net, event.currency,
+            event.authoritative, event.evidence_source, _canonical_digest(event.evidence),
         )
-        if order.job.state == Job.State.ACCEPTED:
-            transition_job(order.job_id, Job.State.PAYOUT_PENDING, actor="seller-settlement", metadata={"event_id": event.id})
-            order.job.refresh_from_db()
-        if payout_state == Payout.State.SETTLED and order.job.state == Job.State.PAYOUT_PENDING:
-            transition_job(order.job_id, Job.State.SETTLED, actor="seller-settlement", metadata={"event_id": event.id})
+        incoming_truth = (
+            state, gross, fee, net, currency,
+            authoritative, evidence_source, evidence_digest,
+        )
+        if existing_truth != incoming_truth:
+            raise ValueError("INBOUND_SETTLEMENT_IDEMPOTENCY_CONFLICT")
+        return event, False
+    payout_state_by_event = {
+        InboundSettlementEvent.State.PAYOUT_PENDING: Payout.State.PAYOUT_PENDING,
+        InboundSettlementEvent.State.SETTLED: Payout.State.SETTLED,
+        InboundSettlementEvent.State.REVERSED: Payout.State.REVERSED,
+    }
+    if authoritative and state in payout_state_by_event:
+        payout_state = payout_state_by_event[state]
+        _record_authoritative_inbound_payout(
+            order,
+            target_state=payout_state,
+            gross=gross,
+            fee=fee,
+            currency=currency,
+            remote_event_id=remote_event_id,
+        )
+        if payout_state == Payout.State.SETTLED:
             order.status = InboundOrder.Status.SETTLED
+        elif payout_state == Payout.State.REVERSED:
+            order.status = InboundOrder.Status.REVERSED
         else:
             order.status = InboundOrder.Status.PAYOUT_PENDING
         order.settlement_reference = remote_event_id
