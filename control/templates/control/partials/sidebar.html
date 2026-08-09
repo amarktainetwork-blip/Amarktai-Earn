@@ -1,0 +1,55 @@
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span><strong>AMARKTAI</strong><small>EARN</small></span>
+  </div>
+  <div class="sidebar-context"><i></i><span>Owner workspace</span></div>
+  <nav class="sidebar-nav" aria-label="Owner navigation">
+    <span class="nav-label">OPERATIONS</span>
+    <a href="/" class="{% if section == 'overview' %}active{% endif %}">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm10 7h6v-9h-6v9ZM4 20h6v-3H4v3Zm10-13h6V4h-6v3Z"/></svg><span>Overview</span>
+    </a>
+    <a href="/ops/jobs/" class="{% if section == 'jobs' or section == 'live-work' %}active{% endif %}">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16v13H4zM9 7V4h6v3M4 12h16M10 12v2h4v-2"/></svg><span>Jobs</span><b id="navJobs"></b>
+    </a>
+    <a href="/ops/agents/" class="{% if section == 'agents' %}active{% endif %}">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="13" rx="3"/><path d="M9 2v4m6-4v4M8 12h.01M16 12h.01M9 16h6"/></svg><span>Agents</span>
+    </a>
+    <a href="/ops/money/" class="{% if section == 'money' or section == 'earnings' or section == 'treasury' %}active{% endif %}">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16v12H4zM8 9h8M8 15h4M17 12h.01"/></svg><span>Money</span>
+    </a>
+    <a href="/ops/markets/" class="{% if section == 'markets' %}active{% endif %}">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg><span>Markets</span>
+    </a>
+    <a href="/ops/alerts/" class="{% if section == 'alerts' %}active{% endif %}">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span>Alerts</span><b id="navAlerts"></b>
+    </a>
+  </nav>
+  <div class="sidebar-spacer"></div>
+  <nav class="sidebar-nav advanced-nav" aria-label="System navigation">
+    <span class="nav-label">ADVANCED</span>
+    <details {% if advanced_section %}open{% endif %}>
+      <summary class="{% if advanced_section %}active{% endif %}">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
+        <span>System &amp; Settings</span><i></i>
+      </summary>
+      <div class="advanced-links">
+        <a href="/ops/system/" class="{% if section == 'system' %}active{% endif %}">System overview</a>
+        <a href="/ops/genx/" class="{% if section == 'genx' %}active{% endif %}">AI / GenX</a>
+        <a href="/ops/nodes/" class="{% if section == 'nodes' %}active{% endif %}">Infrastructure</a>
+        <a href="/ops/storage/" class="{% if section == 'storage' %}active{% endif %}">Storage</a>
+        <a href="/ops/performance/" class="{% if section == 'performance' %}active{% endif %}">Performance</a>
+        <a href="/ops/logs/" class="{% if section == 'logs' %}active{% endif %}">Audit logs</a>
+        <a href="/ops/security/" class="{% if section == 'security' %}active{% endif %}">Security</a>
+        <a href="/ops/settings/" class="{% if section == 'settings' %}active{% endif %}">Settings</a>
+      </div>
+    </details>
+  </nav>
+  <div class="owner-card">
+    <span class="owner-avatar">O</span>
+    <span><strong>Owner</strong><small>Secure session</small></span>
+    <button id="logoutButton" type="button" aria-label="Sign out">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10"/></svg>
+    </button>
+  </div>
+</aside>

@@ -30,6 +30,27 @@ from .services.autonomy import current_mode
 
 User = get_user_model()
 
+PAGE_SECTIONS = (*SECTIONS, "jobs", "money", "system")
+PAGE_META = {
+    "overview": ("Overview", "Your autonomous earning business at a glance"),
+    "jobs": ("Jobs", "Live work, delivery progress, and payout state"),
+    "live-work": ("Jobs", "Live work, delivery progress, and payout state"),
+    "agents": ("Agents", "Your digital workforce and runtime readiness"),
+    "money": ("Money", "Settled cash, pending payouts, costs, and ledger truth"),
+    "earnings": ("Payouts", "Detailed earnings and settlement lifecycle"),
+    "treasury": ("Treasury", "Balances and the advanced accounting ledger"),
+    "markets": ("Markets", "Connection, policy, and payout readiness"),
+    "alerts": ("Alerts", "Meaningful owner attention and resolved events"),
+    "system": ("System Overview", "Infrastructure, AI runtime, and operating health"),
+    "genx": ("AI / GenX", "Model usage, credits, and call reconciliation"),
+    "nodes": ("Infrastructure", "Controller, worker nodes, and service heartbeats"),
+    "storage": ("Storage", "Capacity, persistent paths, and resource admission"),
+    "performance": ("Performance", "Execution quality, utilization, and growth evidence"),
+    "logs": ("Audit Logs", "Technical events and correlation evidence"),
+    "security": ("Security", "Owner access, sessions, and protected secret state"),
+    "settings": ("Settings", "Persisted operating configuration"),
+}
+
 
 def _json(request):
     try:
@@ -72,9 +93,15 @@ def overview_page(request):
 def ops_page(request, section="overview"):
     if not getattr(request, "owner", None):
         return redirect("login")
-    if section not in SECTIONS:
+    if section not in PAGE_SECTIONS:
         return JsonResponse({"error": "unknown_section"}, status=404)
-    return render(request, "control/operations.html", {"section": section, "sections": SECTIONS})
+    title, description = PAGE_META.get(section, (section.replace("-", " ").title(), "Owner operations"))
+    return render(request, "control/operations.html", {
+        "section": section,
+        "page_title": title,
+        "page_description": description,
+        "advanced_section": section in {"system", "genx", "nodes", "storage", "performance", "logs", "security", "settings", "earnings", "treasury"},
+    })
 
 
 @require_GET

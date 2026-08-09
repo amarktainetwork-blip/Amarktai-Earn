@@ -1,3 +1,109 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Amarktai Earn — Secure Owner Access</title>
-<style>body{margin:0;background:#0a0d12;color:#eef2f7;font:15px system-ui;min-height:100vh;display:grid;place-items:center}.wrap{width:min(430px,92vw)}.brand{font-size:28px;font-weight:800;letter-spacing:.08em}.sub{color:#8c98a8;margin:7px 0 26px}.card{background:#11161e;border:1px solid #242d3a;border-radius:16px;padding:28px;box-shadow:0 24px 70px #0008}label{display:block;color:#9ba8b8;margin:14px 0 7px}input{width:100%;box-sizing:border-box;background:#0b1017;border:1px solid #2a3544;color:white;border-radius:10px;padding:12px}button{width:100%;border:0;border-radius:10px;padding:13px;margin-top:18px;font-weight:700;background:#e7edf5;color:#10151c;cursor:pointer}.muted{font-size:12px;color:#788697;margin-top:18px}.err{color:#ff8e8e;margin-top:12px}</style></head><body><main class="wrap"><div class="brand">AMARKTAI EARN</div><div class="sub">Autonomous Economic Operations</div><section class="card"><h2>Secure Owner Access</h2><div id="login"><label>Email / Username</label><input id="u" autocomplete="username"><label>Password</label><input id="p" type="password" autocomplete="current-password"><button onclick="login()">Secure Sign In</button></div><div id="totp" hidden><h3>Two-Factor Authentication</h3><label>6-digit authenticator code</label><input id="c" inputmode="numeric" autocomplete="one-time-code"><button onclick="verify(false)">Verify</button><button onclick="verify(true)">Use recovery code</button></div><div id="e" class="err"></div><div class="muted">Secure connection required · No public registration · Financial values remain hidden until authentication.</div></section></main>
-<script>function ck(n){return document.cookie.split('; ').find(x=>x.startsWith(n+'='))?.split('=')[1]||''}async function post(url,body){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':decodeURIComponent(ck('csrftoken'))},credentials:'same-origin',body:JSON.stringify(body)})}async function login(){await fetch('/api/auth/csrf',{credentials:'same-origin'});let r=await post('/api/auth/login',{username:u.value,password:p.value});let j=await r.json();if(r.ok){login.hidden=true;totp.hidden=false;e.textContent=''}else e.textContent=j.message||j.error}async function verify(recovery){let r=await post('/api/auth/totp',{code:c.value,recovery});let j=await r.json();if(r.ok) location='/'; else e.textContent=j.error}</script></body></html>
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07111f">
+  <title>Amarktai Earn — Secure Owner Access</title>
+  <link rel="stylesheet" href="{% static 'control/login.css' %}">
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="auth-story" aria-label="Amarktai Earn introduction">
+      <a class="brand-lockup" href="/login/" aria-label="Amarktai Earn">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>AMARKTAI</strong><small>EARN</small></span>
+      </a>
+      <div class="story-copy">
+        <span class="eyebrow"><i class="status-dot"></i> Autonomous economic operations</span>
+        <h1>Autonomous income.<br><em>One intelligent system.</em></h1>
+        <p>Securely oversee opportunities, digital workers, delivery, and real settlement from one owner-only workspace.</p>
+      </div>
+      <div class="story-proof" aria-hidden="true">
+        <div class="proof-orbit proof-orbit-one"></div>
+        <div class="proof-orbit proof-orbit-two"></div>
+        <div class="proof-core"><span></span></div>
+        <div class="proof-chip proof-chip-one"><i></i>Opportunity intelligence</div>
+        <div class="proof-chip proof-chip-two"><i></i>Independent QA</div>
+        <div class="proof-chip proof-chip-three"><i></i>Settlement truth</div>
+      </div>
+      <p class="story-foot">Owner control • Truthful economics • Fail-closed automation</p>
+    </section>
+
+    <section class="auth-panel">
+      <div class="mobile-brand">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>AMARKTAI</strong><small>EARN</small></span>
+      </div>
+      <div class="auth-card" id="authCard">
+        <div class="auth-progress" aria-label="Authentication progress">
+          <div class="progress-step active" id="accountProgress"><span>1</span><b>Account</b></div>
+          <div class="progress-line"><i id="progressFill"></i></div>
+          <div class="progress-step" id="verificationProgress"><span>2</span><b>Verification</b></div>
+        </div>
+
+        <section class="auth-step active" id="accountStep" aria-labelledby="accountTitle">
+          <div class="step-heading">
+            <span class="step-kicker">OWNER ACCESS</span>
+            <h2 id="accountTitle">Welcome back</h2>
+            <p>Enter your owner credentials to continue securely.</p>
+          </div>
+          <form id="accountForm" novalidate>
+            <label for="username">Username</label>
+            <div class="field-shell">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10Z"/></svg>
+              <input id="username" name="username" autocomplete="username" autocapitalize="none" required>
+            </div>
+            <label for="password">Password</label>
+            <div class="field-shell">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5zM12 14v3"/></svg>
+              <input id="password" name="password" type="password" autocomplete="current-password" required>
+              <button class="field-action" id="togglePassword" type="button" aria-label="Show password">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/></svg>
+              </button>
+            </div>
+            <button class="primary-action" id="continueButton" type="submit">
+              <span>Continue securely</span>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+          </form>
+        </section>
+
+        <section class="auth-step" id="verificationStep" aria-labelledby="verificationTitle" hidden>
+          <div class="step-heading">
+            <span class="step-kicker">IDENTITY VERIFICATION</span>
+            <h2 id="verificationTitle">Two-factor authentication</h2>
+            <p id="verificationHelp">Enter the 6-digit code from your authenticator app.</p>
+          </div>
+          <form id="verificationForm" novalidate>
+            <label for="verificationCode" id="codeLabel">Authentication code</label>
+            <input class="verification-code" id="verificationCode" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" aria-describedby="verificationHelp" required>
+            <button class="primary-action" id="verifyButton" type="submit">
+              <span>Verify &amp; enter dashboard</span>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+          </form>
+          <button class="recovery-link" id="recoveryButton" type="button">Can’t access your authenticator? <span>Use a recovery code</span></button>
+        </section>
+
+        <section class="auth-success" id="successStep" hidden aria-live="polite">
+          <div class="success-mark"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 12 4 4 8-9"/></svg></div>
+          <span class="step-kicker">VERIFIED</span>
+          <h2>Access granted</h2>
+          <p>Opening your autonomous operations dashboard…</p>
+        </section>
+
+        <div class="auth-error" id="authError" role="alert" aria-live="polite" hidden></div>
+        <div class="security-row" aria-label="Security safeguards">
+          <span><i class="security-dot"></i>Encrypted connection</span>
+          <span><i class="security-dot"></i>Owner only</span>
+          <span><i class="security-dot"></i>MFA protected</span>
+        </div>
+      </div>
+      <p class="auth-footer">Protected by rate limits, secure cookies, and mandatory MFA.</p>
+    </section>
+  </main>
+  <script src="{% static 'control/login.js' %}" defer></script>
+</body>
+</html>
