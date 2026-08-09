@@ -82,8 +82,16 @@ class GenXGateway:
                 GenXModelCatalog.objects.update_or_create(
                     model_id=mid,
                     defaults={
-                        "category": str(row.get("category") or category or "")[:40],
-                        "provider": str(row.get("provider") or row.get("vendor") or "")[:120],
+                        "category": str(
+                            row.get("category") or pricing_row.get("category") or category or ""
+                        )[:40],
+                        "provider": str(
+                            row.get("provider")
+                            or row.get("vendor")
+                            or pricing_row.get("provider")
+                            or pricing_row.get("vendor")
+                            or ""
+                        )[:120],
                         "active": True,
                         "price_hint": price_hint(pricing_row),
                         "model_payload": row,
