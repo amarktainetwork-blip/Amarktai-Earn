@@ -18,10 +18,31 @@ class FakeAdapter:
         return {"ok": True}
 
     def discover_jobs(self, **filters):
-        return [{"id": "cb-1", "title": "Normalize source data", "reward": "12.50", "category": "data"}]
+        return [{
+            "id": "cb-1",
+            "title": "Normalize source data",
+            "reward": "12.50",
+            "category": "data",
+            "type": "job",
+            "operation": "csv_normalize",
+            "requirements": ["Normalize the supplied CSV and return the cleaned file"],
+            "funded": True,
+        }]
 
     def normalize_job(self, raw):
         return NormalizedOpportunity(raw["id"], raw["title"], raw["category"], __import__("decimal").Decimal(raw["reward"]), raw=raw)
+
+
+class SellerListingAdapter(FakeAdapter):
+    def discover_jobs(self, **filters):
+        return [{
+            "id": "cb-seller-1",
+            "title": "AI reporting agent available",
+            "reward": "50.00",
+            "category": "data",
+            "type": "service_listing",
+            "description": "I offer reporting and automation services.",
+        }]
 
 
 class MultiMarketPersistenceTests(TestCase):
@@ -63,14 +84,33 @@ class MultiMarketPersistenceTests(TestCase):
         self.assertFalse(market.enabled)
         self.assertEqual(market.status, Marketplace.Status.PAYOUT_BLOCKED)
 
-    def test_market_discovery_is_adapter_driven_without_enabling_acquisition(self):
+    def test_market_discovery_qualifies_scores_and_preflights_without_enabling_acquisition(self):
         bootstrap_market_integrations()
         result = sync_market_discovery("callboard", adapter=FakeAdapter(), limit=10)
         self.assertEqual(result["discovered"], 1)
+        self.assertEqual(result["buyer_demand"], 1)
+        self.assertEqual(result["scored"], 1)
+        self.assertEqual(result["qualification_counts"], {"BUYER_DEMAND": 1})
         job = Job.objects.get(marketplace__slug="callboard", external_id="cb-1")
         self.assertEqual(str(job.reward), "12.50")
-        self.assertEqual(job.state, Job.State.DISCOVERED)
+        self.assertEqual(job.state, Job.State.EXPECTED)
+        self.assertEqual(job.normalized_payload["demand_qualification"]["classification"], "BUYER_DEMAND")
+        self.assertEqual(job.jobscore.decision, "WATCH")
+        self.assertTrue(job.acquisition_preflights.exists())
+        self.assertFalse(job.acquisition_preflights.latest("created_at").allowed)
         self.assertFalse(job.marketplace.enabled)
+
+    def test_seller_listing_is_filtered_before_scoring(self):
+        bootstrap_market_integrations()
+        result = sync_market_discovery("callboard", adapter=SellerListingAdapter(), limit=10)
+        self.assertEqual(result["discovered"], 1)
+        self.assertEqual(result["buyer_demand"], 0)
+        self.assertEqual(result["scored"], 0)
+        self.assertEqual(result["qualification_counts"], {"SELLER_SUPPLY_LISTING": 1})
+        job = Job.objects.get(marketplace__slug="callboard", external_id="cb-seller-1")
+        self.assertEqual(job.state, Job.State.DISCOVERED)
+        self.assertEqual(job.normalized_payload["demand_qualification"]["classification"], "SELLER_SUPPLY_LISTING")
+        self.assertFalse(hasattr(job, "jobscore"))
 
     def test_market_dashboard_exposes_adapter_sources_capabilities_and_blockers(self):
         bootstrap_market_integrations()
