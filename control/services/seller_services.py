@@ -508,7 +508,7 @@ def record_inbound_usage(
 
 @transaction.atomic
 def record_inbound_delivery(order: InboundOrder, *, remote_reference: str, actor: str) -> InboundOrder:
-    order = InboundOrder.objects.select_for_update().select_related("job").get(pk=order.pk)
+    order = InboundOrder.objects.select_related("job").select_for_update(of=("self",)).get(pk=order.pk)
     if order.job.state != Job.State.SUBMITTED:
         raise ValueError("INBOUND_DELIVERY_REQUIRES_CANONICAL_SUBMISSION")
     if not remote_reference.strip() or not actor.strip():
@@ -634,7 +634,7 @@ def receive_inbound_order(
 
 @transaction.atomic
 def run_inbound_economic_preflight(order: InboundOrder) -> AcquisitionPreflight:
-    order = InboundOrder.objects.select_for_update().select_related("job", "listing__offering", "marketplace").get(pk=order.pk)
+    order = InboundOrder.objects.select_related("job", "listing__offering", "marketplace").select_for_update(of=("self",)).get(pk=order.pk)
     job = order.job
     offering = order.listing.offering
     reasons = service_capability_blockers(offering)
@@ -750,7 +750,7 @@ def reconcile_inbound_settlement(
     evidence_source: str,
     evidence: dict,
 ) -> tuple[InboundSettlementEvent, bool]:
-    order = InboundOrder.objects.select_for_update().select_related("job", "marketplace").get(pk=order.pk)
+    order = InboundOrder.objects.select_related("job", "marketplace").select_for_update(of=("self",)).get(pk=order.pk)
     state = state.upper()
     if state not in InboundSettlementEvent.State.values:
         raise ValueError("INBOUND_SETTLEMENT_STATE_INVALID")

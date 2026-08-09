@@ -102,6 +102,11 @@ class TwoSidedRevenueDeterministicTests(unittest.TestCase):
         self.assertFalse(any(action.get("auto_publish") for action in actions))
         self.assertFalse(any(action.get("auto_accept") for action in actions))
 
+    def test_nullable_inbound_joins_lock_only_the_order_row(self):
+        source = (Path(__file__).resolve().parents[1] / "control" / "services" / "seller_services.py").read_text(encoding="utf-8")
+        self.assertNotIn('.select_for_update().select_related(', source)
+        self.assertEqual(source.count('select_for_update(of=("self",))'), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
