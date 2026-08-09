@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import json
 import os
@@ -11,6 +12,7 @@ from django.utils import timezone
 from control.models import (
     Job, MarketHealth, MarketIntegrationProfile, Marketplace, MarketPolicyVersion, PayoutAccount,
 )
+from control.services.demand_pipeline import qualify_and_shadow_score
 from control.services.jobs import ingest_opportunity
 from markets.algora.client import AlgoraAdapter
 from markets.callboard.client import CallboardAdapter
@@ -147,12 +149,27 @@ def sync_market_discovery(slug: str, *, adapter=None, limit: int = 50) -> dict:
     )
     if not health.get("ok"):
         return {"market": slug, "discovered": 0, "blocked": "MARKET_HEALTH_NOT_OK"}
-    discovered = 0
+
+    discovered = scored = buyer_demand = 0
+    classifications: Counter[str] = Counter()
     for raw in adapter.discover_jobs(limit=max(1, min(int(limit), 100))):
         opportunity = adapter.normalize_job(raw)
         if not opportunity.external_id or opportunity.reward < 0:
             continue
-        ingest_opportunity(market, opportunity)
+        job, _ = ingest_opportunity(market, opportunity)
+        result = qualify_and_shadow_score(job)
+        classification = str(result.get("classification") or "UNKNOWN")
+        classifications[classification] += 1
+        buyer_demand += int(classification == "BUYER_DEMAND")
+        scored += int(bool(result.get("scored")))
         discovered += 1
+
     MarketHealth.objects.filter(marketplace=market).update(supply_ok=discovered > 0)
-    return {"market": slug, "discovered": discovered, "jobs_total": Job.objects.filter(marketplace=market).count()}
+    return {
+        "market": slug,
+        "discovered": discovered,
+        "buyer_demand": buyer_demand,
+        "scored": scored,
+        "qualification_counts": dict(sorted(classifications.items())),
+        "jobs_total": Job.objects.filter(marketplace=market).count(),
+    }
