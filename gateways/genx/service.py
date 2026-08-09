@@ -332,6 +332,7 @@ class GenXGateway:
 
         started = time.monotonic()
         session_id = ""
+        phase = "CREATE_SESSION"
         try:
             GenXCall.objects.filter(pk=call.pk).update(status="SUBMITTING")
             session = self.client.create_session(
@@ -343,12 +344,14 @@ class GenXGateway:
             if not session_id:
                 raise GenXGatewayError("GenX session response did not contain a session ID")
             GenXCall.objects.filter(pk=call.pk).update(external_job_id=f"session:{session_id}", status="SUBMITTED")
+            phase = "SEND_MESSAGE"
             response = self.client.session_message(
                 session_id,
                 message,
                 idempotency_key=request_key,
                 tools=tools,
             )
+            phase = "RECONCILE"
             reconciled = self.reconcile(
                 call.id,
                 {
@@ -358,6 +361,7 @@ class GenXGateway:
                 },
                 elapsed_ms=int((time.monotonic() - started) * 1000),
             )
+            phase = "CLOSE_SESSION"
             try:
                 self.client.close_session(session_id)
             except GenXError:
@@ -369,13 +373,19 @@ class GenXGateway:
                 )
             return reconciled, response
         except (GenXError, GenXGatewayError, TimeoutError) as exc:
-            confirmed_rejection = (
-                isinstance(exc, GenXError)
+            create_rejection = (
+                phase == "CREATE_SESSION"
+                and isinstance(exc, GenXError)
                 and exc.status_code is not None
                 and 400 <= exc.status_code < 500
                 and exc.status_code != 429
-                and not session_id
             )
+            message_validation_rejection = (
+                phase == "SEND_MESSAGE"
+                and isinstance(exc, GenXError)
+                and exc.status_code in {400, 422}
+            )
+            confirmed_rejection = create_rejection or message_validation_rejection
             next_status = "FAILED" if confirmed_rejection else "UNKNOWN_REMOTE_STATE"
             GenXCall.objects.filter(pk=call.pk).update(
                 status=next_status,
@@ -387,7 +397,13 @@ class GenXGateway:
                 severity="ERROR" if confirmed_rejection else "WARNING",
                 event_type="genx.session_failed" if confirmed_rejection else "genx.session_unknown_remote_state",
                 actor="genx-gateway",
-                metadata={"call_id": str(call.id), "job_id": str(job.id), "error_code": exc.__class__.__name__},
+                metadata={
+                    "call_id": str(call.id),
+                    "job_id": str(job.id),
+                    "error_code": exc.__class__.__name__,
+                    "phase": phase,
+                    "http_status": exc.status_code if isinstance(exc, GenXError) else None,
+                },
             )
             raise
 

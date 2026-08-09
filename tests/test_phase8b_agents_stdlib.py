@@ -128,6 +128,8 @@ class Phase8BAgentContractTests(unittest.TestCase):
             upload_headers = session.calls[0][2]["headers"]
             self.assertNotIn("Content-Type", upload_headers)
             self.assertIn("Authorization", upload_headers)
+            self.assertEqual(session.calls[2][2]["json"]["content"], "research")
+            self.assertNotIn("message", session.calls[2][2]["json"])
             self.assertEqual(session.calls[2][2]["json"]["tools"], [{"type": "web_search"}])
 
     def test_planner_contract_contains_all_four_routes_and_safe_blocks(self):
