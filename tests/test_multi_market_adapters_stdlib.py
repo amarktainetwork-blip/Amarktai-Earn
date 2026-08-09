@@ -91,17 +91,90 @@ class MarketAdapterContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "market_payload"):
             adapter.submit(job, {"participation_slot_id": "slot-1", "url": "https://example.test/out"})
 
-    def test_dealwork_uses_only_tools_advertised_by_mcp(self):
-        mcp = FakeMCP()
-        adapter = DealworkAdapter("", mcp_client=mcp)
+    def test_dealwork_official_rest_job_bid_claim_and_submit_flow(self):
+        session = FakeSession([
+            FakeResponse({
+                "data": [{
+                    "id": "dw-1",
+                    "title": "Build report",
+                    "description": "Analyze the supplied dataset and produce a concise report.",
+                    "budgetMax": "75",
+                    "category": "Research",
+                    "acceptanceCriteria": [{"id": "c1", "description": "Report complete"}],
+                }],
+                "meta": {"total": 1, "page": 1, "per_page": 5},
+            }),
+            FakeResponse({"data": {"id": "bid-1"}}, status=201),
+            FakeResponse({"data": {"id": "claim-contract"}}, status=201),
+            FakeResponse({"data": {"id": "deliverable-1", "version": 1}}, status=201),
+            FakeResponse({"data": {"previousState": "in_progress", "newState": "in_review"}}),
+        ])
+
+        adapter = DealworkAdapter("secret", session=session)
+
         raw = adapter.discover_jobs(limit=5)[0]
         job = adapter.normalize_job(raw)
         self.assertEqual(job.reward, Decimal("75"))
+
         adapter.bid(job, Decimal("60"))
         adapter.claim(job)
-        contract_job = NormalizedOpportunity(job.external_id, job.title, job.task_class, job.reward, raw={**raw, "contractId": "c-1"})
-        adapter.submit(contract_job, {"url": "https://example.test/report.pdf", "notes": "QA passed"})
-        self.assertEqual([name for name, _ in mcp.calls], ["search_jobs", "place_bid", "claim_job", "submit_deliverable"])
+
+        contract_job = NormalizedOpportunity(
+            job.external_id,
+            job.title,
+            job.task_class,
+            job.reward,
+            raw={**raw, "contractId": "c-1"},
+        )
+
+        result = adapter.submit(
+            contract_job,
+            {
+                "url": "https://example.test/report.pdf",
+                "notes": "QA passed",
+            },
+        )
+
+        self.assertEqual(session.calls[0][0], "GET")
+        self.assertTrue(session.calls[0][1].endswith("/api/v1/jobs"))
+        self.assertEqual(session.calls[0][2]["params"]["per_page"], 5)
+
+        bid = session.calls[1]
+        self.assertEqual(bid[0], "POST")
+        self.assertTrue(bid[1].endswith("/api/v1/jobs/dw-1/bids"))
+        self.assertEqual(bid[2]["json"]["proposedAmount"], "60.00")
+        self.assertGreater(bid[2]["json"]["estimatedHours"], 0)
+        self.assertIn("Build report", bid[2]["json"]["proposalText"])
+
+        claim = session.calls[2]
+        self.assertTrue(claim[1].endswith("/api/v1/jobs/dw-1/claim"))
+        self.assertEqual(claim[2]["json"]["acceptedCriteriaIds"], ["c1"])
+
+        deliverable = session.calls[3]
+        self.assertTrue(
+            deliverable[1].endswith(
+                "/api/v1/contracts/c-1/deliverables"
+            )
+        )
+        self.assertEqual(
+            deliverable[2]["json"]["outputData"]["artifactUrl"],
+            "https://example.test/report.pdf",
+        )
+
+        submit = session.calls[4]
+        self.assertTrue(
+            submit[1].endswith("/api/v1/contracts/c-1/events")
+        )
+        self.assertEqual(submit[2]["json"]["type"], "SUBMIT_WORK")
+        self.assertEqual(
+            submit[2]["json"]["deliverableId"],
+            "deliverable-1",
+        )
+
+        self.assertEqual(
+            result["submission"]["newState"],
+            "in_review",
+        )
 
     def test_taskbounty_rest_flow_and_crypto_fail_closed_truth(self):
         session = FakeSession([

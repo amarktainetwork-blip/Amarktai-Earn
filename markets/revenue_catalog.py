@@ -257,9 +257,9 @@ LEGACY_PROFILE_ENRICHMENTS = {
         "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "OFFICIAL_REST_CONTRACT",
     },
     "dealwork": {
-        "revenue_channels": ["POSTED_JOB"], "job_acquisition_mode": "MCP_JOB_TOOLS",
+        "revenue_channels": ["POSTED_JOB"], "job_acquisition_mode": "REST_API",
         "seller_mode": "SERVICE_LISTING_CONTRACT_UNVERIFIED", "settlement_rail": "WALLET_WITHDRAWAL_RAIL_UNVERIFIED",
-        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "OFFICIAL_MCP_JOB_CONTRACT",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "OFFICIAL_REST_CONTRACT",
     },
     "callboard": {
         "revenue_channels": ["POSTED_JOB"], "job_acquisition_mode": "OPENAPI_V2",
