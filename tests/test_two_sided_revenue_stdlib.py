@@ -8,23 +8,38 @@ import django
 
 django.setup()
 
-from control.services.revenue_portfolio import PortfolioCandidate, idle_capacity_actions, rank_portfolio_candidates
+from control.services.revenue_portfolio import PortfolioCandidate, REVENUE_CHANNEL_VALUES, idle_capacity_actions, rank_portfolio_candidates
 from control.services.seller_protocols import (
     DisabledExternalSettlementBridge,
     NeverminedFiatContract,
     SellerProtocolError,
     SkyfireSellerContract,
 )
-from markets.revenue_catalog import HOSTING_POLICIES, REVENUE_CHANNELS
+from markets.revenue_catalog import BY_SLUG, EXECUTION_PLACEMENTS, HOSTING_POLICIES, REVENUE_CHANNELS
 
 
 class TwoSidedRevenueDeterministicTests(unittest.TestCase):
     def test_revenue_channel_and_hosting_taxonomy_is_explicit(self):
-        self.assertEqual(set(REVENUE_CHANNELS), {
+        expected_channels = {
             "POSTED_JOB", "BOUNTY", "SERVICE_LISTING", "PAY_PER_CALL_API",
-            "PROJECT_HIRE", "SUBSCRIPTION", "MANUAL_STOREFRONT", "OFFHOST_SETTLEMENT",
-        })
+            "PROJECT_HIRE", "SUBSCRIPTION", "MANUAL_STOREFRONT", "DIRECT_CHECKOUT",
+            "PAYMENT_LINK", "OFFHOST_SETTLEMENT",
+        }
+        self.assertEqual(set(REVENUE_CHANNELS), expected_channels)
+        self.assertEqual(REVENUE_CHANNEL_VALUES, expected_channels)
         self.assertEqual(set(HOSTING_POLICIES), {"WEBDOCK_SAFE", "OFFHOST_SETTLEMENT_REQUIRED", "UNVERIFIED"})
+        self.assertEqual(set(EXECUTION_PLACEMENTS), {"WEBDOCK_LIGHT", "EXTERNAL_PROVIDER", "APIFY", "MANUAL", "OFFHOST_REQUIRED", "UNVERIFIED"})
+
+    def test_phase1_shadow_channels_are_catalogued_fail_closed(self):
+        for slug in ("contra", "rapidapi", "apify-store", "lemon-squeezy"):
+            definition = BY_SLUG[slug]
+            self.assertFalse(definition.source_wired)
+            self.assertTrue(definition.manual_onboarding_required)
+            self.assertTrue(definition.blockers)
+        self.assertEqual(BY_SLUG["apify-store"].execution_placement, "APIFY")
+        self.assertEqual(BY_SLUG["lemon-squeezy"].execution_placement, "WEBDOCK_LIGHT")
+        self.assertIn("DIRECT_CHECKOUT", BY_SLUG["lemon-squeezy"].channels)
+        self.assertEqual(BY_SLUG["rapidapi"].economics["percentage_fee_rate"], "0.25")
 
     def test_nevermined_webdock_rejects_crypto(self):
         contract = NeverminedFiatContract()
@@ -90,11 +105,11 @@ class TwoSidedRevenueDeterministicTests(unittest.TestCase):
             for index, (source, channel, profit, minutes) in enumerate((
                 ("POSTED_OPPORTUNITY", "POSTED_JOB", "20", "20"),
                 ("BOUNTY", "BOUNTY", "30", "60"),
-                ("INBOUND_SERVICE_ORDER", "SERVICE_LISTING", "25", "10"),
+                ("INBOUND_SERVICE_ORDER", "DIRECT_CHECKOUT", "25", "10"),
             ))
         ]
         ranked = rank_portfolio_candidates(candidates, available_slots=2, productive_minutes_available=Decimal("30"))
-        self.assertEqual(ranked[0].candidate.revenue_channel, "SERVICE_LISTING")
+        self.assertEqual(ranked[0].candidate.revenue_channel, "DIRECT_CHECKOUT")
         self.assertEqual(sum(row.selected for row in ranked), 2)
 
     def test_idle_actions_do_not_invent_paid_work(self):
