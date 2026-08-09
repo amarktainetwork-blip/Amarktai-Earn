@@ -70,7 +70,7 @@ def extract_session_assistant_text(
     job_id: str | None = None,
     message_id: str | None = None,
 ) -> str:
-    """Extract only assistant output, preferring a matching asynchronous job."""
+    """Extract assistant output without ever crossing an explicit identity boundary."""
     if not isinstance(history, dict) or not isinstance(history.get("messages"), list):
         return ""
     assistants = [
@@ -78,14 +78,10 @@ def extract_session_assistant_text(
         for message in history["messages"]
         if isinstance(message, dict) and str(message.get("role", "")).lower() == "assistant"
     ]
-    if job_id:
-        matching = [message for message in assistants if _message_identity(message, "job_id") == str(job_id)]
-        if matching:
-            assistants = matching
-    elif message_id:
-        matching = [message for message in assistants if _message_identity(message, "message_id") == str(message_id)]
-        if matching:
-            assistants = matching
+    if job_id is not None:
+        assistants = [message for message in assistants if _message_identity(message, "job_id") == str(job_id)]
+    elif message_id is not None:
+        assistants = [message for message in assistants if _message_identity(message, "message_id") == str(message_id)]
     for assistant in reversed(assistants):
         found = _walk_text(assistant.get("content"))
         if found:

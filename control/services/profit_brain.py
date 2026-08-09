@@ -125,7 +125,9 @@ def _money(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
-def _genx_monetary_cost_known(call: GenXCall) -> bool:
+def _genx_monetary_cost_known(call: GenXCall, *, as_of=None) -> bool:
+    if as_of is not None and (call.completed_at is None or call.completed_at >= as_of):
+        return False
     metadata = call.requested_metadata if isinstance(call.requested_metadata, dict) else {}
     monetary_truth = str(metadata.get("cost_equivalent_truth") or "").upper()
     if monetary_truth in {"ACTUAL", "ACTUAL_USD", "AUTHORITATIVE"}:
@@ -135,13 +137,13 @@ def _genx_monetary_cost_known(call: GenXCall) -> bool:
     return call.status in {"FAILED", "CANCELLED"} and str(metadata.get("billing_truth") or "").upper() == "NOT_APPLICABLE"
 
 
-def _genx_cost_coverage(calls) -> tuple[bool, int]:
-    unresolved = sum(1 for call in calls if not _genx_monetary_cost_known(call))
+def _genx_cost_coverage(calls, *, as_of=None) -> tuple[bool, int]:
+    unresolved = sum(1 for call in calls if not _genx_monetary_cost_known(call, as_of=as_of))
     return unresolved == 0, unresolved
 
 
 def settled_profit_truth(*, start, end=None) -> SettledProfitTruth:
-    """Return USD settled cash less attributable, finalized paid execution cost in the same window."""
+    """Return payouts settled in-window less attributable monetary cost known by the cutoff."""
     payouts = Payout.objects.filter(
         state=Payout.State.SETTLED,
         currency="USD",
@@ -152,21 +154,23 @@ def settled_profit_truth(*, start, end=None) -> SettledProfitTruth:
         payouts = payouts.filter(settled_at__lt=end)
     settled_cash = payouts.aggregate(value=Sum("net"))["value"] or ZERO
     settled_job_ids = payouts.values("job_id")
-    attributable_genx_calls = list(GenXCall.objects.filter(job_id__in=settled_job_ids))
+    attributable_genx_calls = GenXCall.objects.filter(job_id__in=settled_job_ids)
+    if end is not None:
+        attributable_genx_calls = attributable_genx_calls.filter(created_at__lt=end)
+    attributable_genx_calls = list(attributable_genx_calls)
     genx_calls = GenXCall.objects.filter(
         job_id__in=settled_job_ids,
         status="COMPLETED",
         completed_at__isnull=False,
-        completed_at__gte=start,
         cost_equivalent__gt=0,
     )
     if end is not None:
-        genx_calls = genx_calls.filter(completed_at__lt=end)
+        genx_calls = genx_calls.filter(created_at__lt=end, completed_at__lt=end)
     paid_execution_cost = genx_calls.aggregate(value=Sum("cost_equivalent"))["value"] or ZERO
-    cost_coverage_complete, unresolved_cost_calls = _genx_cost_coverage(attributable_genx_calls)
+    cost_coverage_complete, unresolved_cost_calls = _genx_cost_coverage(attributable_genx_calls, as_of=end)
     coverage = [
         "SETTLED_PAYOUT_NET_USD_ALREADY_EXCLUDES_MARKETPLACE_FEE",
-        "COMPLETED_GENX_COST_EQUIVALENT_USD_IN_WINDOW_FOR_SETTLED_JOBS",
+        "ATTRIBUTABLE_FINALIZED_GENX_COST_EQUIVALENT_USD_KNOWN_BY_REPORTING_CUTOFF",
         "NO_PERSISTED_ACTUAL_EXTERNAL_OR_OTHER_DIRECT_COST_SOURCE",
     ]
     coverage.append(
@@ -568,7 +572,7 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
                 job_id__in=settled_job_ids,
                 status="COMPLETED",
                 completed_at__isnull=False,
-                completed_at__gte=start,
+                created_at__lt=end,
                 completed_at__lt=end,
             )
         )
@@ -634,7 +638,11 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
         qa_rate = _ratio(first_pass, completed or len(first_qa))
         settlement_rate = _ratio(settled, accepted or completed)
         monetary_coverage_complete, unresolved_monetary_calls = _genx_cost_coverage(
-            GenXCall.objects.filter(job_id__in={payout.job_id for payout in settled_payouts})
+            GenXCall.objects.filter(
+                job_id__in={payout.job_id for payout in settled_payouts},
+                created_at__lt=end,
+            ),
+            as_of=end,
         )
         stage = classify_growth_stage(
             sample_count=len(selected), completed_jobs=completed,
@@ -674,7 +682,7 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
             growth_stage=stage.value,
             details={
                 "window_days": window_days,
-                "settled_profit_formula": "settled_payout_net_usd_minus_completed_genx_cost_equivalent_usd",
+                "settled_profit_formula": "payouts_settled_in_window_net_usd_minus_attributable_finalized_genx_cost_equivalent_usd_known_by_window_end",
                 "marketplace_fee_handling": "payout_net_already_excludes_fee; fee_not_subtracted_again",
                 "actual_external_direct_cost_coverage": "NO_PERSISTED_SOURCE",
                 "genx_monetary_cost_coverage_complete": monetary_coverage_complete,

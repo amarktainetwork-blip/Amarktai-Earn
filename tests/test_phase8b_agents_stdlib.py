@@ -108,11 +108,16 @@ class Phase8BAgentContractTests(unittest.TestCase):
 
     def test_session_output_selects_assistant_for_remote_job_and_decodes_inline_text(self):
         history = {"messages": [
-            {"role": "user", "content": [{"type": "text", "text": "Reply exactly OK."}]},
-            {"role": "assistant", "job_id": "job-1", "content": [{"type": "text", "text": "OK"}]},
+            {"role": "user", "message_id": "prompt-1", "content": [{"type": "text", "text": "prompt"}]},
+            {"role": "assistant", "job_id": "job-a", "message_id": "assistant-a", "content": [{"type": "text", "text": "A"}]},
+            {"role": "assistant", "job_id": "job-b", "message_id": "assistant-b", "content": [{"type": "text", "text": "B"}]},
         ]}
-        self.assertEqual(extract_session_assistant_text(history, job_id="job-1"), "OK")
-        self.assertEqual(session_assistant_job_ids(history), ["job-1"])
+        self.assertEqual(extract_session_assistant_text(history, job_id="job-a"), "A")
+        self.assertEqual(extract_session_assistant_text(history, job_id="job-b"), "B")
+        self.assertEqual(extract_session_assistant_text(history, job_id="job-x"), "")
+        self.assertEqual(extract_session_assistant_text(history, message_id="assistant-x"), "")
+        self.assertEqual(extract_session_assistant_text(history), "B")
+        self.assertEqual(session_assistant_job_ids(history), ["job-a", "job-b"])
         self.assertEqual(decode_text_result_url("data/plain;base64,T0s="), "OK")
         self.assertEqual(decode_text_result_url("data/plain,hello%20world"), "hello world")
         self.assertEqual(decode_text_result_url("data/plain;base64,%%%"), "")
