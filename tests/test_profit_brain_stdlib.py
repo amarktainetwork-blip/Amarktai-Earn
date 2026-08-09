@@ -1,6 +1,7 @@
 import os
 import unittest
 from decimal import Decimal
+from pathlib import Path
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 import django
@@ -50,6 +51,27 @@ class ProfitBrainDeterministicTests(unittest.TestCase):
 
     def test_status_vocabulary_is_explicit(self):
         self.assertEqual({item.value for item in TargetStatus}, {"AHEAD", "ON_TRACK", "BEHIND", "INSUFFICIENT_DATA"})
+
+    def test_targets_and_growth_stage_are_not_acquisition_or_revenue_caps(self):
+        root = Path(__file__).resolve().parents[1]
+        decision_sources = "\n".join(
+            (root / relative).read_text(encoding="utf-8")
+            for relative in (
+                "control/acquisition.py",
+                "control/services/acquisition_preflight.py",
+                "control/services/jobs.py",
+            )
+        )
+        self.assertNotIn("TARGET_DAILY_SETTLED_PROFIT", decision_sources)
+        self.assertNotIn("TARGET_WEEKLY_SETTLED_PROFIT", decision_sources)
+        self.assertNotIn("TARGET_COMPLETED_JOBS_DAY", decision_sources)
+        self.assertNotIn("target_value", decision_sources)
+
+        env_example = (root / ".env.example").read_text(encoding="utf-8")
+        self.assertIn("TARGET_* values are objective floors", env_example)
+        self.assertIn("ABSOLUTE_MAX_PAID_COST_PER_JOB_USD=250.00", env_example)
+        self.assertNotIn("MAX_EXECUTION_COST_PER_JOB_USD", env_example)
+        self.assertNotIn("MAX_GENX_COST_PER_JOB_USD", env_example)
 
 
 if __name__ == "__main__":

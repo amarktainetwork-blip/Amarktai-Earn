@@ -13,6 +13,7 @@ from control.models import (
     Alert,
     CapacitySnapshot,
     Execution,
+    GenXCall,
     GrowthEvaluation,
     GrowthTarget,
     Job,
@@ -36,6 +37,7 @@ from control.services.profit_brain import (
     evaluate_opportunity,
     record_reputation_snapshot,
     refresh_performance,
+    settled_profit_truth,
 )
 from control.services.agentgigs import score_open_jobs
 
@@ -47,14 +49,26 @@ class ProfitBrainIntegrationTests(TestCase):
             status=Marketplace.Status.LIVE, payout_ready=True, south_africa_verified=True,
         )
 
-    def _job(self, external_id: str, *, profit="1.00", ppm="0.10", state=Job.State.EXPECTED, payload=None):
+    def _job(
+        self,
+        external_id: str,
+        *,
+        profit="1.00",
+        ppm="0.10",
+        reward="2.00",
+        genx_cost="0",
+        external_cost="0",
+        state=Job.State.EXPECTED,
+        payload=None,
+    ):
         job = Job.objects.create(
             marketplace=self.market, external_id=external_id, title="Profitable bounded task",
-            task_class="Data Analysis", reward="2.00", state=state,
+            task_class="Data Analysis", reward=reward, state=state,
             normalized_payload=payload or {"operation": "json_to_csv", "source_filename": "input.json"},
         )
         JobScore.objects.create(
             job=job, p_acquire="0.8", p_accept="0.9", p_payment="0.95",
+            expected_genx_cost=genx_cost, expected_external_cost=external_cost,
             expected_cash="1.50", expected_profit=profit, expected_profit_per_minute=ppm,
             expected_minutes=10, max_genx_credits="0",
         )
@@ -85,6 +99,7 @@ class ProfitBrainIntegrationTests(TestCase):
         self.assertFalse(decision.allowed)
         self.assertIn("BETTER_COMMITTED_WORK_HAS_PRIORITY", decision.reason_codes)
         self.assertGreater(decision.opportunity_cost, 0)
+        self.assertFalse(any("TARGET" in reason or "REVENUE" in reason for reason in decision.reason_codes))
 
     def test_expected_loss_requires_explicit_bounded_reputation_budget(self):
         job = self._job(
@@ -121,6 +136,90 @@ class ProfitBrainIntegrationTests(TestCase):
         self.assertTrue(evaluation.reason_codes)
         self.assertEqual(GrowthTarget.objects.count(), 8)
         self.assertEqual(GrowthEvaluation.objects.count(), 1)
+        self.assertTrue(all(row.details["semantics"] == "OBJECTIVE_FLOOR_NEVER_EARNINGS_CAP" for row in targets))
+
+    def test_bootstrap_and_exceeded_targets_never_cap_profitable_work(self):
+        settled_job = self._job("target-proof", profit="500", ppm="50", reward="500", state=Job.State.SETTLED)
+        Payout.objects.create(
+            job=settled_job,
+            gross="500",
+            fee="0",
+            net="500",
+            state=Payout.State.SETTLED,
+            settled_at=timezone.now(),
+            currency="USD",
+        )
+        targets = ensure_growth_targets()
+        GrowthTarget.objects.exclude(
+            key__in=["TARGET_DAILY_SETTLED_PROFIT", "TARGET_WEEKLY_SETTLED_PROFIT"]
+        ).update(enabled=False)
+        GrowthTarget.objects.filter(
+            key__in=["TARGET_DAILY_SETTLED_PROFIT", "TARGET_WEEKLY_SETTLED_PROFIT"]
+        ).update(target_value="50")
+        evaluation = evaluate_growth_targets()
+        self.assertEqual(evaluation.status, "AHEAD")
+        self.assertEqual(evaluation.metrics["TARGET_WEEKLY_SETTLED_PROFIT"], "500.00")
+
+        next_job = self._job("bootstrap-uncapped", profit="400", ppm="40", reward="500")
+        decision = evaluate_opportunity(next_job, capacity=self._capacity(), capability="new-bootstrap-capability")
+        self.assertEqual(decision.growth_stage, GrowthStage.BOOTSTRAP)
+        self.assertTrue(decision.allowed)
+        self.assertGreater(decision.expected_cash_profit, Decimal("50"))
+        self.assertFalse(any("TARGET" in reason or "REVENUE" in reason for reason in decision.reason_codes))
+        self.assertTrue(all(row.details["semantics"] == "OBJECTIVE_FLOOR_NEVER_EARNINGS_CAP" for row in targets))
+
+    def test_settled_profit_uses_actual_attributable_cost_once_and_respects_window(self):
+        now = timezone.now()
+        start = now - timedelta(days=1)
+        first = self._job("truth-first", state=Job.State.SETTLED)
+        second = self._job("truth-second", state=Job.State.SETTLED)
+        pending = self._job("truth-pending", state=Job.State.PAYOUT_PENDING)
+        Payout.objects.create(
+            job=first, gross="100", fee="10", net="90", state=Payout.State.SETTLED,
+            settled_at=now, currency="USD",
+        )
+        Payout.objects.create(
+            job=second, gross="50", fee="5", net="45", state=Payout.State.SETTLED,
+            settled_at=now, currency="USD",
+        )
+        Payout.objects.create(
+            job=pending, gross="100", fee="10", net="90", state=Payout.State.PAYOUT_PENDING,
+            pending_at=now, currency="USD",
+        )
+        GenXCall.objects.create(
+            request_key="truth-cost-first", job=first, model="fixture", status="COMPLETED",
+            completed_at=now, cost_equivalent="5",
+        )
+        GenXCall.objects.create(
+            request_key="truth-cost-second", job=second, model="fixture", status="COMPLETED",
+            completed_at=now, cost_equivalent="2",
+        )
+        GenXCall.objects.create(
+            request_key="truth-cost-outside", job=first, model="fixture", status="COMPLETED",
+            completed_at=start - timedelta(minutes=1), cost_equivalent="99",
+        )
+        GenXCall.objects.create(
+            request_key="truth-cost-failed", job=first, model="fixture", status="FAILED",
+            completed_at=now, cost_equivalent="20",
+        )
+        GenXCall.objects.create(
+            request_key="truth-cost-unknown", job=first, model="fixture", status="UNKNOWN_REMOTE_STATE",
+            cost_equivalent="20",
+        )
+        GenXCall.objects.create(
+            request_key="truth-cost-unsettled", job=pending, model="fixture", status="COMPLETED",
+            completed_at=now, cost_equivalent="10",
+        )
+
+        truth = settled_profit_truth(start=start, end=now + timedelta(seconds=1))
+
+        self.assertEqual(truth.settled_cash, Decimal("135.00"))
+        self.assertEqual(truth.paid_execution_cost, Decimal("7.00"))
+        self.assertEqual(truth.net_settled_profit, Decimal("128.00"))
+        self.assertEqual(truth.settled_payouts, 2)
+        self.assertEqual(truth.costed_genx_calls, 2)
+        self.assertIn("SETTLED_PAYOUT_NET_USD_ALREADY_EXCLUDES_MARKETPLACE_FEE", truth.coverage)
+        self.assertIn("NO_PERSISTED_ACTUAL_EXTERNAL_OR_OTHER_DIRECT_COST_SOURCE", truth.coverage)
 
     def test_performance_and_reputation_use_observed_records(self):
         job = self._job("settled", profit="8", ppm="1", state=Job.State.SETTLED)
@@ -135,10 +234,17 @@ class ProfitBrainIntegrationTests(TestCase):
             job=job, gross="10", fee="1", net="9", state=Payout.State.SETTLED,
             settled_at=timezone.now(), currency="USD",
         )
+        GenXCall.objects.create(
+            request_key="performance-actual-cost", job=job, worker=worker, model="fixture",
+            status="COMPLETED", completed_at=timezone.now(), cost_equivalent="2",
+        )
         rows = refresh_performance(window_days=30)
         market_row = next(row for row in rows if row.dimension_type == "MARKET")
         capability_row = next(row for row in rows if row.dimension_type == "MARKET_CAPABILITY")
-        self.assertEqual(market_row.settled_profit, Decimal("9.00"))
+        self.assertEqual(market_row.settled_profit, Decimal("7.00"))
+        self.assertEqual(market_row.genx_cost, Decimal("2"))
+        self.assertEqual(market_row.direct_cost, Decimal("0"))
+        self.assertIn("fee_not_subtracted_again", market_row.details["marketplace_fee_handling"])
         self.assertEqual(capability_row.growth_stage, GrowthStage.BOOTSTRAP.value)
         self.assertGreater(market_row.profit_per_execution_minute, 0)
 

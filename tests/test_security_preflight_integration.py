@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from decimal import Decimal
 from unittest.mock import patch
 
 import pyotp
@@ -13,6 +14,7 @@ from django.utils import timezone
 from control.models import (
     AcquisitionPreflight,
     AuthThrottle,
+    GenXAccountSnapshot,
     Job,
     JobScore,
     MarketPolicyVersion,
@@ -86,16 +88,32 @@ class AcquisitionPreflightIntegrationTests(TestCase):
             marketplace=self.market, policy_hash="approved-v1", automation_allowed=True, webdock_compatible=True,
         )
 
-    def _job(self, title="Convert customer JSON to CSV", payload=None):
+    def _job(
+        self,
+        title="Convert customer JSON to CSV",
+        payload=None,
+        *,
+        reward="20",
+        expected_genx_cost="0",
+        expected_external_cost="0",
+        expected_profit="10",
+        expected_profit_per_minute="1",
+        max_genx_credits="0",
+        recommended_offer=None,
+    ):
         job = Job.objects.create(
             marketplace=self.market, external_id=f"job-{Job.objects.count()}", title=title,
-            task_class="Data Analysis", reward="20", state=Job.State.EXPECTED,
+            task_class="Data Analysis", reward=reward, state=Job.State.EXPECTED,
             normalized_payload=payload or {"operation": "json_to_csv", "source_filename": "input.json"},
         )
         JobScore.objects.create(
-            job=job, p_acquire="0.9", p_accept="0.95", p_payment="0.98", expected_genx_cost="0",
-            expected_profit="10", expected_profit_per_minute="1", expected_minutes=10, recommended_offer="20",
+            job=job, p_acquire="0.9", p_accept="0.95", p_payment="0.98",
+            expected_genx_cost=expected_genx_cost, expected_external_cost=expected_external_cost,
+            expected_profit=expected_profit, expected_profit_per_minute=expected_profit_per_minute,
+            expected_minutes=10, max_genx_credits=max_genx_credits,
+            recommended_offer=recommended_offer or reward,
         )
+        job.refresh_from_db()
         return job
 
     def test_canonical_modes_and_invalid_mode_fail_closed(self):
@@ -124,6 +142,72 @@ class AcquisitionPreflightIntegrationTests(TestCase):
         self.assertTrue(result.eligible)
         self.assertFalse(result.allowed)
         self.assertIn("AUTONOMY_SHADOW_ONLY", result.reason_codes)
+
+    def test_high_value_profit_can_authorize_paid_cost_above_legacy_fixed_caps(self):
+        job = self._job(
+            reward="500",
+            expected_genx_cost="20",
+            expected_profit="400",
+            expected_profit_per_minute="40",
+            recommended_offer="500",
+        )
+        env = {
+            "AUTONOMOUS_MODE": "LOW_RISK",
+            "AGENTGIGS_AUTO_APPLY_ENABLED": "1",
+            "ABSOLUTE_MAX_PAID_COST_PER_JOB_USD": "250",
+            "MAX_EXECUTION_COST_PER_JOB_USD": "3",
+            "MAX_GENX_COST_PER_JOB_USD": "2",
+        }
+        with patch.dict(os.environ, env, clear=False), patch(
+            "control.services.acquisition_preflight.decide_admission"
+        ) as admission:
+            admission.return_value = type("Admission", (), {"allowed": True, "reason_codes": [], "id": "green"})()
+            result = run_acquisition_preflight(job)
+
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.expected_net, Decimal("429.90"))
+        envelope = result.details["paid_cost_envelope"]
+        self.assertEqual(Decimal(envelope["expected_paid_cost"]), Decimal("20.10"))
+        self.assertGreaterEqual(Decimal(envelope["approved_paid_cost_budget"]), Decimal("20.10"))
+        self.assertNotIn("EXECUTION_COST_ABOVE_MAXIMUM", result.reason_codes)
+        self.assertNotIn("GENX_BUDGET_TOO_HIGH", result.reason_codes)
+
+    def test_poor_margin_paid_cost_and_insufficient_genx_balance_fail_closed(self):
+        poor = self._job(
+            reward="10",
+            expected_genx_cost="9.50",
+            expected_profit="-0.50",
+            expected_profit_per_minute="-0.05",
+            recommended_offer="10",
+        )
+        expensive_genx = self._job(
+            title="Summarize customer brief",
+            payload={"operation": "document_summarize", "source_filename": "brief.txt"},
+            reward="500",
+            expected_genx_cost="20",
+            expected_profit="400",
+            expected_profit_per_minute="40",
+            max_genx_credits="10",
+            recommended_offer="500",
+        )
+        GenXAccountSnapshot.objects.create(available_credits="5", raw={"available_credits": 5})
+        env = {
+            "AUTONOMOUS_MODE": "LOW_RISK",
+            "AGENTGIGS_AUTO_APPLY_ENABLED": "1",
+            "ACQUISITION_ENABLED_OPERATIONS": "json_to_csv,csv_normalize,document_summarize",
+        }
+        with patch.dict(os.environ, env, clear=False), patch(
+            "control.services.acquisition_preflight.decide_admission"
+        ) as admission:
+            admission.return_value = type("Admission", (), {"allowed": True, "reason_codes": [], "id": "green"})()
+            poor_result = run_acquisition_preflight(poor, persist=False)
+            balance_result = run_acquisition_preflight(expensive_genx, persist=False)
+
+        self.assertFalse(poor_result.allowed)
+        self.assertIn("EXPECTED_NET_PROFIT_NOT_POSITIVE", poor_result.reason_codes)
+        self.assertIn("RISK_ADJUSTED_PROFIT_NOT_POSITIVE", poor_result.reason_codes)
+        self.assertFalse(balance_result.allowed)
+        self.assertIn("GENX_BUDGET_INSUFFICIENT", balance_result.reason_codes)
 
     def test_unknown_and_prohibited_workloads_fail_closed(self):
         unknown = self._job("Do a vague task", {"description": "Help with some data"})

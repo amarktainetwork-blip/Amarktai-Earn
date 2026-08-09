@@ -5,6 +5,7 @@ from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
+from control.acquisition import paid_cost_envelope
 from control.models import AcquisitionPreflight, AuditEvent, GenXAccountSnapshot, MarketPolicyVersion
 from control.services.admission import decide_admission
 from control.services.autonomy import acquisition_autonomy
@@ -138,9 +139,13 @@ def run_acquisition_preflight(job, *, persist: bool = True):
         if spec.requires_genx:
             latest = GenXAccountSnapshot.objects.order_by("-created_at").first()
             score = getattr(job, "jobscore", None)
+            max_genx_credits = Decimal(str(getattr(score, "max_genx_credits", 0) or 0))
+            expected_genx_cost = Decimal(str(getattr(score, "expected_genx_cost", 0) or 0))
+            if score is None or max_genx_credits <= 0 or expected_genx_cost <= 0:
+                reasons.append("GENX_PAID_BUDGET_UNVERIFIED")
             if not latest or latest.available_credits is None:
                 reasons.append("GENX_BALANCE_UNVERIFIED")
-            elif score is None or latest.available_credits < score.max_genx_credits:
+            elif Decimal(str(latest.available_credits)) < max_genx_credits:
                 reasons.append("GENX_BUDGET_INSUFFICIENT")
     if operation == "public_web_extract":
         if os.getenv("PUBLIC_WEB_DATA_ENABLED", "0") != "1":
@@ -206,10 +211,8 @@ def run_acquisition_preflight(job, *, persist: bool = True):
     expected_gross = Decimal(str(getattr(score, "recommended_offer", None) or job.reward))
     fee = (expected_gross * Decimal(str(market.fee_rate))).quantize(CENT, rounding=ROUND_HALF_UP)
     genx_cost = Decimal(str(getattr(score, "expected_genx_cost", 0) or 0))
+    external_cost = Decimal(str(getattr(score, "expected_external_cost", 0) or 0))
     operational_cost = _decimal_env("EXPECTED_OPERATIONAL_COST_PER_JOB_USD", "0.10")
-    if genx_cost + operational_cost > _decimal_env("MAX_EXECUTION_COST_PER_JOB_USD", "3.00"):
-        reasons.append("EXECUTION_COST_ABOVE_MAXIMUM")
-    expected_net = (expected_gross - fee - genx_cost - operational_cost).quantize(CENT, rounding=ROUND_HALF_UP)
     economics_confidence = Decimal(str(getattr(score, "p_accept", 0) or 0)) * Decimal(str(getattr(score, "p_payment", 0) or 0))
     confidence = min(inference_confidence, economics_confidence).quantize(Decimal("0.00001"))
     if confidence < _decimal_env("MIN_ACQUISITION_CONFIDENCE", "0.75"):
@@ -223,6 +226,19 @@ def run_acquisition_preflight(job, *, persist: bool = True):
     capacity = capture_capacity(persist=persist)
     economic = evaluate_opportunity(job, capacity=capacity, capability=spec.worker_class if spec else operation)
     reasons.extend(economic.reason_codes)
+    paid_budget = paid_cost_envelope(
+        expected_gross=expected_gross,
+        marketplace_fee=fee,
+        expected_genx_cost=genx_cost,
+        expected_external_cost=external_cost,
+        expected_operational_cost=operational_cost,
+        risk_adjusted_profit=economic.risk_adjusted_profit - operational_cost,
+        minimum_expected_profit=_decimal_env("MIN_EXPECTED_PROFIT_USD", "0.00"),
+        absolute_max_paid_cost=_decimal_env("ABSOLUTE_MAX_PAID_COST_PER_JOB_USD", "250.00"),
+        contingency_fraction=_decimal_env("PAID_COST_CONTINGENCY_FRACTION", "0.10"),
+    )
+    reasons.extend(paid_budget.reason_codes)
+    expected_net = paid_budget.expected_net_profit.quantize(CENT, rounding=ROUND_HALF_UP)
     reasons = list(dict.fromkeys(reasons))
     eligible = not [reason for reason in reasons if reason not in {"AUTONOMY_OFF", "AUTONOMY_SHADOW_ONLY", "ACQUISITION_SWITCH_DISABLED"}]
     allowed = eligible and autonomy.may_acquire
@@ -249,6 +265,18 @@ def run_acquisition_preflight(job, *, persist: bool = True):
             "utilization_state": economic.utilization_state.value,
             "risk_adjusted_profit": str(economic.risk_adjusted_profit),
             "opportunity_cost": str(economic.opportunity_cost),
+            "expected_external_cost": str(external_cost),
+            "paid_cost_envelope": {
+                "semantics": "PROFITABILITY_RELATIVE_WITH_ABSOLUTE_SAFETY_CIRCUIT_BREAKER",
+                "expected_paid_cost": str(paid_budget.expected_paid_cost),
+                "economically_supported_paid_cost": str(paid_budget.economically_supported_paid_cost),
+                "approved_paid_cost_budget": str(paid_budget.approved_paid_cost_budget),
+                "absolute_safety_ceiling": str(paid_budget.absolute_safety_ceiling),
+                "expected_net_profit": str(paid_budget.expected_net_profit),
+                "risk_adjusted_profit": str(paid_budget.risk_adjusted_profit),
+                "contingency_fraction": str(paid_budget.contingency_fraction),
+                "reason_codes": list(paid_budget.reason_codes),
+            },
             "exploration": economic.exploration,
             "reputation_investment": economic.reputation_investment,
             "market_adapter": integration_profile.adapter_name if integration_profile else "",

@@ -55,6 +55,7 @@ from .models import (
     Worker,
 )
 from control.services.autonomy import current_mode
+from control.services.profit_brain import settled_profit_truth
 
 SECTIONS = (
     "overview",
@@ -115,13 +116,17 @@ def _disk_row(label: str, path: str) -> dict:
 def overview_snapshot() -> dict:
     today = timezone.localdate()
     now = timezone.now()
+    day_start = timezone.localtime(now).replace(hour=0, minute=0, second=0, microsecond=0)
     earned = Payout.objects.filter(
         state__in=[Payout.State.EARNED, Payout.State.PAYOUT_PENDING, Payout.State.SETTLED],
         earned_at__date=today,
     ).aggregate(v=Sum("net"))["v"] or Decimal("0")
-    settled = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__date=today).aggregate(v=Sum("net"))["v"] or Decimal("0")
-    settled_7d = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__gte=now - timedelta(days=7)).aggregate(v=Sum("net"))["v"] or Decimal("0")
-    settled_30d = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__gte=now - timedelta(days=30)).aggregate(v=Sum("net"))["v"] or Decimal("0")
+    truth_today = settled_profit_truth(start=day_start)
+    truth_7d = settled_profit_truth(start=now - timedelta(days=7))
+    truth_30d = settled_profit_truth(start=now - timedelta(days=30))
+    settled = truth_today.settled_cash
+    settled_7d = truth_7d.settled_cash
+    settled_30d = truth_30d.settled_cash
     settled_gross_30d = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__gte=now - timedelta(days=30)).aggregate(v=Sum("gross"))["v"] or Decimal("0")
     pending = Payout.objects.filter(state=Payout.State.PAYOUT_PENDING).aggregate(v=Sum("net"))["v"] or Decimal("0")
     genx_used = GenXCall.objects.filter(created_at__date=today).aggregate(v=Sum("credits"))["v"] or Decimal("0")
@@ -144,8 +149,8 @@ def overview_snapshot() -> dict:
     blocked_profitable = OpportunityDecision.objects.filter(
         allowed=False, expected_cash_profit__gt=0, created_at__gte=now - timedelta(hours=24),
     ).count()
-    genx_cost_30d = GenXCall.objects.filter(created_at__gte=now - timedelta(days=30)).aggregate(v=Sum("cost_equivalent"))["v"] or Decimal("0")
-    recorded_net_profit_30d = settled_30d - genx_cost_30d
+    paid_execution_cost_30d = truth_30d.paid_execution_cost
+    recorded_net_profit_30d = truth_30d.net_settled_profit
     recorded_net_margin_30d = None if settled_gross_30d <= 0 else (recorded_net_profit_30d / settled_gross_30d * 100).quantize(Decimal("0.01"))
     return {
         "section": "overview",
@@ -157,10 +162,12 @@ def overview_snapshot() -> dict:
             {"label": "PENDING PAYOUT", "value": f"${_money(pending)}", "truth": "not received cash"},
             {"label": "AWARDED/ACCEPTED EXPOSURE", "value": f"${_money(exposure)}", "truth": "contract value at risk; not received cash"},
             {"label": "EXPECTED PROFIT 24H", "value": f"${_money(expected_profit)}", "truth": "modelled allowed opportunities; not revenue"},
-            {"label": "RECORDED GENX COST 30D", "value": f"${_money(genx_cost_30d)}", "truth": "persisted cost equivalent"},
-            {"label": "RECORDED NET PROFIT 30D", "value": f"${_money(recorded_net_profit_30d)}", "truth": "settled net cash less recorded GenX cost"},
-            {"label": "RECORDED NET MARGIN 30D", "value": "INSUFFICIENT_DATA" if recorded_net_margin_30d is None else f"{recorded_net_margin_30d}%", "truth": "settled net cash less recorded GenX cost divided by settled gross"},
-            {"label": "TARGET STATUS", "value": growth.status if growth else "INSUFFICIENT_DATA", "truth": ", ".join(growth.reason_codes) if growth else "no persisted evaluation"},
+            {"label": "PAID EXECUTION COST 30D", "value": f"${_money(paid_execution_cost_30d)}", "truth": "completed persisted GenX cost attributable to USD-settled jobs in the same window; no persisted actual external-cost source"},
+            {"label": "TRUE RECORDED NET SETTLED PROFIT TODAY", "value": f"${_money(truth_today.net_settled_profit)}", "truth": "settled payout net less attributable completed GenX cost; marketplace fee is already excluded by payout net"},
+            {"label": "TRUE RECORDED NET SETTLED PROFIT 7D", "value": f"${_money(truth_7d.net_settled_profit)}", "truth": "settled payout net less attributable completed GenX cost in the same window"},
+            {"label": "TRUE RECORDED NET SETTLED PROFIT 30D", "value": f"${_money(recorded_net_profit_30d)}", "truth": "settled payout net less attributable completed GenX cost in the same window"},
+            {"label": "RECORDED NET MARGIN 30D", "value": "INSUFFICIENT_DATA" if recorded_net_margin_30d is None else f"{recorded_net_margin_30d}%", "truth": "true recorded net settled profit divided by settled gross; marketplace fee counted once"},
+            {"label": "TARGET STATUS", "value": growth.status if growth else "INSUFFICIENT_DATA", "truth": (", ".join(growth.reason_codes) if growth else "no persisted evaluation") + "; targets are objective floors, never earnings caps"},
             {"label": "PRODUCTIVE UTILIZATION", "value": f"{(capacity.utilization * 100):.2f}%" if capacity else "NO SNAPSHOT", "truth": capacity.utilization_state if capacity else "no persisted capacity snapshot"},
             {"label": "AVOIDABLE IDLE", "value": f"{capacity.avoidable_idle_minutes} min" if capacity else "NO SNAPSHOT", "truth": capacity.idle_reason if capacity else "no persisted capacity snapshot"},
             {"label": "BLOCKED PROFITABLE OPPORTUNITIES 24H", "value": blocked_profitable, "truth": "persisted economic decisions with positive expected cash profit"},
@@ -177,6 +184,8 @@ def overview_snapshot() -> dict:
             "autonomous_mode": current_mode().value,
             "registered_workers": len(registry_manifest()),
             "revenue_truth": "Expected opportunity values are never earnings. Accepted/pending values are not cash. Only SETTLED is received cash.",
+            "target_semantics": "TARGETS_ARE_OBJECTIVE_FLOORS_NEVER_EARNINGS_CAPS",
+            "settled_profit_cost_coverage": list(truth_30d.coverage),
         },
     }
 
@@ -504,7 +513,13 @@ def performance_snapshot() -> dict:
     } for row in PerformanceAggregate.objects.order_by("-window_end", "dimension_type", "dimension_key")[:100]]
     growth = GrowthEvaluation.objects.order_by("-created_at").first()
     capacity = CapacitySnapshot.objects.order_by("-created_at").first()
-    targets = [{"key": row.key, "target": _dec(row.target_value), "unit": row.unit, "period": row.period} for row in GrowthTarget.objects.filter(enabled=True).order_by("key")]
+    targets = [{
+        "key": row.key,
+        "target": _dec(row.target_value),
+        "unit": row.unit,
+        "period": row.period,
+        "semantics": "OBJECTIVE_FLOOR_NEVER_EARNINGS_CAP",
+    } for row in GrowthTarget.objects.filter(enabled=True).order_by("key")]
     reputations = [{
         "source": row.source, "market": row.marketplace.slug, "capability": row.capability,
         "rating": _dec(row.rating), "rating_count": row.rating_count, "completed_jobs": row.completed_jobs,
@@ -531,6 +546,7 @@ def performance_snapshot() -> dict:
             "growth_metrics": growth.metrics if growth else {}, "growth_targets": targets,
             "growth_stages": sorted(set(row["growth_stage"] for row in profitability)),
             "capacity_idle_reason": capacity.idle_reason if capacity else "NO_SNAPSHOT",
+            "target_semantics": "TARGETS_ARE_OBJECTIVE_FLOORS_NEVER_EARNINGS_CAPS",
         },
     }
 

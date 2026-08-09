@@ -35,6 +35,7 @@ class V1AcceptanceIntegrationTests(TestCase):
         self.assertEqual(by_id["owner_login"]["status"], "PASS")
         self.assertEqual(by_id["sandbox_isolation"]["status"], "PASS")
         self.assertEqual(by_id["media_runtime"]["status"], "PASS")
+        self.assertEqual(by_id["uncapped_profit_governor"]["status"], "PASS")
 
     def test_non_ci_invocation_keeps_ci_only_claims_blocked(self):
         with patch("control.services.v1_acceptance.redis.Redis.from_url", return_value=self.redis_client):

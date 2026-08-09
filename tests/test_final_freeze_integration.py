@@ -83,10 +83,13 @@ class ExpandedV1FreezeIntegrationTests(TestCase):
         cards = {row["label"]: row for row in snapshot("overview", owner=self.owner)["cards"]}
         self.assertEqual(cards["SETTLED TODAY"]["value"], "$45.00")
         self.assertEqual(cards["SETTLED 7D"]["value"], "$45.00")
+        self.assertEqual(cards["PAID EXECUTION COST 30D"]["value"], "$0.00")
+        self.assertEqual(cards["TRUE RECORDED NET SETTLED PROFIT 30D"]["value"], "$45.00")
         self.assertEqual(cards["AWARDED/ACCEPTED EXPOSURE"]["value"], "$75.00")
         self.assertIn("not received cash", cards["AWARDED/ACCEPTED EXPOSURE"]["truth"])
         self.assertEqual(cards["RECORDED NET MARGIN 30D"]["value"], "90.00%")
         self.assertEqual(cards["TARGET STATUS"]["value"], "BEHIND")
+        self.assertIn("never earnings caps", cards["TARGET STATUS"]["truth"])
         self.assertEqual(cards["PRODUCTIVE UTILIZATION"]["value"], "25.00%")
         self.assertEqual(cards["BLOCKED PROFITABLE OPPORTUNITIES 24H"]["value"], 1)
 
@@ -118,7 +121,7 @@ class ExpandedV1FreezeIntegrationTests(TestCase):
         for identifier in (
             "growth_governor", "utilization_economics", "adaptive_economic_learning", "multifile_composite",
             "expanded_worker_qa", "synthetic_data_factory", "authorized_safety_research", "multi_market_adapters",
-            "dashboard_economic_truth",
+            "dashboard_economic_truth", "uncapped_profit_governor",
         ):
             self.assertEqual(by_id[identifier]["status"], "PASS", by_id[identifier])
         self.assertEqual(by_id["live_market_account"]["status"], "EXTERNAL_PROOF_REQUIRED")
