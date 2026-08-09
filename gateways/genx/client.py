@@ -133,13 +133,22 @@ class GenXClient:
     def session_message(
         self,
         session_id: str,
-        message: str,
+        message: str | list[Any],
         *,
         idempotency_key: str = "",
         tools: list | None = None,
         file_ids: list[str] | None = None,
     ):
-        payload = {"message": message}
+        if isinstance(message, str):
+            if not message.strip():
+                raise GenXError("GenX session content must be a non-empty string or content-part array")
+        elif isinstance(message, list):
+            if not message:
+                raise GenXError("GenX session content must be a non-empty string or content-part array")
+        else:
+            raise GenXError("GenX session content must be a non-empty string or content-part array")
+
+        payload = {"content": message}
         if idempotency_key:
             payload["idempotency_key"] = idempotency_key
         if tools:

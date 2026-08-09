@@ -1,13 +1,28 @@
 import os
 import tempfile
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import TestCase
 
-from control.models import Artifact, Execution, Job, Marketplace, QAResult, Worker
+from control.models import (
+    Artifact,
+    AuditEvent,
+    Execution,
+    GenXCall,
+    GenXModelCatalog,
+    Job,
+    JobScore,
+    Marketplace,
+    ModelStat,
+    QAResult,
+    Worker,
+)
 from control.ops import agents_snapshot, live_work_snapshot
+from gateways.genx.client import GenXError
+from gateways.genx.service import GenXGateway
 from planning.models import WorkPlan
 from planning.services import execute_work_plan, plan_awarded_job, stage_local_job_asset
 
@@ -115,10 +130,12 @@ class Phase8BAgentIntegrationTests(TestCase):
 
 class GenXSessionAccountingIntegrationTests(TestCase):
     class FakeGenXClient:
-        def __init__(self):
+        def __init__(self, *, message_error=None, close_error=None):
             self.created = 0
             self.messages = 0
             self.closed = 0
+            self.message_error = message_error
+            self.close_error = close_error
 
         def create_session(self, model, *, system_prompt="", title=""):
             self.created += 1
@@ -126,9 +143,12 @@ class GenXSessionAccountingIntegrationTests(TestCase):
 
         def session_message(self, session_id, message, *, idempotency_key="", tools=None, file_ids=None):
             self.messages += 1
+            if self.message_error:
+                raise self.message_error
             return {
                 "message": {"content": "Research result with sources https://example.com/a https://example.org/b"},
-                "usage": {"credits": "0.2000"},
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "billing": {"credits_charged": "0.2000"},
             }
 
         def session_messages(self, session_id):
@@ -136,15 +156,13 @@ class GenXSessionAccountingIntegrationTests(TestCase):
 
         def close_session(self, session_id):
             self.closed += 1
+            if self.close_error:
+                raise self.close_error
             return {}
 
-    def test_session_call_reserves_budget_records_usage_and_does_not_replay_message(self):
-        from decimal import Decimal
-        from control.models import GenXCall, GenXModelCatalog, JobScore, Worker
-        from gateways.genx.service import GenXGateway
-
+    def setUp(self):
         market = Marketplace.objects.create(slug="genx-session-market", display_name="GenX Session Market")
-        job = Job.objects.create(
+        self.job = Job.objects.create(
             marketplace=market,
             external_id="genx-session-1",
             title="Research a market",
@@ -153,7 +171,7 @@ class GenXSessionAccountingIntegrationTests(TestCase):
             state=Job.State.AWARDED,
         )
         JobScore.objects.create(
-            job=job,
+            job=self.job,
             p_acquire="1.00000",
             p_accept="1.00000",
             p_payment="1.00000",
@@ -170,21 +188,26 @@ class GenXSessionAccountingIntegrationTests(TestCase):
             price_hint="1.00000000",
             model_payload={"capabilities": ["web_search"]},
         )
-        client = self.FakeGenXClient()
-        gateway = GenXGateway(client=client)
-        call, response = gateway.run_session(
-            job_id=job.id,
+
+    def _run(self, client, request_key):
+        return GenXGateway(client=client).run_session(
+            job_id=self.job.id,
             worker_id="research-ci",
             task_class="research_web",
             system_prompt="Use web search and cite sources.",
             message="Research the market.",
             estimated_credits=Decimal("0.25"),
             max_allowed_credits=Decimal("1.00"),
-            request_key="phase8b-session-idempotency",
+            request_key=request_key,
             tools=[{"type": "web_search"}],
         )
+
+    def test_session_call_reserves_budget_records_usage_and_does_not_replay_message(self):
+        client = self.FakeGenXClient()
+        call, response = self._run(client, "phase8b-session-idempotency")
         self.assertEqual(call.status, "COMPLETED")
         self.assertEqual(call.credits, Decimal("0.2000"))
+        self.assertEqual(call.usage, {"input_tokens": 10, "output_tokens": 5})
         self.assertEqual(call.model, "dynamic-text-ci")
         self.assertEqual(call.task_class, "research_web")
         self.assertEqual(call.external_job_id, "session:session-ci-1")
@@ -192,19 +215,98 @@ class GenXSessionAccountingIntegrationTests(TestCase):
         self.assertEqual(client.messages, 1)
         self.assertEqual(client.closed, 1)
         self.assertIn("Research result", str(response))
+        stat = ModelStat.objects.get(model="dynamic-text-ci", task_class="research_web")
+        self.assertEqual(stat.attempts, 1)
+        self.assertEqual(stat.credits, Decimal("0.2000"))
+        self.assertTrue(AuditEvent.objects.filter(event_type="genx.call_reserved").exists())
+        self.assertTrue(AuditEvent.objects.filter(event_type="genx.call_reconciled").exists())
 
-        replay, _ = gateway.run_session(
-            job_id=job.id,
-            worker_id="research-ci",
-            task_class="research_web",
-            system_prompt="Use web search and cite sources.",
-            message="Research the market.",
-            estimated_credits=Decimal("0.25"),
-            max_allowed_credits=Decimal("1.00"),
-            request_key="phase8b-session-idempotency",
-            tools=[{"type": "web_search"}],
-        )
+        replay, _ = self._run(client, "phase8b-session-idempotency")
         self.assertEqual(replay.id, call.id)
         self.assertEqual(client.created, 1)
         self.assertEqual(client.messages, 1)
         self.assertEqual(GenXCall.objects.filter(request_key="phase8b-session-idempotency").count(), 1)
+
+    def test_message_validation_rejections_are_failed_with_session_identity_retained(self):
+        for status_code in (400, 422):
+            with self.subTest(status_code=status_code):
+                request_key = f"phase8b-message-rejected-{status_code}"
+                client = self.FakeGenXClient(
+                    message_error=GenXError("deterministic validation rejection", status_code=status_code)
+                )
+
+                with self.assertRaises(GenXError):
+                    self._run(client, request_key)
+
+                call = GenXCall.objects.get(request_key=request_key)
+                self.assertEqual(call.status, "FAILED")
+                self.assertIsNotNone(call.completed_at)
+                self.assertEqual(call.external_job_id, "session:session-ci-1")
+                self.assertEqual(call.credits, Decimal("0"))
+                self.assertEqual(client.created, 1)
+                self.assertEqual(client.messages, 1)
+                event = AuditEvent.objects.get(event_type="genx.session_failed", metadata__call_id=str(call.id))
+                self.assertEqual(event.metadata["phase"], "SEND_MESSAGE")
+                self.assertEqual(event.metadata["http_status"], status_code)
+
+    def test_message_rate_limit_remains_unknown_without_replay(self):
+        client = self.FakeGenXClient(message_error=GenXError("rate limited", status_code=429))
+
+        with self.assertRaises(GenXError):
+            self._run(client, "phase8b-message-rate-limited")
+
+        call = GenXCall.objects.get(request_key="phase8b-message-rate-limited")
+        self.assertEqual(call.status, "UNKNOWN_REMOTE_STATE")
+        self.assertIsNone(call.completed_at)
+        self.assertEqual(call.external_job_id, "session:session-ci-1")
+        self.assertEqual(call.credits, Decimal("0"))
+        self.assertEqual(client.messages, 1)
+        event = AuditEvent.objects.get(
+            event_type="genx.session_unknown_remote_state",
+            metadata__call_id=str(call.id),
+        )
+        self.assertEqual(event.metadata["phase"], "SEND_MESSAGE")
+        self.assertEqual(event.metadata["http_status"], 429)
+
+    def test_timeout_and_network_delivery_ambiguity_remain_unknown_without_replay(self):
+        cases = (
+            ("timeout", TimeoutError("timed out after send")),
+            ("network", GenXError("connection lost after send")),
+        )
+        for name, error in cases:
+            with self.subTest(name=name):
+                request_key = f"phase8b-message-ambiguous-{name}"
+                client = self.FakeGenXClient(message_error=error)
+
+                with self.assertRaises(error.__class__):
+                    self._run(client, request_key)
+
+                call = GenXCall.objects.get(request_key=request_key)
+                self.assertEqual(call.status, "UNKNOWN_REMOTE_STATE")
+                self.assertIsNone(call.completed_at)
+                self.assertEqual(call.external_job_id, "session:session-ci-1")
+                self.assertEqual(call.credits, Decimal("0"))
+                self.assertEqual(client.messages, 1)
+                event = AuditEvent.objects.get(
+                    event_type="genx.session_unknown_remote_state",
+                    metadata__call_id=str(call.id),
+                )
+                self.assertEqual(event.metadata["phase"], "SEND_MESSAGE")
+
+    def test_close_failure_preserves_completed_call_and_emits_warning(self):
+        client = self.FakeGenXClient(close_error=GenXError("close failed", status_code=503))
+
+        call, response = self._run(client, "phase8b-session-close-failure")
+
+        self.assertEqual(call.status, "COMPLETED")
+        self.assertEqual(call.credits, Decimal("0.2000"))
+        self.assertIn("Research result", str(response))
+        self.assertEqual(client.messages, 1)
+        self.assertEqual(client.closed, 1)
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="genx.session_close_failed",
+                severity="WARNING",
+                metadata__call_id=str(call.id),
+            ).exists()
+        )
