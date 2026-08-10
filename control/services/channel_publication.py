@@ -6,18 +6,36 @@ from typing import Any
 from django.db import transaction
 from django.utils import timezone
 
-from control.models import AuditEvent, MarketServiceListing, Marketplace, ServiceOffering
+from control.models import AuditEvent, MarketServiceListing, Marketplace
 from control.services.channel_commercial import commercial_pricing_row
 from control.services.channel_packages import PACKAGE_SPECS
 from control.services.seller_services import service_capability_blockers
 
 
 PRIORITY_PACKAGE_SLUGS = frozenset(spec.slug for spec in PACKAGE_SPECS)
-SELF_PUBLICATION_BLOCKERS = {
-    "contra": {"FIRST_SERVICE_LISTING_NOT_PROVEN", "PUBLIC_AUTOMATION_CONTRACT_NOT_VERIFIED"},
-    "rapidapi": {"API_LISTING_NOT_PUBLISHED", "PUBLISHING_AUTOMATION_NOT_VERIFIED"},
-    "apify-store": {"ACTOR_NOT_PUBLISHED"},
-    "lemon-squeezy": {"FIRST_PRODUCT_NOT_PUBLISHED"},
+# These catalog blocker labels describe gates that are enforced independently below.
+# Keeping them as a second switch would make payout/publication truth impossible to
+# reconcile after the authoritative fields are proven.
+REDUNDANT_PROFILE_BLOCKERS = {
+    "contra": {
+        "FIRST_SERVICE_LISTING_NOT_PROVEN",
+        "PUBLIC_AUTOMATION_CONTRACT_NOT_VERIFIED",
+        "SOUTH_AFRICA_PAYOUT_OPTIONS_NOT_PROVEN",
+    },
+    "rapidapi": {
+        "API_LISTING_NOT_PUBLISHED",
+        "PUBLISHING_AUTOMATION_NOT_VERIFIED",
+        "PAYPAL_PAYOUT_NOT_VERIFIED",
+        "SOUTH_AFRICA_WITHDRAWAL_NOT_VERIFIED",
+    },
+    "apify-store": {
+        "ACTOR_NOT_PUBLISHED",
+        "PAYOUT_ROUTE_NOT_VERIFIED",
+    },
+    "lemon-squeezy": {
+        "FIRST_PRODUCT_NOT_PUBLISHED",
+        "BANK_PAYOUT_ACCOUNT_NOT_PROVEN",
+    },
 }
 PUBLICATION_BLOCKER_BY_MARKET = {
     "contra": "FIRST_SERVICE_LISTING_NOT_PROVEN",
@@ -76,7 +94,7 @@ def priority_manual_publication_blockers(listing: MarketServiceListing) -> list[
             blockers.append("OFFHOST_SETTLEMENT_REQUIRED")
         elif profile.hosting_policy != "WEBDOCK_SAFE":
             blockers.append("WEBDOCK_HOSTING_POLICY_UNVERIFIED")
-        ignored = SELF_PUBLICATION_BLOCKERS.get(market.slug, set())
+        ignored = REDUNDANT_PROFILE_BLOCKERS.get(market.slug, set())
         blockers.extend(str(code) for code in (profile.blockers or []) if str(code) not in ignored)
 
     policy = market.policy_versions.order_by("-checked_at", "-created_at").first()
