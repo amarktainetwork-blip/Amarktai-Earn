@@ -232,6 +232,12 @@ def commercial_pricing_row(listing: MarketServiceListing) -> dict:
     price = record.get("public_price")
     blockers = list(record.get("blockers") or [])
     prepared = bool(price not in (None, "") and _decimal(price) > 0 and not blockers)
+    publication_recorded = bool(
+        listing.status == MarketServiceListing.Status.PUBLISHED
+        and listing.remote_listing_id
+        and listing.remote_reference
+        and listing.published_at is not None
+    )
     return {
         "market": listing.marketplace.slug,
         "package_slug": listing.offering.slug,
@@ -247,7 +253,9 @@ def commercial_pricing_row(listing: MarketServiceListing) -> dict:
         "owner_approved": record.get("source") == "OWNER_OVERRIDE",
         "blockers": blockers,
         "listing_status": listing.status,
-        "published_price": str(listing.published_price),
+        "catalog_listing_price_field": str(listing.published_price),
+        "published_price": str(listing.published_price) if publication_recorded else None,
+        "publication_recorded": publication_recorded,
         "remote_publication_present": bool(listing.remote_listing_id or listing.remote_reference),
         "external_mutation_allowed": False,
     }
@@ -269,8 +277,8 @@ def priority_channel_commercial_pricing_snapshot() -> dict:
             "priced_packages": sum(1 for row in rows if row["prepared"]),
             "owner_approved_packages": sum(1 for row in rows if row["owner_approved"]),
             "blocked_packages": sum(1 for row in rows if row["blockers"]),
-            "published_prices": sum(1 for row in rows if _decimal(row["published_price"]) > 0),
+            "published_prices": sum(1 for row in rows if row["published_price"] is not None),
             "external_mutation_allowed": False,
-            "truth": "Commercial prices are local launch proposals or owner-approved drafts. They are distinct from Profit Brain economic floors and never publish a remote listing by themselves.",
+            "truth": "Commercial prices are local launch proposals or owner-approved drafts. The existing listing price field is not publication evidence; a published price is reported only with persisted published listing and remote evidence.",
         },
     }
