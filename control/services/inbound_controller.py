@@ -26,7 +26,12 @@ def _auto_mode_allowed() -> bool:
 
 @transaction.atomic
 def accept_inbound_order(order_id, *, actor: str = "owner", manual: bool = True) -> InboundOrder:
-    order = InboundOrder.objects.select_related("job", "marketplace", "listing__offering").select_for_update().get(pk=order_id)
+    order = (
+        InboundOrder.objects
+        .select_related("job", "marketplace", "listing__offering")
+        .select_for_update(of=("self",))
+        .get(pk=order_id)
+    )
     if order.status == InboundOrder.Status.ACCEPTED and order.job.state in {Job.State.AWARDED, Job.State.EXECUTING}:
         return order
     if order.status != InboundOrder.Status.READY:
@@ -131,7 +136,12 @@ def refresh_inbound_delivery_readiness(*, limit: int = 100) -> dict[str, int]:
         .values_list("id", flat=True)[: max(1, min(int(limit), 500))]
     )
     for order_id in ids:
-        order = InboundOrder.objects.select_related("job", "marketplace").select_for_update().get(pk=order_id)
+        order = (
+            InboundOrder.objects
+            .select_related("job", "marketplace")
+            .select_for_update(of=("self",))
+            .get(pk=order_id)
+        )
         if not _qa_passed_plan(order):
             unchanged += 1
             continue
@@ -166,7 +176,12 @@ def refresh_inbound_delivery_readiness(*, limit: int = 100) -> dict[str, int]:
 
 @transaction.atomic
 def record_manual_inbound_delivery(order_id, *, remote_reference: str, actor: str = "owner") -> InboundOrder:
-    order = InboundOrder.objects.select_related("job", "marketplace").select_for_update().get(pk=order_id)
+    order = (
+        InboundOrder.objects
+        .select_related("job", "marketplace")
+        .select_for_update(of=("self",))
+        .get(pk=order_id)
+    )
     if order.marketplace.slug == "rapidapi":
         raise InboundControllerError("RAPIDAPI_DELIVERY_IS_PROVIDER_ENDPOINT")
     if order.status != InboundOrder.Status.ACCEPTED or order.remote_state != "DELIVERY_READY":
@@ -183,7 +198,12 @@ def record_manual_inbound_delivery(order_id, *, remote_reference: str, actor: st
 
 @transaction.atomic
 def record_inbound_buyer_acceptance(order_id, *, evidence_reference: str, actor: str = "owner") -> InboundOrder:
-    order = InboundOrder.objects.select_related("job", "marketplace").select_for_update().get(pk=order_id)
+    order = (
+        InboundOrder.objects
+        .select_related("job", "marketplace")
+        .select_for_update(of=("self",))
+        .get(pk=order_id)
+    )
     evidence = " ".join(str(evidence_reference or "").strip().split())[:700]
     if not evidence:
         raise InboundControllerError("BUYER_ACCEPTANCE_EVIDENCE_REQUIRED")
