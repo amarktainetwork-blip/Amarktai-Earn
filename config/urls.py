@@ -1,13 +1,16 @@
 from django.contrib import admin
 from django.urls import include, path
-from control import views, webhooks
+from control import banking_views, views, webhooks
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("healthz", views.healthz, name="healthz"),
     path("login/", views.login_page, name="login"),
     path("", views.overview_page, name="overview"),
+    path("ops/banking/", banking_views.banking_page, name="banking"),
     path("ops/<slug:section>/", views.ops_page, name="ops_page"),
+    path("api/banking/rails", banking_views.payment_rails_api, name="payment_rails_api"),
+    path("api/banking/rails/<slug:slug>/proof", banking_views.payment_rail_proof_api, name="payment_rail_proof_api"),
     path("api/ops/<slug:section>", views.ops_api, name="ops_api"),
     path("api/auth/csrf", views.csrf_cookie, name="csrf"),
     path("api/auth/login", views.password_login, name="password_login"),
