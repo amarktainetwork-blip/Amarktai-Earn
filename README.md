@@ -132,17 +132,19 @@ All markets are disabled for autonomous acquisition by default. A source or adap
 | Market | Source/adapter | Discovery | Apply/bid/claim | Submission/status | Payout truth | Current V1 truth |
 |---|---|---|---|---|---|---|
 | AgentGigs | REST/webhook service | source-wired | application/acquisition path exists behind policy, autonomy, payout, and separate switches | submission, revision, webhook/status lifecycle | requires real account/KYC/rail reconciliation | strongest source-wired adapter; live runtime and payout remain external proof |
-| Dealwork | MCP adapter | discovery contract | capability-dependent and disabled | contract/status surface only where exposed | not verified for South Africa | source-wired contract; policy/auth/payout blockers remain explicit |
+| Dealwork | official REST adapter | source-wired REST discovery | REST mutation capabilities remain policy/payout/autonomy gated and disabled | REST status/mutation surface only where exposed | not verified for South Africa | runtime-proven discovery; current inventory is qualified fail-closed and payout blockers remain explicit |
 | Callboard | REST adapter | discovery contract | capability-dependent and disabled | contract/status surface only where exposed | not verified for South Africa | source-wired contract; live docs/auth/policy/payout remain external proof |
 | TaskBounty | REST/MCP adapter | discovery/status contract | disabled | status surface where exposed | not verified for South Africa | source-wired contract; live integration and payout proof remain external |
 | Opire | public/source import adapter | source import | no autonomous mutation in V1 | source/status import only | prohibited crypto-only rails cannot open payout gate | watch/import truth; payout/policy proof required before enablement |
 | Algora | public/source import adapter | source import | no autonomous mutation in V1 | source/status import only | prohibited crypto-only rails cannot open payout gate | watch/import truth; payout/policy proof required before enablement |
 
+Contra, RapidAPI, Apify Store, and Lemon Squeezy Direct are priority **shadow-preparation** channels. Their package/pricing/placement plans may be prepared locally, but account onboarding, KYC, listing publication, checkout activation, paid external execution, and payout-route activation remain manual and fail-closed until separately proven. Scraper-heavy Apify work must execute on Apify infrastructure rather than as continuous high-load scraping on Webdock.
+
 Deterministic CI mocks prove adapter contracts without making live-market claims. `payout_ready` requires an active non-crypto payout account with South African eligibility evidence. Cryptocurrency, mining, DePIN, bandwidth, and proxy earning routes cannot satisfy the payout gate.
 
 ## Dashboard truth
 
-The owner-only dashboard is database-backed and exposes overview, live work, agents, markets, earnings, treasury, GenX, nodes, storage, performance, logs, alerts, settings, and security.
+The owner-only dashboard is database-backed and exposes overview, live work, agents, markets, Banking/payment rails and marketplace-to-owner settlement routes, earnings, treasury, GenX, nodes, storage, performance, logs, alerts, settings, and security.
 
 - Overview separates settled today/7d/30d, payout pending, awarded/accepted exposure, allowed expected profit, recorded GenX cost, target status, productive utilization, avoidable idle, active work, and blocked profitable opportunities.
 - Performance shows persisted growth targets/evaluations, stage, market/capability/operation/worker/strategy profitability, QA/revision/settlement latency, capacity state, foregone expected profit, GenX model outcomes, and actual market-provided reputation observations.
@@ -203,7 +205,7 @@ Expanded acceptance explicitly covers Growth and Utilization governors, stages a
 
 Compose defines PostgreSQL, Redis, web/controller, workers, scheduler/watchdog, GenX gateway, trusted sandbox broker, Caddy, persistent volumes, health-aware ordering, migrations/preflight, non-root services, and restart policies. `scripts/backup.sh` and `scripts/restore.sh` provide encrypted PostgreSQL backup/restore.
 
-This repository has not been deployed by this implementation sequence. A production operator must supply secrets, keep autonomy off during onboarding, validate with `docker compose config`, start the reviewed release, run `production_check`, and run acceptance against the target services.
+Production is deployed at `https://earn.amarktai.co.za`. Runtime proof is release-specific: only a production SHA actually deployed and exercised may be called runtime-proven. External account/KYC, marketplace payout, owner payment-rail readiness, irreversible acquisition, and real settled-cash proof remain independent and fail-closed until their own evidence exists. Production onboarding keeps autonomy off while those proofs are incomplete.
 
 V1 does not add or buy another VPS. The central-controller design can attach future worker nodes only after persisted evidence shows a sustained profitable queue, resource saturation, and expected incremental node profit greater than node cost. Recommendations are informational; infrastructure purchase is never automatic.
 
