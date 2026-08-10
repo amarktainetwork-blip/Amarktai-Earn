@@ -26,6 +26,16 @@ WORK_BLOCKERS_BY_MARKET = {
     "algora": frozenset({"SOLVER_MUTATION_AUTH_NOT_VERIFIED"}),
 }
 
+# Dealwork can prove the work lifecycle while approved earnings remain in its
+# platform wallet. These blockers are therefore deferred only for posted-job
+# acquisition; they continue to block cash readiness and seller storefronts.
+DEALWORK_DEFERRED_ACQUISITION_BLOCKERS = frozenset({
+    "WITHDRAWAL_RAIL_NOT_VERIFIED",
+    "ACCOUNT_PAYOUT_NOT_VERIFIED",
+    "SOUTH_AFRICA_NON_CRYPTO_PAYOUT_NOT_VERIFIED",
+    "SERVICE_LISTING_CONTRACT_NOT_PROVED",
+})
+
 
 def _auto_switch_name(slug: str) -> str:
     if slug == "agentgigs":
@@ -48,6 +58,19 @@ def acquisition_cash_gate_required(market: Marketplace) -> bool:
     be reused to report SETTLED cash or to activate seller storefronts.
     """
     return market.slug not in PLATFORM_WALLET_PROVING_MARKETS
+
+
+def acquisition_profile_blockers(market: Marketplace, blockers) -> list[str]:
+    """Return profile blockers relevant to posted-job acquisition.
+
+    All markets retain their existing blockers by default. Dealwork alone defers
+    the reviewed withdrawal/storefront-only blockers during platform-wallet proving.
+    KYA and every other unknown blocker remain hard acquisition blockers.
+    """
+    values = [str(code) for code in (blockers or [])]
+    if market.slug != "dealwork":
+        return values
+    return [code for code in values if code not in DEALWORK_DEFERRED_ACQUISITION_BLOCKERS]
 
 
 def market_readiness(market: Marketplace) -> dict:
