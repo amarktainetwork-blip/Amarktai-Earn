@@ -88,6 +88,10 @@ def build_channel_launch_plan(
             external_blockers.extend(str(item) for item in (route.get("blockers") or []))
 
     if isinstance(market, Mapping):
+        if market.get("enabled") is not True:
+            external_blockers.append("MARKET_DISABLED")
+        if str(market.get("status") or "") != "LIVE":
+            external_blockers.append("MARKET_NOT_LIVE")
         if market.get("payout_ready") is not True:
             external_blockers.append("MARKET_PAYOUT_NOT_READY")
         if market.get("south_africa_verified") is not True:
