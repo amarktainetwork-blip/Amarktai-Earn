@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -22,12 +23,33 @@ from markets.opire.client import OpireAdapter
 from markets.taskbounty.client import TaskBountyAdapter
 
 
+_BOUNTY_DISCOVERY_MARKETS = frozenset({"taskbounty", "opire", "algora"})
+
+
 def _policy_hash(definition: MarketDefinition) -> str:
     body = json.dumps(
         {"sources": definition.source_urls, "automation_allowed": definition.automation_allowed, "evidence": definition.evidence},
         sort_keys=True,
     )
     return hashlib.sha256(body.encode()).hexdigest()
+
+
+def _trusted_discovery_payload(definition: MarketDefinition, payload: dict | None) -> dict:
+    """Attach controller-owned source provenance before demand qualification.
+
+    Upstream job/bounty APIs do not all expose a common `type`/requirements shape.
+    The controller does know which canonical adapter/source produced the row, so it
+    records that fact in reserved fields without overwriting the upstream payload.
+    Explicit upstream seller/test evidence is still evaluated first by the
+    qualifier and therefore remains fail-closed.
+    """
+    enriched = dict(payload) if isinstance(payload, dict) else {}
+    enriched["_amarktai_source_type"] = (
+        "bounty" if definition.slug in _BOUNTY_DISCOVERY_MARKETS else "posted_job"
+    )
+    enriched["_amarktai_source_market"] = definition.slug
+    enriched["_amarktai_source_adapter"] = definition.adapter_path
+    return enriched
 
 
 @transaction.atomic
@@ -156,6 +178,10 @@ def sync_market_discovery(slug: str, *, adapter=None, limit: int = 50) -> dict:
         opportunity = adapter.normalize_job(raw)
         if not opportunity.external_id or opportunity.reward < 0:
             continue
+        opportunity = replace(
+            opportunity,
+            raw=_trusted_discovery_payload(definition, opportunity.raw),
+        )
         job, _ = ingest_opportunity(market, opportunity)
         result = qualify_and_shadow_score(job)
         classification = str(result.get("classification") or "UNKNOWN")
