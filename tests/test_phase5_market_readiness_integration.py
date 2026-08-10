@@ -8,7 +8,12 @@ from django.utils import timezone
 
 from control.management.commands.run_revenue_watcher import Command as RevenueWatcherCommand
 from control.models import MarketHealth, Marketplace
-from control.services.market_readiness import market_readiness
+from control.services.dealwork_runtime import attempt_dealwork_bids
+from control.services.market_readiness import (
+    acquisition_cash_gate_required,
+    acquisition_profile_blockers,
+    market_readiness,
+)
 from control.services.markets import bootstrap_market_integrations
 
 
@@ -57,6 +62,7 @@ class MarketReadinessDomainTests(TestCase):
         self.assertFalse(row["cash_ready"])
         self.assertEqual(row["cash_blockers"], ["PAYOUT_NOT_READY", "SOUTH_AFRICA_NOT_VERIFIED"])
         self.assertTrue(row["autonomy_ready"])
+        self.assertFalse(acquisition_cash_gate_required(market))
 
     def test_non_wallet_market_still_requires_cash_route_for_live_proving(self):
         market = self._make_connected_live("callboard")
@@ -80,6 +86,7 @@ class MarketReadinessDomainTests(TestCase):
         self.assertIn("CASH_ROUTE_REQUIRED_FOR_LIVE_PROVING", row["live_test_blockers"])
         self.assertFalse(row["cash_ready"])
         self.assertFalse(row["autonomy_ready"])
+        self.assertTrue(acquisition_cash_gate_required(market))
 
     def test_dealwork_kya_is_a_work_blocker_not_a_banking_blocker(self):
         market = self._make_connected_live("dealwork")
@@ -89,6 +96,39 @@ class MarketReadinessDomainTests(TestCase):
         self.assertNotIn("PAYOUT_NOT_READY", row["work_blockers"])
         self.assertIn("PAYOUT_NOT_READY", row["cash_blockers"])
 
+    def test_dealwork_acquisition_filters_only_reviewed_deferred_blockers(self):
+        market = Marketplace.objects.get(slug="dealwork")
+        blockers = [
+            "DEALWORK_KYA_NOT_VERIFIED",
+            "WITHDRAWAL_RAIL_NOT_VERIFIED",
+            "ACCOUNT_PAYOUT_NOT_VERIFIED",
+            "SOUTH_AFRICA_NON_CRYPTO_PAYOUT_NOT_VERIFIED",
+            "SERVICE_LISTING_CONTRACT_NOT_PROVED",
+            "UNEXPECTED_NEW_SAFETY_BLOCKER",
+        ]
+        filtered = acquisition_profile_blockers(market, blockers)
+        self.assertEqual(filtered, [
+            "DEALWORK_KYA_NOT_VERIFIED",
+            "UNEXPECTED_NEW_SAFETY_BLOCKER",
+        ])
+
+    def test_dealwork_bid_cycle_is_inert_until_all_autonomy_gates_are_armed(self):
+        market = self._make_connected_live("dealwork")
+        profile = market.integration_profile
+        profile.blockers = [code for code in profile.blockers if code != "DEALWORK_KYA_NOT_VERIFIED"]
+        profile.save(update_fields=["blockers", "updated_at"])
+
+        with patch.dict(os.environ, {
+            "AUTONOMOUS_MODE": "OFF",
+            "DEALWORK_AUTO_ACQUIRE_ENABLED": "0",
+        }, clear=False), patch("control.services.dealwork_runtime.configured_adapter") as adapter:
+            result = attempt_dealwork_bids()
+
+        adapter.assert_not_called()
+        self.assertFalse(result["enabled"])
+        self.assertFalse(result["mutation_performed"])
+        self.assertIn("AUTONOMY_NOT_MUTATING", result["reason_codes"])
+
 
 class DealworkWatcherTests(TestCase):
     def test_disabled_dealwork_watcher_is_inert(self):
@@ -96,22 +136,19 @@ class DealworkWatcherTests(TestCase):
             result = RevenueWatcherCommand()._dealwork_cycle(limit=10)
         self.assertEqual(result, {"enabled": False, "mutation_performed": False})
 
-    def test_enabled_dealwork_watcher_only_runs_shadow_discovery(self):
+    def test_enabled_dealwork_watcher_uses_bounded_runtime_cycle(self):
+        expected = {
+            "enabled": True,
+            "discovery": {"discovered": 3, "mutation_performed": False},
+            "acquisition": {"submitted": 0, "mutation_performed": False},
+            "mutation_performed": False,
+        }
         with patch.dict(os.environ, {"DEALWORK_WATCHER_ENABLED": "1"}, clear=False), patch(
-            "control.services.markets.sync_market_discovery",
-            return_value={
-                "market": "dealwork",
-                "discovered": 3,
-                "buyer_demand": 2,
-                "scored": 2,
-                "qualification_counts": {"BUYER_DEMAND": 2, "UNFUNDED": 1},
-                "jobs_total": 3,
-            },
-        ) as sync:
+            "control.services.dealwork_runtime.run_dealwork_cycle",
+            return_value=expected,
+        ) as cycle:
             result = RevenueWatcherCommand()._dealwork_cycle(limit=10)
 
-        sync.assert_called_once_with("dealwork", limit=10)
-        self.assertTrue(result["enabled"])
+        cycle.assert_called_once_with(limit=10)
+        self.assertEqual(result, expected)
         self.assertFalse(result["mutation_performed"])
-        self.assertEqual(result["buyer_demand"], 2)
-        self.assertEqual(result["scored"], 2)
