@@ -9,7 +9,6 @@ from django.views.decorators.http import require_GET, require_POST
 from control.models import AuditEvent
 from control.services.auth_security import (
     Throttled,
-    client_ip,
     ensure_not_throttled,
     record_failure,
     reset,
@@ -54,9 +53,9 @@ def payment_rail_proof_api(request, slug):
     if not owner:
         return JsonResponse({"error": "unauthorized"}, status=401)
 
-    subject = f"{owner.pk}|{client_ip(request)}"
+    subject = str(owner.pk)
     try:
-        ensure_not_throttled("treasury_reauth", subject)
+        ensure_not_throttled("reauth_user", subject)
     except Throttled:
         AuditEvent.objects.create(
             severity="WARN",
@@ -70,7 +69,7 @@ def payment_rail_proof_api(request, slug):
     password = str(data.pop("password", "") or "")
     code = str(data.pop("code", "") or "")
     if not verify_reauthentication(owner, password, code):
-        record_failure("treasury_reauth", subject)
+        record_failure("reauth_user", subject)
         AuditEvent.objects.create(
             severity="WARN",
             event_type="treasury.payment_rail_update_reauth_failed",
@@ -79,7 +78,7 @@ def payment_rail_proof_api(request, slug):
         )
         return JsonResponse({"error": "reauthentication_failed"}, status=401)
 
-    reset("treasury_reauth", subject)
+    reset("reauth_user", subject)
     try:
         row = update_payment_rail_proof(
             slug,
