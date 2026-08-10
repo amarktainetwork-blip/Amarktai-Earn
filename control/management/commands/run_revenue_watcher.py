@@ -32,21 +32,12 @@ class Command(BaseCommand):
         return result
 
     def _dealwork_cycle(self, *, limit: int) -> dict:
-        """Discover, qualify and shadow-score Dealwork without remote mutation.
-
-        External Dealwork bidding is intentionally a separate LOW_RISK gate. The
-        watcher may prove current demand while global autonomy is OFF/SHADOW, but
-        this cycle never claims or bids by itself.
-        """
         if os.getenv("DEALWORK_WATCHER_ENABLED", "0") != "1":
             return {"enabled": False, "mutation_performed": False}
 
-        from control.services.markets import sync_market_discovery
+        from control.services.dealwork_runtime import run_dealwork_cycle
 
-        result = sync_market_discovery("dealwork", limit=limit)
-        result["enabled"] = True
-        result["mutation_performed"] = False
-        return result
+        return run_dealwork_cycle(limit=limit)
 
     def handle(self, *args, **options):
         interval = max(15, options["interval"] or int(os.getenv("REVENUE_WATCHER_INTERVAL_SECONDS", "60")))
