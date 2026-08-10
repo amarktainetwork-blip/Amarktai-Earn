@@ -4,5 +4,6 @@ python manage.py production_check
 python manage.py migrate --noinput
 python manage.py bootstrap_revenue_catalog
 python manage.py bootstrap_channel_packages
+python manage.py bootstrap_channel_commercial_pricing
 python manage.py collectstatic --noinput
 exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers "${GUNICORN_WORKERS:-3}" --timeout "${GUNICORN_TIMEOUT:-120}"
