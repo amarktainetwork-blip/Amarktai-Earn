@@ -15,6 +15,7 @@ from control.models import (
 )
 from control.services.demand_pipeline import qualify_and_shadow_score
 from control.services.jobs import ingest_opportunity
+from control.services.market_control import DEALWORK_KYA_BLOCKER, overlay_operator_profile_truth
 from markets.algora.client import AlgoraAdapter
 from markets.callboard.client import CallboardAdapter
 from markets.catalog import BY_SLUG, DEFINITIONS, MarketDefinition
@@ -68,13 +69,30 @@ def bootstrap_market_integrations() -> dict[str, int]:
             },
         )
         created += int(was_created)
+
+        existing_profile = MarketIntegrationProfile.objects.filter(marketplace=market).first()
+        evidence, blockers = overlay_operator_profile_truth(
+            definition.slug,
+            base_evidence=definition.evidence,
+            base_blockers=definition.blockers,
+            existing_evidence=existing_profile.evidence if existing_profile else None,
+        )
+        preserved_acquisition = bool(
+            existing_profile
+            and existing_profile.autonomous_acquisition_enabled
+            and definition.capabilities.policy_verified
+            and market.enabled
+            and market.status == Marketplace.Status.LIVE
+            and not (definition.slug == "dealwork" and DEALWORK_KYA_BLOCKER in blockers)
+        )
+
         profile, profile_created = MarketIntegrationProfile.objects.update_or_create(
             marketplace=market,
             defaults={
                 "adapter_name": definition.adapter_path,
                 "adapter_version": "v1",
                 "source_wired": True,
-                "autonomous_acquisition_enabled": False,
+                "autonomous_acquisition_enabled": preserved_acquisition,
                 "policy_verified": bool(definition.capabilities.policy_verified),
                 "docs_checked_at": timezone.now(),
                 "auth_method": definition.auth_method,
@@ -82,8 +100,8 @@ def bootstrap_market_integrations() -> dict[str, int]:
                 "payout_method": definition.payout_method,
                 "capabilities": definition.capabilities.as_dict(),
                 "source_urls": list(definition.source_urls),
-                "blockers": list(definition.blockers),
-                "evidence": definition.evidence,
+                "blockers": blockers,
+                "evidence": evidence,
             },
         )
         updated += int(not profile_created)

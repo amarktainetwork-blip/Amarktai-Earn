@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from control import banking_views, channel_admin_views, channel_views, lemon_views, views, webhooks
+from control import banking_views, channel_admin_views, channel_views, lemon_views, market_views, views, webhooks
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -8,10 +8,14 @@ urlpatterns = [
     path("login/", views.login_page, name="login"),
     path("", views.overview_page, name="overview"),
     path("ops/banking/", banking_views.banking_page, name="banking"),
+    path("ops/markets/", market_views.markets_page, name="markets"),
     path("ops/<slug:section>/", views.ops_page, name="ops_page"),
     path("api/banking/rails", banking_views.payment_rails_api, name="payment_rails_api"),
     path("api/banking/rails/<slug:slug>/proof", banking_views.payment_rail_proof_api, name="payment_rail_proof_api"),
     path("api/banking/routes/<slug:market_slug>/proof", banking_views.market_settlement_route_api, name="market_settlement_route_api"),
+    path("api/markets/controls", market_views.market_controls_api, name="market_controls_api"),
+    path("api/markets/<slug:market_slug>/proof", market_views.market_compliance_proof_api, name="market_compliance_proof_api"),
+    path("api/markets/<slug:market_slug>/operating-state", market_views.market_operating_state_api, name="market_operating_state_api"),
     path("api/channels/priority-launch", channel_views.priority_channel_launch_api, name="priority_channel_launch_api"),
     path("api/channels/publication-exports", channel_views.priority_channel_publication_exports_api, name="priority_channel_publication_exports_api"),
     path("api/channels/commercial-pricing", channel_views.priority_channel_commercial_pricing_api, name="priority_channel_commercial_pricing_api"),
