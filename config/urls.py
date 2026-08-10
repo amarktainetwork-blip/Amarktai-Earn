@@ -1,12 +1,13 @@
 from django.contrib import admin
 from django.urls import path
-from control import banking_views, channel_admin_views, channel_views, lemon_views, market_views, views, webhooks
+from control import banking_views, channel_admin_views, channel_views, lemon_views, market_views, public_views, views, webhooks
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("healthz", views.healthz, name="healthz"),
     path("login/", views.login_page, name="login"),
-    path("", views.overview_page, name="overview"),
+    path("", public_views.landing_page, name="landing"),
+    path("ops/overview/", views.overview_page, name="overview"),
     path("ops/banking/", banking_views.banking_page, name="banking"),
     path("ops/markets/", market_views.markets_page, name="markets"),
     path("ops/<slug:section>/", views.ops_page, name="ops_page"),
