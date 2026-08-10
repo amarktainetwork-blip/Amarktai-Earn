@@ -244,31 +244,35 @@ class ChannelCompletionIntegrationTests(TestCase):
             authenticated_market_identity=True,
             authenticated_at=timezone.now(),
         )
+        second, _ = receive_inbound_order(
+            marketplace=listing.marketplace,
+            listing=listing,
+            remote_order_id="manual-test-order-2",
+            idempotency_key="manual-test-order-2",
+            payload={
+                "buyer_reference": "fixture-buyer",
+                "requirements": {"json_payload": '[{"a":2}]'},
+                "input_assets": [],
+                "quoted_price": "1.25",
+                "platform_fee": "0.31",
+                "currency": "USD",
+                "funding_state": "FUNDED",
+            },
+            authenticated_market_identity=True,
+            authenticated_at=timezone.now(),
+        )
         self.assertEqual(order.status, InboundOrder.Status.READY)
+        self.assertEqual(second.status, InboundOrder.Status.READY)
         with patch.dict(os.environ, {"AUTONOMOUS_MODE": "MANUAL", "INBOUND_SERVICE_AUTO_ACCEPT_ENABLED": "0"}, clear=False):
             accepted = accept_inbound_order(order.id, actor="test-owner", manual=True)
             self.assertEqual(accepted.status, InboundOrder.Status.ACCEPTED)
-            second, _ = receive_inbound_order(
-                marketplace=listing.marketplace,
-                listing=listing,
-                remote_order_id="manual-test-order-2",
-                idempotency_key="manual-test-order-2",
-                payload={
-                    "buyer_reference": "fixture-buyer",
-                    "requirements": {"json_payload": '[{"a":2}]'},
-                    "input_assets": [],
-                    "quoted_price": "1.25",
-                    "platform_fee": "0.31",
-                    "currency": "USD",
-                    "funding_state": "FUNDED",
-                },
-                authenticated_market_identity=True,
-                authenticated_at=timezone.now(),
-            )
+            second.refresh_from_db()
             self.assertEqual(second.status, InboundOrder.Status.READY)
             auto = auto_accept_ready_inbound_orders(limit=10)
             self.assertEqual(auto["accepted"], 0)
             self.assertGreaterEqual(auto["skipped"], 1)
+            second.refresh_from_db()
+            self.assertEqual(second.status, InboundOrder.Status.READY)
 
     def test_rapidapi_proxy_auth_idempotency_and_inline_asset_ingress(self):
         self._publish_ready_package("rapidapi-json-to-csv", public_price="1.25")
