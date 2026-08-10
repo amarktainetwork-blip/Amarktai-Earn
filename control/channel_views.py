@@ -29,6 +29,7 @@ from control.services.inbound_controller import (
     InboundControllerError,
     accept_inbound_order,
     dispatch_accepted_inbound_orders,
+    record_inbound_buyer_acceptance,
     record_manual_inbound_delivery,
 )
 from control.services.inbound_portal import (
@@ -110,8 +111,6 @@ def priority_channel_commercial_price_api(request, package_slug):
     data = _json(request)
     try:
         row = set_owner_commercial_price(package_slug, price=data.get("price"), actor=str(owner.pk))
-    except InboundOrder.DoesNotExist:
-        return JsonResponse({"error": "unknown_package"}, status=404)
     except Exception as exc:
         if exc.__class__.__name__ == "DoesNotExist":
             return JsonResponse({"error": "unknown_package"}, status=404)
@@ -209,6 +208,25 @@ def inbound_order_delivery_api(request, order_id):
         order = record_manual_inbound_delivery(
             order_id,
             remote_reference=str(data.get("remote_reference") or ""),
+            actor=str(owner.pk),
+        )
+    except InboundOrder.DoesNotExist:
+        return JsonResponse({"error": "unknown_order"}, status=404)
+    except (InboundControllerError, ValueError) as exc:
+        return JsonResponse({"error": str(exc)}, status=409)
+    return JsonResponse({"ok": True, "order": _owner_order_snapshot(order)})
+
+
+@require_POST
+def inbound_order_buyer_acceptance_api(request, order_id):
+    owner = _require_owner(request)
+    if not owner:
+        return JsonResponse({"error": "unauthorized"}, status=401)
+    data = _json(request)
+    try:
+        order = record_inbound_buyer_acceptance(
+            order_id,
+            evidence_reference=str(data.get("evidence_reference") or ""),
             actor=str(owner.pk),
         )
     except InboundOrder.DoesNotExist:
