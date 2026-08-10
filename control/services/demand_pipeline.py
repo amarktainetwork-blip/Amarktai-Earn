@@ -5,8 +5,10 @@ from decimal import Decimal, ROUND_HALF_UP
 import os
 from typing import Any
 
+from django.db import transaction
+
 from control.economics import EconomicsInput
-from control.models import AuditEvent, Job
+from control.models import AuditEvent, Job, JobScore
 from control.services.acquisition_preflight import infer_operation, run_acquisition_preflight
 from control.services.jobs import score_and_persist
 from workers.registry import WorkerRegistryError, operation_spec
@@ -123,6 +125,7 @@ def qualify_payload(payload: dict, *, title: str = "", reward: Decimal = Decimal
     structured = _structured_values(
         payload,
         (
+            "_amarktai_source_type",
             "source_type", "sourceType", "listing_type", "listingType", "type", "kind",
             "job_mode", "jobMode", "relationship", "poster_type", "posterType", "role",
         ),
@@ -224,6 +227,50 @@ def qualify_payload(payload: dict, *, title: str = "", reward: Decimal = Decimal
     )
 
 
+@transaction.atomic
+def _invalidate_non_actionable_shadow_state(job: Job, qualification: DemandQualification) -> None:
+    """Remove stale economic/action state only while the job is still speculative.
+
+    A refresh may turn an EXPECTED opportunity into an unfunded, incomplete or
+    seller-side listing. That must immediately stop it entering portfolio ranking.
+    Jobs already acquired/awarded are obligations and are deliberately not demoted.
+    """
+    if qualification.actionable or job.state not in {Job.State.DISCOVERED, Job.State.EXPECTED}:
+        return
+
+    score_deleted = JobScore.objects.filter(job=job).delete()[0]
+    invalidated_preflights = 0
+    for preflight in job.acquisition_preflights.all():
+        reasons = list(preflight.reason_codes or [])
+        reasons.extend(["DEMAND_NO_LONGER_ACTIONABLE", *qualification.reason_codes])
+        preflight.eligible = False
+        preflight.allowed = False
+        preflight.reason_codes = list(dict.fromkeys(reasons))
+        preflight.save(update_fields=["eligible", "allowed", "reason_codes", "updated_at"])
+        invalidated_preflights += 1
+
+    demoted = False
+    if job.state == Job.State.EXPECTED:
+        job.state = Job.State.DISCOVERED
+        job.save(update_fields=["state", "updated_at"])
+        demoted = True
+
+    if score_deleted or invalidated_preflights or demoted:
+        AuditEvent.objects.create(
+            event_type="job.shadow_state_invalidated",
+            actor="market-scout",
+            metadata={
+                "job_id": str(job.id),
+                "market": job.marketplace.slug,
+                "classification": qualification.classification,
+                "reason_codes": list(qualification.reason_codes),
+                "score_deleted": bool(score_deleted),
+                "preflights_invalidated": invalidated_preflights,
+                "demoted_to_discovered": demoted,
+            },
+        )
+
+
 def qualify_job(job: Job, *, persist: bool = True) -> DemandQualification:
     payload = job.normalized_payload if isinstance(job.normalized_payload, dict) else {}
     qualification = qualify_payload(payload, title=job.title, reward=Decimal(str(job.reward)))
@@ -249,6 +296,8 @@ def qualify_job(job: Job, *, persist: bool = True) -> DemandQualification:
                 "reason_codes": list(qualification.reason_codes),
             },
         )
+        if not qualification.actionable:
+            _invalidate_non_actionable_shadow_state(job, qualification)
     return qualification
 
 
@@ -319,6 +368,7 @@ def market_economics(job: Job) -> MarketEconomics:
 def shadow_score_job(job: Job, qualification: DemandQualification | None = None) -> dict[str, Any]:
     qualification = qualification or qualify_job(job)
     if not qualification.actionable:
+        _invalidate_non_actionable_shadow_state(job, qualification)
         return {
             "scored": False,
             "classification": qualification.classification,
