@@ -113,8 +113,7 @@ def _apply_effective_profile(profile: MarketIntegrationProfile, record: dict) ->
     checks = record["checks"]
     seller_capabilities = dict(profile.seller_capabilities or {})
     for capability, check in definition["capabilities"].items():
-        if checks.get(check):
-            seller_capabilities[capability] = True
+        seller_capabilities[capability] = bool(checks.get(check))
 
     blockers = list(profile.blockers or [])
     cleared = set()
