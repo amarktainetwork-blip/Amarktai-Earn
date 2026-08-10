@@ -26,6 +26,19 @@ WORK_BLOCKERS_BY_MARKET = {
     "algora": frozenset({"SOLVER_MUTATION_AUTH_NOT_VERIFIED"}),
 }
 
+# Profile blocker codes that belong to settlement/listing policy rather than the
+# ability to do posted work. Unknown blocker codes are deliberately NOT listed:
+# unexpected new blockers fail closed in the work domain until reviewed.
+NON_WORK_PROFILE_BLOCKERS = frozenset({
+    "WITHDRAWAL_RAIL_NOT_VERIFIED",
+    "ACCOUNT_PAYOUT_NOT_VERIFIED",
+    "SOUTH_AFRICA_NON_CRYPTO_PAYOUT_NOT_VERIFIED",
+    "SERVICE_LISTING_CONTRACT_NOT_PROVED",
+    "SOUTH_AFRICA_BANK_PAYOUT_NOT_VERIFIED",
+    "ACCOUNT_BANK_PAYOUT_NOT_VERIFIED",
+    "CRYPTO_PAYOUT_ROUTES_PROHIBITED",
+})
+
 # Dealwork can prove the work lifecycle while approved earnings remain in its
 # platform wallet. These blockers are therefore deferred only for posted-job
 # acquisition; they continue to block cash readiness and seller storefronts.
@@ -63,9 +76,8 @@ def acquisition_cash_gate_required(market: Marketplace) -> bool:
 def acquisition_profile_blockers(market: Marketplace, blockers) -> list[str]:
     """Return profile blockers relevant to posted-job acquisition.
 
-    All markets retain their existing blockers by default. Dealwork alone defers
-    the reviewed withdrawal/storefront-only blockers during platform-wallet proving.
-    KYA and every other unknown blocker remain hard acquisition blockers.
+    Dealwork alone defers its reviewed withdrawal/storefront-only blockers during
+    platform-wallet proving. Unknown blocker codes always survive and fail closed.
     """
     values = [str(code) for code in (blockers or [])]
     if market.slug != "dealwork":
@@ -102,7 +114,12 @@ def market_readiness(market: Marketplace) -> dict:
         work_blockers.append("MARKET_RUNTIME_NOT_COMPATIBLE")
     if profile:
         relevant = WORK_BLOCKERS_BY_MARKET.get(market.slug, frozenset())
-        work_blockers.extend(code for code in (profile.blockers or []) if code in relevant)
+        profile_codes = [str(code) for code in (profile.blockers or []) if str(code)]
+        work_blockers.extend(code for code in profile_codes if code in relevant)
+        work_blockers.extend(
+            code for code in profile_codes
+            if code not in relevant and code not in NON_WORK_PROFILE_BLOCKERS
+        )
     else:
         work_blockers.append("MARKET_INTEGRATION_PROFILE_MISSING")
 
@@ -116,14 +133,18 @@ def market_readiness(market: Marketplace) -> dict:
         cash_blockers.append("SOUTH_AFRICA_NOT_VERIFIED")
     cash_ready = not cash_blockers
 
-    proving_blockers = list(work_blockers)
+    platform_wallet_proving = market.slug in PLATFORM_WALLET_PROVING_MARKETS
+    live_entry_blockers = list(work_blockers)
+    if not cash_ready and not platform_wallet_proving:
+        live_entry_blockers.append("CASH_ROUTE_REQUIRED_FOR_LIVE_PROVING")
+    live_entry_blockers = list(dict.fromkeys(live_entry_blockers))
+    live_entry_ready = not live_entry_blockers
+
+    proving_blockers = list(live_entry_blockers)
     if not market.enabled:
         proving_blockers.append("MARKET_DISABLED")
     if market.status != Marketplace.Status.LIVE:
         proving_blockers.append("MARKET_NOT_LIVE")
-    platform_wallet_proving = market.slug in PLATFORM_WALLET_PROVING_MARKETS
-    if not cash_ready and not platform_wallet_proving:
-        proving_blockers.append("CASH_ROUTE_REQUIRED_FOR_LIVE_PROVING")
     proving_blockers = list(dict.fromkeys(proving_blockers))
     live_test_ready = not proving_blockers
 
@@ -144,6 +165,8 @@ def market_readiness(market: Marketplace) -> dict:
         "market": market.slug,
         "work_ready": work_ready,
         "work_blockers": work_blockers,
+        "live_entry_ready": live_entry_ready,
+        "live_entry_blockers": live_entry_blockers,
         "live_test_ready": live_test_ready,
         "live_test_blockers": proving_blockers,
         "platform_wallet_proving": platform_wallet_proving,
@@ -160,7 +183,7 @@ def market_readiness(market: Marketplace) -> dict:
         "policy_current": policy_current,
         "policy_verified": policy_verified,
         "truth": (
-            "Work readiness, live proving and cash readiness are separate. "
+            "Work readiness, live proving, cash readiness and autonomy are separate. "
             "Platform-wallet proving never counts as settled cash and never opens Banking."
         ),
     }
