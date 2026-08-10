@@ -57,7 +57,11 @@ class ChannelCompletionStdlibTests(unittest.TestCase):
         self.assertIn("if not ip.is_global", runtime)
         self.assertIn("robots.txt", runtime)
         self.assertIn("MAX_BYTES", runtime)
+        self.assertIn('client.stream("GET"', runtime)
+        self.assertIn("response.aiter_bytes()", runtime)
+        self.assertIn("if size > max_bytes", runtime)
         self.assertIn("Actor.push_data", runtime)
+        self.assertNotIn("response.content", runtime)
         self.assertNotIn("POSTGRES", runtime)
         self.assertNotIn("REDIS", runtime)
 
