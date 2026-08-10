@@ -495,7 +495,12 @@ def missing_buyer_inputs(order: InboundOrder) -> list[str]:
 
 @transaction.atomic
 def refresh_order_after_intake(order_id) -> InboundOrder:
-    order = InboundOrder.objects.select_related("job", "listing__offering", "marketplace").select_for_update().get(pk=order_id)
+    order = (
+        InboundOrder.objects
+        .select_related("job", "listing__offering", "marketplace")
+        .select_for_update(of=("self",))
+        .get(pk=order_id)
+    )
     missing = missing_buyer_inputs(order)
     if missing:
         order.status = InboundOrder.Status.PREFLIGHT_BLOCKED
