@@ -7,8 +7,9 @@ from django.core.management import call_command
 from django.test import TestCase
 
 from control.jwt_auth import issue_access
-from control.models import Marketplace, OwnerSecurityProfile, SystemSetting
+from control.models import MarketServiceListing, Marketplace, OwnerSecurityProfile, ServiceOffering, SystemSetting
 from control.services.channel_launch import priority_channel_launch_snapshot
+from control.services.channel_packages import PACKAGE_SPECS, priority_channel_package_snapshot
 from control.services.settlement_routes import SETTLEMENT_ROUTE_SETTING_KEY
 from markets.revenue_catalog import bootstrap_revenue_market_catalog
 
@@ -55,6 +56,71 @@ class Phase3ChannelIntegrationTests(TestCase):
         second = json.loads(second_out.getvalue().strip().splitlines()[-1])
         self.assertEqual(second["created"], 0)
         self.assertEqual(Marketplace.objects.filter(slug__in=priority).count(), 4)
+
+    def test_priority_channel_packages_materialize_as_local_drafts_and_are_idempotent(self):
+        package_slugs = {spec.slug for spec in PACKAGE_SPECS}
+
+        first_out = StringIO()
+        call_command("bootstrap_channel_packages", stdout=first_out)
+        first = json.loads(first_out.getvalue().strip().splitlines()[-1])
+        self.assertEqual(first["packages"], len(PACKAGE_SPECS))
+        self.assertEqual(first["offerings_created"], len(PACKAGE_SPECS))
+        self.assertEqual(first["listings_created"], len(PACKAGE_SPECS))
+
+        offerings = ServiceOffering.objects.filter(slug__in=package_slugs)
+        self.assertEqual(offerings.count(), len(PACKAGE_SPECS))
+        self.assertFalse(offerings.filter(enabled=True).exists())
+        self.assertFalse(offerings.filter(accepting_orders=True).exists())
+
+        listings = MarketServiceListing.objects.filter(offering__slug__in=package_slugs).select_related("offering", "marketplace")
+        self.assertEqual(listings.count(), len(PACKAGE_SPECS))
+        self.assertFalse(listings.exclude(status=MarketServiceListing.Status.DRAFT).exists())
+        self.assertFalse(listings.exclude(remote_listing_id="").exists())
+        self.assertFalse(listings.exclude(remote_reference="").exists())
+
+        rapidapi = list(listings.filter(marketplace__slug="rapidapi"))
+        self.assertEqual(len(rapidapi), 6)
+        self.assertTrue(all(row.pricing_model == ServiceOffering.PricingModel.PER_CALL for row in rapidapi))
+        self.assertTrue(all(str(row.offering.platform_fee_rate) == "0.250000" for row in rapidapi))
+        self.assertTrue(all(row.published_price > 0 for row in rapidapi))
+
+        apify = listings.get(offering__slug="apify-website-data-extractor")
+        self.assertEqual(apify.pricing_model, ServiceOffering.PricingModel.PER_UNIT)
+        self.assertEqual(str(apify.published_price), "0.00")
+        self.assertIn(
+            "EXTERNAL_EXECUTION_COST_PROFILE_NOT_PROVEN",
+            apify.platform_metadata["channel_package"]["pricing_blockers"],
+        )
+        self.assertEqual(apify.platform_metadata["channel_package"]["execution_placement"], "APIFY")
+
+        lemon_subscription = listings.get(offering__slug="lemon-seo-subscription")
+        self.assertEqual(lemon_subscription.pricing_model, ServiceOffering.PricingModel.SUBSCRIPTION)
+        self.assertGreater(lemon_subscription.published_price, 0)
+
+        package_snapshot = priority_channel_package_snapshot()
+        self.assertEqual(package_snapshot["meta"]["total_packages"], len(PACKAGE_SPECS))
+        self.assertEqual(package_snapshot["meta"]["prepared_packages"], len(PACKAGE_SPECS))
+        self.assertEqual(package_snapshot["meta"]["price_ready_packages"], len(PACKAGE_SPECS) - 1)
+        self.assertEqual(package_snapshot["meta"]["published_packages"], 0)
+        self.assertFalse(package_snapshot["meta"]["external_mutation_allowed"])
+        self.assertTrue(all(row["external_mutation_allowed"] is False for row in package_snapshot["rows"]))
+
+        launch = priority_channel_launch_snapshot()
+        self.assertEqual(launch["meta"]["total_packages"], len(PACKAGE_SPECS))
+        self.assertEqual(launch["meta"]["prepared_packages"], len(PACKAGE_SPECS))
+        self.assertEqual(launch["meta"]["activation_ready"], 0)
+        self.assertEqual(
+            {row["market"]: row["package_count"] for row in launch["rows"]},
+            {"contra": 5, "rapidapi": 6, "apify-store": 1, "lemon-squeezy": 5},
+        )
+
+        second_out = StringIO()
+        call_command("bootstrap_channel_packages", stdout=second_out)
+        second = json.loads(second_out.getvalue().strip().splitlines()[-1])
+        self.assertEqual(second["offerings_created"], 0)
+        self.assertEqual(second["listings_created"], 0)
+        self.assertEqual(second["unchanged"], len(PACKAGE_SPECS))
+        self.assertEqual(MarketServiceListing.objects.filter(offering__slug__in=package_slugs).count(), len(PACKAGE_SPECS))
 
     def test_banking_snapshot_includes_fail_closed_market_settlement_routes(self):
         self.authenticate()
