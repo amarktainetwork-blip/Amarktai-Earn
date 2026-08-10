@@ -20,6 +20,17 @@ class OwnerUIIntegrationTests(TestCase):
     def authenticate(self):
         self.client.cookies["amarktai_access"] = issue_access(self.owner)
 
+    def test_public_root_is_branded_landing_page_without_owner_runtime_payload(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Digital work,")
+        self.assertContains(response, "Amarktai Earn is built to discover qualified demand")
+        self.assertContains(response, 'href="/login/"')
+        self.assertContains(response, "Amarktai Network")
+        self.assertNotContains(response, 'data-section="overview"')
+        self.assertNotContains(response, "/api/ops/")
+        self.assertNotContains(response, "navJobs")
+
     def test_login_page_is_branded_step_by_step_and_recovery_remains_secondary(self):
         response = self.client.get("/login/")
         self.assertEqual(response.status_code, 200)
@@ -33,6 +44,12 @@ class OwnerUIIntegrationTests(TestCase):
         self.assertIn("hidden", html[html.index('id="verificationStep"') - 80:html.index('id="verificationStep"') + 140])
         self.assertNotIn("localStorage", html)
 
+    def test_authenticated_owner_login_redirects_to_private_overview(self):
+        self.authenticate()
+        response = self.client.get("/login/")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, "/ops/overview/")
+
     def test_login_javascript_preserves_existing_auth_endpoints_and_never_uses_local_storage(self):
         script_path = Path(finders.find("control/login.js"))
         script = script_path.read_text(encoding="utf-8")
@@ -44,7 +61,7 @@ class OwnerUIIntegrationTests(TestCase):
         self.assertNotIn("sessionStorage", script)
 
     def test_unauthenticated_owner_pages_redirect_to_login(self):
-        for path in ("/", "/ops/jobs/", "/ops/agents/", "/ops/money/", "/ops/markets/", "/ops/alerts/", "/ops/system/"):
+        for path in ("/ops/overview/", "/ops/jobs/", "/ops/agents/", "/ops/money/", "/ops/markets/", "/ops/alerts/", "/ops/system/"):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 302)
@@ -56,10 +73,11 @@ class OwnerUIIntegrationTests(TestCase):
             "jobs", "agents", "money", "markets", "alerts", "system", "genx", "nodes",
             "storage", "performance", "logs", "security", "settings", "live-work", "earnings", "treasury",
         )
-        overview = self.client.get("/")
+        overview = self.client.get("/ops/overview/")
         self.assertEqual(overview.status_code, 200)
         self.assertContains(overview, 'data-section="overview"')
         self.assertContains(overview, "System &amp; Settings")
+        self.assertContains(overview, 'href="/ops/overview/"')
         for section in sections:
             with self.subTest(section=section):
                 response = self.client.get(f"/ops/{section}/")
@@ -70,6 +88,7 @@ class OwnerUIIntegrationTests(TestCase):
         self.assertIsNotNone(finders.find("control/app.css"))
         self.assertIsNotNone(finders.find("control/app.js"))
         self.assertIsNotNone(finders.find("control/login.css"))
+        self.assertIsNotNone(finders.find("control/landing.css"))
         app_styles = Path(finders.find("control/app.css")).read_text(encoding="utf-8")
         app_script = Path(finders.find("control/app.js")).read_text(encoding="utf-8")
         self.assertIn("[hidden]{display:none!important}", app_styles)
