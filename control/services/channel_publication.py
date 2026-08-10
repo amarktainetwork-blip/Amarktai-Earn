@@ -59,9 +59,21 @@ def _decimal(value: Any) -> Decimal:
 def _listing(package_slug: str, *, for_update: bool = False) -> MarketServiceListing:
     if package_slug not in PRIORITY_PACKAGE_SLUGS:
         raise KeyError("unknown_priority_package")
-    query = MarketServiceListing.objects.select_related("offering", "marketplace", "marketplace__integration_profile")
     if for_update:
-        query = query.select_for_update()
+        # Lock only the listing row. Joining the nullable one-to-one integration
+        # profile here makes PostgreSQL reject FOR UPDATE on the outer-join side.
+        # The profile is read separately later inside the same atomic transaction.
+        query = (
+            MarketServiceListing.objects
+            .select_related("offering", "marketplace")
+            .select_for_update(of=("self",))
+        )
+    else:
+        query = MarketServiceListing.objects.select_related(
+            "offering",
+            "marketplace",
+            "marketplace__integration_profile",
+        )
     return query.get(offering__slug=package_slug)
 
 
