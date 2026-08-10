@@ -20,6 +20,9 @@ from control.services.seller_services import receive_inbound_order, run_inbound_
 
 CENT = Decimal("0.01")
 LEMON_MARKET = "lemon-squeezy"
+SUBSCRIPTION_META_TYPE = "LEMON_SUBSCRIPTION_META"
+ORDER_META_TYPE = "LEMON_ORDER_META"
+RENEWAL_META_TYPE = "LEMON_RENEWAL_META"
 
 
 def _decimal(value: Any, default: str = "0") -> Decimal:
@@ -123,6 +126,28 @@ def _order_buyer_reference(payload: dict, fallback: str) -> str:
     return str(custom.get("buyer_reference") or fallback)[:255]
 
 
+def _messages(order: InboundOrder) -> list:
+    return list(order.messages) if isinstance(order.messages, list) else []
+
+
+def _append_meta(order: InboundOrder, kind: str, values: dict) -> None:
+    messages = _messages(order)
+    messages.append({
+        "type": kind,
+        "recorded_at": timezone.now().isoformat(),
+        **values,
+    })
+    order.messages = messages[-200:]
+    order.save(update_fields=["messages", "updated_at"])
+
+
+def _latest_subscription_meta(order: InboundOrder) -> dict:
+    for item in reversed(_messages(order)):
+        if isinstance(item, dict) and item.get("type") == SUBSCRIPTION_META_TYPE:
+            return item
+    return {}
+
+
 def _mark_missing_input(order: InboundOrder) -> list[str]:
     missing = missing_buyer_inputs(order)
     if not missing:
@@ -175,12 +200,12 @@ def _handle_order_created(payload: dict) -> dict:
         authenticated_at=timezone.now(),
     )
     if created:
-        preflight = dict(order.economic_preflight or {})
-        preflight["lemon_order_id"] = remote_id
-        preflight["lemon_test_mode"] = bool(attributes.get("test_mode"))
-        order.economic_preflight = preflight
-        order.save(update_fields=["economic_preflight", "updated_at"])
         order = refresh_order_after_intake(order.id)
+        _append_meta(order, ORDER_META_TYPE, {
+            "lemon_order_id": remote_id,
+            "test_mode": bool(attributes.get("test_mode")),
+        })
+        order.refresh_from_db()
     missing = _mark_missing_input(order)
     return {
         "event_name": "order_created",
@@ -200,10 +225,15 @@ def _initial_order_by_lemon_order_id(order_id: str) -> InboundOrder | None:
 
 
 def _subscription_order(subscription_id: str) -> InboundOrder | None:
-    return InboundOrder.objects.select_related("listing__offering", "marketplace", "job").filter(
+    candidates = InboundOrder.objects.select_related("listing__offering", "marketplace", "job").filter(
         marketplace__slug=LEMON_MARKET,
-        economic_preflight__lemon_subscription_id=str(subscription_id),
-    ).order_by("created_at").first()
+        listing__offering__pricing_model=ServiceOffering.PricingModel.SUBSCRIPTION,
+    ).order_by("created_at")[:2000]
+    for order in candidates:
+        meta = _latest_subscription_meta(order)
+        if str(meta.get("subscription_id") or "") == str(subscription_id) and meta.get("origin") is True:
+            return order
+    return None
 
 
 @transaction.atomic
@@ -220,16 +250,13 @@ def _handle_subscription_state(payload: dict, event_name: str) -> dict:
     if order.listing.offering.pricing_model != ServiceOffering.PricingModel.SUBSCRIPTION:
         raise ChannelIngressError("LEMON_SUBSCRIPTION_PACKAGE_MISMATCH", status=409)
 
-    preflight = dict(order.economic_preflight or {})
-    preflight.update({
-        "lemon_subscription_id": subscription_id,
-        "lemon_subscription_status": str(attributes.get("status") or ""),
-        "lemon_subscription_variant_id": str(attributes.get("variant_id") or ""),
-        "lemon_subscription_event": event_name,
-        "lemon_subscription_updated_at": timezone.now().isoformat(),
+    _append_meta(order, SUBSCRIPTION_META_TYPE, {
+        "origin": True,
+        "subscription_id": subscription_id,
+        "status": str(attributes.get("status") or ""),
+        "variant_id": str(attributes.get("variant_id") or ""),
+        "event_name": event_name,
     })
-    order.economic_preflight = preflight
-    order.save(update_fields=["economic_preflight", "updated_at"])
     AuditEvent.objects.create(
         event_type="channel.lemon_subscription_state",
         actor="lemon-squeezy",
@@ -237,7 +264,7 @@ def _handle_subscription_state(payload: dict, event_name: str) -> dict:
             "event_name": event_name,
             "subscription_id": subscription_id,
             "order_id": str(order.id),
-            "status": preflight["lemon_subscription_status"],
+            "status": str(attributes.get("status") or ""),
         },
     )
     return {"event_name": event_name, "handled": True, "order_id": str(order.id), "subscription_id": subscription_id, "mutation_performed": False}
@@ -294,16 +321,13 @@ def _handle_subscription_payment_success(payload: dict) -> dict:
         authenticated_at=timezone.now(),
     )
     if created:
-        preflight = dict(order.economic_preflight or {})
-        preflight.update({
-            "lemon_subscription_id": subscription_id,
-            "lemon_subscription_invoice_id": invoice_id,
-            "lemon_billing_reason": billing_reason,
-            "lemon_parent_order_id": str(original.id),
-            "lemon_test_mode": bool(attributes.get("test_mode")),
+        _append_meta(order, RENEWAL_META_TYPE, {
+            "subscription_id": subscription_id,
+            "invoice_id": invoice_id,
+            "billing_reason": billing_reason,
+            "parent_order_id": str(original.id),
+            "test_mode": bool(attributes.get("test_mode")),
         })
-        order.economic_preflight = preflight
-        order.save(update_fields=["economic_preflight", "updated_at"])
         run_inbound_economic_preflight(order)
         order.refresh_from_db()
     missing = _mark_missing_input(order)
