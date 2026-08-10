@@ -195,10 +195,14 @@ def set_owner_commercial_price(package_slug: str, *, price: Any, actor: str = "o
 
     amount = _money(_decimal(price))
     floor = _money(_decimal(proposal["minimum_profitable_price"]))
+    commercial_minimum = _money(_decimal(proposal.get("commercial_minimum")))
+    launch_minimum = max(floor, commercial_minimum)
     if amount <= 0:
         raise ValueError("COMMERCIAL_PRICE_MUST_BE_POSITIVE")
     if amount < floor:
         raise ValueError("COMMERCIAL_PRICE_BELOW_PROFITABLE_FLOOR")
+    if amount < launch_minimum:
+        raise ValueError("COMMERCIAL_PRICE_BELOW_LAUNCH_MINIMUM")
 
     record = {
         **proposal,
@@ -220,6 +224,7 @@ def set_owner_commercial_price(package_slug: str, *, price: Any, actor: str = "o
             "price": str(amount),
             "currency": listing.currency,
             "minimum_profitable_price": str(floor),
+            "commercial_minimum": str(commercial_minimum),
             "publication_state": listing.status,
         },
     )
@@ -248,6 +253,7 @@ def commercial_pricing_row(listing: MarketServiceListing) -> dict:
         "state": record.get("state") or "UNPREPARED",
         "source": record.get("source") or "AUTO_PROPOSAL",
         "minimum_profitable_price": record.get("minimum_profitable_price") or str(listing.offering.minimum_profitable_price),
+        "commercial_minimum": record.get("commercial_minimum"),
         "public_price": price,
         "prepared": prepared,
         "owner_approved": record.get("source") == "OWNER_OVERRIDE",
