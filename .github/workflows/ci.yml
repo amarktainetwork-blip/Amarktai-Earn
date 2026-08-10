@@ -80,9 +80,31 @@ jobs:
       - run: python manage.py migrate --noinput
       - run: python manage.py healthcheck
       - run: python -m unittest discover -s tests -p 'test_*_stdlib.py' -q
-      - name: Priority channel lifecycle integration
-        run: python manage.py test tests.test_channel_completion_integration -v 2
+      - name: Priority pricing onboarding publication integration
+        run: >-
+          python manage.py test
+          tests.test_channel_completion_integration.ChannelCompletionIntegrationTests.test_commercial_pricing_is_distinct_from_draft_catalog_price_and_fail_closed
+          tests.test_channel_completion_integration.ChannelCompletionIntegrationTests.test_owner_price_override_cannot_undercut_launch_minimum_and_survives_bootstrap
+          tests.test_channel_completion_integration.ChannelCompletionIntegrationTests.test_onboarding_survives_static_catalog_refresh_without_touching_payout_truth
+          tests.test_channel_completion_integration.ChannelCompletionIntegrationTests.test_publication_is_banking_gated_then_records_owner_remote_evidence
+          -v 2
+      - name: Priority manual and RapidAPI integration
+        if: always()
+        run: >-
+          python manage.py test
+          tests.test_channel_completion_integration.ChannelCompletionIntegrationTests.test_manual_mode_allows_owner_acceptance_but_never_auto_accepts
+          tests.test_channel_completion_integration.ChannelCompletionIntegrationTests.test_rapidapi_proxy_auth_idempotency_and_inline_asset_ingress
+          -v 2
+      - name: Priority Contra Lemon and owner API integration
+        if: always()
+        run: >-
+          python manage.py test
+          tests.test_channel_completion_integration.ChannelCompletionIntegrationTests.test_signed_buyer_intake_completes_missing_contra_dataset
+          tests.test_channel_completion_integration.ChannelCompletionIntegrationTests.test_lemon_subscription_maps_initial_order_and_creates_only_paid_renewal_cycles
+          tests.test_channel_completion_integration.ChannelCompletionIntegrationTests.test_new_owner_control_apis_are_owner_only
+          -v 2
       - name: Priority channel regression integration
+        if: always()
         run: python manage.py test tests.test_channel_completion_regressions_integration -v 2
       - name: Full Django integration matrix
         run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration tests.test_dependency_media_integration tests.test_v1_acceptance_integration tests.test_profit_brain_integration tests.test_multifile_composite_integration tests.test_expanded_workers_integration tests.test_multi_market_adapters_integration tests.test_synthetic_safety_integration tests.test_final_freeze_integration tests.test_owner_ui_integration tests.test_genx_async_session_integration tests.test_two_sided_revenue_integration tests.test_banking_integration tests.test_phase3_channels_integration tests.test_channel_completion_integration tests.test_channel_completion_regressions_integration -v 2
