@@ -9,7 +9,7 @@ from control.services.autonomy import AutonomyMode, current_mode
 from control.services.jobs import transition_job
 from control.services.seller_services import record_inbound_delivery, run_inbound_economic_preflight
 from planning.models import WorkPlan
-from planning.services import dispatch_awarded_jobs
+from planning.services import _queue_execution, plan_awarded_job
 
 
 class InboundControllerError(ValueError):
@@ -85,20 +85,37 @@ def auto_accept_ready_inbound_orders(*, limit: int = 50) -> dict[str, int]:
 
 
 def dispatch_accepted_inbound_orders(*, limit: int = 50) -> dict[str, int]:
-    market_slugs = list(
+    """Plan and queue seller-side orders without entering the AgentGigs submission adapter."""
+    queued = blocked = failed = 0
+    job_ids = list(
         InboundOrder.objects.filter(
             status=InboundOrder.Status.ACCEPTED,
             job__state__in=[Job.State.AWARDED, Job.State.CLAIMED],
         )
-        .values_list("marketplace__slug", flat=True)
-        .distinct()
+        .order_by("updated_at")
+        .values_list("job_id", flat=True)[: max(1, min(int(limit), 200))]
     )
-    totals = {"queued": 0, "blocked": 0, "failed": 0, "submission_queued": 0, "submission_reconciled": 0}
-    for slug in market_slugs:
-        result = dispatch_awarded_jobs(marketplace_slug=slug, limit=limit)
-        for key in totals:
-            totals[key] += int(result.get(key) or 0)
-    return totals
+    for job_id in job_ids:
+        try:
+            plan = plan_awarded_job(job_id)
+            if plan.status == WorkPlan.Status.READY:
+                if _queue_execution(plan):
+                    queued += 1
+                else:
+                    blocked += 1
+            elif plan.status == WorkPlan.Status.BLOCKED:
+                blocked += 1
+            elif plan.status == WorkPlan.Status.FAILED:
+                failed += 1
+        except Exception as exc:
+            failed += 1
+            AuditEvent.objects.create(
+                severity="WARNING",
+                event_type="inbound.planning_failed",
+                actor="revenue-controller",
+                metadata={"job_id": str(job_id), "error_code": exc.__class__.__name__},
+            )
+    return {"queued": queued, "blocked": blocked, "failed": failed, "submission_queued": 0, "submission_reconciled": 0}
 
 
 def _qa_passed_plan(order: InboundOrder):
