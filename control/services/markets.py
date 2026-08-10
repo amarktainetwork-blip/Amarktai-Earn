@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -11,6 +13,7 @@ from django.utils import timezone
 from control.models import (
     Job, MarketHealth, MarketIntegrationProfile, Marketplace, MarketPolicyVersion, PayoutAccount,
 )
+from control.services.demand_pipeline import qualify_and_shadow_score
 from control.services.jobs import ingest_opportunity
 from markets.algora.client import AlgoraAdapter
 from markets.callboard.client import CallboardAdapter
@@ -20,12 +23,33 @@ from markets.opire.client import OpireAdapter
 from markets.taskbounty.client import TaskBountyAdapter
 
 
+_BOUNTY_DISCOVERY_MARKETS = frozenset({"taskbounty", "opire", "algora"})
+
+
 def _policy_hash(definition: MarketDefinition) -> str:
     body = json.dumps(
         {"sources": definition.source_urls, "automation_allowed": definition.automation_allowed, "evidence": definition.evidence},
         sort_keys=True,
     )
     return hashlib.sha256(body.encode()).hexdigest()
+
+
+def _trusted_discovery_payload(definition: MarketDefinition, payload: dict | None) -> dict:
+    """Attach controller-owned source provenance before demand qualification.
+
+    Upstream job/bounty APIs do not all expose a common `type`/requirements shape.
+    The controller does know which canonical adapter/source produced the row, so it
+    records that fact in reserved fields without overwriting the upstream payload.
+    Explicit upstream seller/test evidence is still evaluated first by the
+    qualifier and therefore remains fail-closed.
+    """
+    enriched = dict(payload) if isinstance(payload, dict) else {}
+    enriched["_amarktai_source_type"] = (
+        "bounty" if definition.slug in _BOUNTY_DISCOVERY_MARKETS else "posted_job"
+    )
+    enriched["_amarktai_source_market"] = definition.slug
+    enriched["_amarktai_source_adapter"] = definition.adapter_path
+    return enriched
 
 
 @transaction.atomic
@@ -147,12 +171,31 @@ def sync_market_discovery(slug: str, *, adapter=None, limit: int = 50) -> dict:
     )
     if not health.get("ok"):
         return {"market": slug, "discovered": 0, "blocked": "MARKET_HEALTH_NOT_OK"}
-    discovered = 0
+
+    discovered = scored = buyer_demand = 0
+    classifications: Counter[str] = Counter()
     for raw in adapter.discover_jobs(limit=max(1, min(int(limit), 100))):
         opportunity = adapter.normalize_job(raw)
         if not opportunity.external_id or opportunity.reward < 0:
             continue
-        ingest_opportunity(market, opportunity)
+        opportunity = replace(
+            opportunity,
+            raw=_trusted_discovery_payload(definition, opportunity.raw),
+        )
+        job, _ = ingest_opportunity(market, opportunity)
+        result = qualify_and_shadow_score(job)
+        classification = str(result.get("classification") or "UNKNOWN")
+        classifications[classification] += 1
+        buyer_demand += int(classification == "BUYER_DEMAND")
+        scored += int(bool(result.get("scored")))
         discovered += 1
+
     MarketHealth.objects.filter(marketplace=market).update(supply_ok=discovered > 0)
-    return {"market": slug, "discovered": discovered, "jobs_total": Job.objects.filter(marketplace=market).count()}
+    return {
+        "market": slug,
+        "discovered": discovered,
+        "buyer_demand": buyer_demand,
+        "scored": scored,
+        "qualification_counts": dict(sorted(classifications.items())),
+        "jobs_total": Job.objects.filter(marketplace=market).count(),
+    }

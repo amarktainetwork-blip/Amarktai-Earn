@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone as datetime_timezone
 import hashlib
 import json
@@ -19,10 +19,13 @@ REVENUE_CHANNELS = (
     "PROJECT_HIRE",
     "SUBSCRIPTION",
     "MANUAL_STOREFRONT",
+    "DIRECT_CHECKOUT",
+    "PAYMENT_LINK",
     "OFFHOST_SETTLEMENT",
 )
 
 HOSTING_POLICIES = ("WEBDOCK_SAFE", "OFFHOST_SETTLEMENT_REQUIRED", "UNVERIFIED")
+EXECUTION_PLACEMENTS = ("WEBDOCK_LIGHT", "EXTERNAL_PROVIDER", "APIFY", "MANUAL", "OFFHOST_REQUIRED", "UNVERIFIED")
 
 SELLER_CAPABILITY_KEYS = (
     "publish_service",
@@ -66,6 +69,8 @@ class RevenueMarketDefinition:
     blockers: tuple[str, ...]
     evidence_notes: str
     adapter_name: str = "MANUAL_OR_FUTURE_CONTRACT"
+    economics: dict[str, object] = field(default_factory=dict)
+    execution_placement: str = "UNVERIFIED"
 
 
 WEBDOCK_DEFINITIONS = (
@@ -98,6 +103,7 @@ WEBDOCK_DEFINITIONS = (
         ),
         evidence_notes="Official docs support HTTP/MCP/A2A registration, request/time plans, and fiat payouts through Stripe Connect. Webdock rejects crypto price types.",
         adapter_name="control.services.seller_protocols.NeverminedFiatContract",
+        execution_placement="WEBDOCK_LIGHT",
     ),
     RevenueMarketDefinition(
         slug="skyfire",
@@ -127,6 +133,139 @@ WEBDOCK_DEFINITIONS = (
         ),
         evidence_notes="Official tokens can declare COIN, CARD, or BANK settlement. Webdock permits only separately proven non-crypto settlement.",
         adapter_name="control.services.seller_protocols.SkyfireSellerContract",
+        execution_placement="UNVERIFIED",
+    ),
+    RevenueMarketDefinition(
+        slug="contra",
+        display_name="Contra",
+        channels=("SERVICE_LISTING", "PROJECT_HIRE", "SUBSCRIPTION", "PAYMENT_LINK"),
+        source_urls=(
+            "https://contra.com/",
+            "https://help.contra.com/en/articles/10008642-payouts",
+            "https://help.contra.com/en/articles/13655628-payment-links",
+        ),
+        seller_capabilities=_seller_capabilities("project_sales", "subscription_sales"),
+        source_wired=False,
+        auth_method="Owner account and identity verification; no public mutation credential configured",
+        job_acquisition_mode="MANUAL_ONLY",
+        seller_mode="MANUAL_STOREFRONT_PROJECTS_AND_PAYMENT_LINKS",
+        settlement_rail="ACCOUNT_SPECIFIC_LOCAL_BANK_PAYPAL_OR_PAYONEER_PROOF_REQUIRED",
+        currency="USD",
+        hosting_policy="WEBDOCK_SAFE",
+        api_contract_state="PUBLIC_AUTOMATION_CONTRACT_NOT_VERIFIED",
+        payout_proof_state="SOUTH_AFRICA_ACCOUNT_OPTIONS_NOT_PROVEN",
+        manual_onboarding_required=True,
+        blockers=(
+            "ACCOUNT_NOT_CONFIGURED", "IDENTITY_NOT_VERIFIED", "SOUTH_AFRICA_PAYOUT_OPTIONS_NOT_PROVEN",
+            "PUBLIC_AUTOMATION_CONTRACT_NOT_VERIFIED", "FIRST_SERVICE_LISTING_NOT_PROVEN",
+        ),
+        evidence_notes="Phase 1 shadow candidate. Projects, invoices/payment links and multiple payout methods are relevant, but this owner's South African payout options and automation contract must be proven before activation.",
+        economics={"verified": False, "settlement_delay_days": None},
+        execution_placement="WEBDOCK_LIGHT",
+    ),
+    RevenueMarketDefinition(
+        slug="rapidapi",
+        display_name="RapidAPI",
+        channels=("PAY_PER_CALL_API", "SUBSCRIPTION"),
+        source_urls=("https://rapidapi.com/", "https://docs.rapidapi.com/"),
+        seller_capabilities=_seller_capabilities("pay_per_call", "subscription_sales"),
+        source_wired=False,
+        auth_method="Provider account plus API listing/onboarding; no auto-publish credential configured",
+        job_acquisition_mode="NONE",
+        seller_mode="API_MARKETPLACE_PROVIDER",
+        settlement_rail="PAYPAL_PROVIDER_PAYOUT_ACCOUNT_PROOF_REQUIRED",
+        currency="USD",
+        hosting_policy="WEBDOCK_SAFE",
+        api_contract_state="RUNTIME_API_COMPATIBLE_PUBLISHING_AUTOMATION_NOT_PROVEN",
+        payout_proof_state="PAYPAL_AND_SOUTH_AFRICA_WITHDRAWAL_PROOF_REQUIRED",
+        manual_onboarding_required=True,
+        blockers=(
+            "PROVIDER_ACCOUNT_NOT_CONFIGURED", "API_LISTING_NOT_PUBLISHED", "PAYPAL_PAYOUT_NOT_VERIFIED",
+            "SOUTH_AFRICA_WITHDRAWAL_NOT_VERIFIED", "PUBLISHING_AUTOMATION_NOT_VERIFIED",
+        ),
+        evidence_notes="Phase 1 shadow candidate for deterministic low-cost APIs. Current provider fee evidence is represented conservatively; payout/PayPal processing remains account-dependent and blocks LIVE state.",
+        economics={
+            "verified": False,
+            "percentage_fee_rate": "0.25",
+            "fixed_transaction_fee": "0",
+            "payout_cost_rate": None,
+            "fx_cost_rate": None,
+            "chargeback_reserve_rate": "0",
+            "settlement_delay_days": None,
+        },
+        execution_placement="WEBDOCK_LIGHT",
+    ),
+    RevenueMarketDefinition(
+        slug="apify-store",
+        display_name="Apify Store",
+        channels=("SERVICE_LISTING", "PAY_PER_CALL_API"),
+        source_urls=(
+            "https://docs.apify.com/actors/publishing/monetize/pay-per-event",
+            "https://docs.apify.com/legal/store-publishing-terms-and-conditions",
+        ),
+        seller_capabilities=_seller_capabilities("pay_per_call", "usage_metering"),
+        source_wired=False,
+        auth_method="Apify creator account/KYC; Actor publishing remains external to Webdock",
+        job_acquisition_mode="NONE",
+        seller_mode="APIFY_ACTOR_STORE_PPE",
+        settlement_rail="APIFY_CREATOR_PAYOUT_ACCOUNT_PROOF_REQUIRED",
+        currency="USD",
+        hosting_policy="WEBDOCK_SAFE",
+        api_contract_state="ACTOR_RUNTIME_EXTERNAL_PUBLISHING_NOT_LOCALLY_WIRED",
+        payout_proof_state="CREATOR_KYC_AND_PAYOUT_NOT_PROVEN",
+        manual_onboarding_required=True,
+        blockers=(
+            "CREATOR_ACCOUNT_NOT_CONFIGURED", "KYC_NOT_VERIFIED", "PAYOUT_ROUTE_NOT_VERIFIED",
+            "ACTOR_NOT_PUBLISHED", "EXTERNAL_EXECUTION_COST_PROFILE_NOT_PROVEN",
+        ),
+        evidence_notes="Phase 1 shadow candidate. Scraper-heavy execution belongs on Apify infrastructure; Webdock remains the orchestration/economics/control plane and must not run continuous high-load third-party scraping.",
+        economics={
+            "verified": False,
+            "percentage_fee_rate": "0.20",
+            "fixed_transaction_fee": "0",
+            "payout_cost_rate": None,
+            "fx_cost_rate": None,
+            "chargeback_reserve_rate": "0",
+            "external_execution_cost_usd": None,
+            "settlement_delay_days": None,
+        },
+        execution_placement="APIFY",
+    ),
+    RevenueMarketDefinition(
+        slug="lemon-squeezy",
+        display_name="Lemon Squeezy Direct",
+        channels=("DIRECT_CHECKOUT", "SUBSCRIPTION", "PAYMENT_LINK", "PAY_PER_CALL_API"),
+        source_urls=(
+            "https://docs.lemonsqueezy.com/help/getting-started/supported-countries",
+            "https://docs.lemonsqueezy.com/help/products/pricing-models",
+            "https://docs.lemonsqueezy.com/api",
+        ),
+        seller_capabilities=_seller_capabilities("receive_orders", "order_status", "seller_webhooks", "subscription_sales", "pay_per_call"),
+        source_wired=False,
+        auth_method="Merchant account, API key and signed webhooks after owner onboarding",
+        job_acquisition_mode="NONE",
+        seller_mode="DIRECT_CHECKOUT_SUBSCRIPTIONS_AND_USAGE_BILLING",
+        settlement_rail="SOUTH_AFRICA_BANK_PAYOUT_SUPPORTED_ACCOUNT_PROOF_REQUIRED",
+        currency="USD",
+        hosting_policy="WEBDOCK_SAFE",
+        api_contract_state="OFFICIAL_API_AND_WEBHOOK_CONTRACT_NOT_LOCALLY_WIRED",
+        payout_proof_state="OWNER_ACCOUNT_KYC_AND_BANK_PAYOUT_NOT_PROVEN",
+        manual_onboarding_required=True,
+        blockers=(
+            "MERCHANT_ACCOUNT_NOT_CONFIGURED", "KYC_NOT_VERIFIED", "BANK_PAYOUT_ACCOUNT_NOT_PROVEN",
+            "API_WEBHOOK_NOT_WIRED", "FIRST_PRODUCT_NOT_PUBLISHED",
+        ),
+        evidence_notes="Phase 1 shadow direct-commerce candidate. It can support one-time, subscription and usage-style products, but account/KYC/bank payout and signed webhook execution remain unproven locally.",
+        economics={
+            "verified": False,
+            "percentage_fee_rate": "0.05",
+            "fixed_transaction_fee": "0.50",
+            "payout_cost_rate": None,
+            "fx_cost_rate": None,
+            "chargeback_reserve_rate": None,
+            "settlement_delay_days": None,
+        },
+        execution_placement="WEBDOCK_LIGHT",
     ),
     RevenueMarketDefinition(
         slug="hyrve",
@@ -243,6 +382,7 @@ OFFHOST_DEFINITIONS = tuple(
         payout_proof_state="PROHIBITED_ON_WEBDOCK", manual_onboarding_required=True,
         blockers=("OFFHOST_SETTLEMENT_REQUIRED", "WALLET_EXECUTION_PROHIBITED_ON_WEBDOCK", "EXTERNAL_SETTLEMENT_BRIDGE_NOT_IMPLEMENTED"),
         evidence_notes="Candidate is catalogued only; no wallet, key, chain, testnet, or transaction code is initialized on Webdock.",
+        execution_placement="OFFHOST_REQUIRED",
     ) for slug, name, url in _OFFHOST
 )
 
@@ -292,16 +432,18 @@ def policy_hash(definition: RevenueMarketDefinition) -> str:
         "hosting_policy": definition.hosting_policy,
         "api_contract_state": definition.api_contract_state,
         "settlement_rail": definition.settlement_rail,
+        "economics": definition.economics,
+        "execution_placement": definition.execution_placement,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 def _apply_catalog_owned_fields(profile: MarketIntegrationProfile, values: dict) -> bool:
     changed: list[str] = []
-    for field, value in values.items():
-        if getattr(profile, field) != value:
-            setattr(profile, field, value)
-            changed.append(field)
+    for field_name, value in values.items():
+        if getattr(profile, field_name) != value:
+            setattr(profile, field_name, value)
+            changed.append(field_name)
     if changed:
         profile.save(update_fields=[*changed, "updated_at"])
     return bool(changed)
@@ -312,6 +454,8 @@ def _revenue_profile_static_truth(definition: RevenueMarketDefinition) -> dict:
         "notes": definition.evidence_notes,
         "cash_accounting": "ONLY_AUTHORITATIVE_SETTLED_PAYOUT_IS_CASH",
         "policy_hash": policy_hash(definition),
+        "economics": dict(definition.economics),
+        "execution_placement": definition.execution_placement,
     }
     return {
         "adapter_name": definition.adapter_name,
@@ -438,6 +582,8 @@ def bootstrap_revenue_market_catalog() -> dict[str, int]:
                     "hosting_policy": definition.hosting_policy,
                     "settlement_rail": definition.settlement_rail,
                     "blockers": list(definition.blockers),
+                    "economics": definition.economics,
+                    "execution_placement": definition.execution_placement,
                 },
             },
         )
