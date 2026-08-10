@@ -13,6 +13,7 @@ urlpatterns = [
     path("api/banking/rails/<slug:slug>/proof", banking_views.payment_rail_proof_api, name="payment_rail_proof_api"),
     path("api/banking/routes/<slug:market_slug>/proof", banking_views.market_settlement_route_api, name="market_settlement_route_api"),
     path("api/channels/priority-launch", channel_views.priority_channel_launch_api, name="priority_channel_launch_api"),
+    path("api/channels/publication-exports", channel_views.priority_channel_publication_exports_api, name="priority_channel_publication_exports_api"),
     path("api/ops/<slug:section>", views.ops_api, name="ops_api"),
     path("api/auth/csrf", views.csrf_cookie, name="csrf"),
     path("api/auth/login", views.password_login, name="password_login"),
