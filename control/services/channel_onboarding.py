@@ -14,7 +14,8 @@ PRIORITY_MARKETS = ("contra", "rapidapi", "apify-store", "lemon-squeezy")
 
 _DEFINITIONS = {
     "contra": {
-        "checks": ("account_configured", "identity_verified", "manual_storefront_contract_verified"),
+        "checks": ("account_configured", "identity_verified", "manual_storefront_contract_verified", "service_terms_verified"),
+        "policy_check": "service_terms_verified",
         "capabilities": {
             "publish_service": "manual_storefront_contract_verified",
             "receive_orders": "manual_storefront_contract_verified",
@@ -29,7 +30,8 @@ _DEFINITIONS = {
         },
     },
     "rapidapi": {
-        "checks": ("provider_account_configured", "provider_contract_verified"),
+        "checks": ("provider_account_configured", "provider_contract_verified", "service_terms_verified"),
+        "policy_check": "service_terms_verified",
         "capabilities": {
             "publish_service": "provider_contract_verified",
             "receive_orders": "provider_contract_verified",
@@ -44,7 +46,8 @@ _DEFINITIONS = {
         },
     },
     "apify-store": {
-        "checks": ("creator_account_configured", "creator_identity_verified", "actor_publication_contract_verified"),
+        "checks": ("creator_account_configured", "creator_identity_verified", "actor_publication_contract_verified", "store_terms_verified"),
+        "policy_check": "store_terms_verified",
         "capabilities": {
             "publish_service": "actor_publication_contract_verified",
             "usage_metering": "actor_publication_contract_verified",
@@ -56,7 +59,8 @@ _DEFINITIONS = {
         },
     },
     "lemon-squeezy": {
-        "checks": ("merchant_account_configured", "merchant_identity_verified", "api_webhook_contract_verified"),
+        "checks": ("merchant_account_configured", "merchant_identity_verified", "api_webhook_contract_verified", "service_terms_verified"),
+        "policy_check": "service_terms_verified",
         "capabilities": {
             "publish_service": "api_webhook_contract_verified",
             "receive_orders": "api_webhook_contract_verified",
@@ -119,6 +123,7 @@ def _apply_effective_profile(profile: MarketIntegrationProfile, record: dict) ->
             cleared.update(codes)
     blockers = [code for code in blockers if code not in cleared]
 
+    policy_verified = bool(checks.get(definition["policy_check"]))
     all_checks = all(checks.values())
     changed = False
     if profile.seller_capabilities != seller_capabilities:
@@ -127,17 +132,34 @@ def _apply_effective_profile(profile: MarketIntegrationProfile, record: dict) ->
     if profile.blockers != blockers:
         profile.blockers = blockers
         changed = True
-    if profile.policy_verified != all_checks:
-        profile.policy_verified = all_checks
+    if profile.policy_verified != policy_verified:
+        profile.policy_verified = policy_verified
         changed = True
-    if all_checks and profile.automation_status == "BLOCKED":
-        profile.automation_status = "MANUAL_READY_PAYOUT_BLOCKED"
-        changed = True
-    elif not all_checks and profile.automation_status == "MANUAL_READY_PAYOUT_BLOCKED":
-        profile.automation_status = "BLOCKED"
+    desired_status = "MANUAL_READY_PAYOUT_BLOCKED" if all_checks else "BLOCKED"
+    if profile.automation_status != desired_status:
+        profile.automation_status = desired_status
         changed = True
     if changed:
         profile.save(update_fields=["seller_capabilities", "blockers", "policy_verified", "automation_status", "updated_at"])
+
+    policy = profile.marketplace.policy_versions.order_by("-checked_at", "-created_at").first()
+    if policy and (
+        policy.automation_allowed != policy_verified
+        or policy.webdock_compatible != (profile.hosting_policy == "WEBDOCK_SAFE")
+    ):
+        policy.automation_allowed = policy_verified
+        policy.webdock_compatible = profile.hosting_policy == "WEBDOCK_SAFE"
+        policy.checked_at = timezone.now()
+        policy.snapshot = {
+            **(policy.snapshot or {}),
+            "operator_terms_proof": {
+                "verified": policy_verified,
+                "proof_reference_present": bool(record["proof_reference"]),
+                "onboarding_version": ONBOARDING_VERSION,
+            },
+        }
+        policy.save(update_fields=["automation_allowed", "webdock_compatible", "checked_at", "snapshot", "updated_at"])
+        changed = True
     return changed
 
 
@@ -211,6 +233,7 @@ def priority_channel_onboarding_row(market_slug: str) -> dict:
         "checks": checks,
         "required_checks": list(_DEFINITIONS[market_slug]["checks"]),
         "account_contract_ready": all(checks.values()),
+        "policy_verified": bool(profile.policy_verified),
         "proof_reference": record["proof_reference"],
         "notes": record["notes"],
         "verified_at": record["verified_at"],
@@ -230,8 +253,9 @@ def priority_channel_onboarding_snapshot() -> dict:
         "meta": {
             "channels": len(rows),
             "account_contract_ready": sum(1 for row in rows if row["account_contract_ready"]),
+            "policy_verified": sum(1 for row in rows if row["policy_verified"]),
             "payout_ready": sum(1 for row in rows if row["payout_ready"] and row["south_africa_verified"]),
             "banking_dependency_deferred": True,
-            "truth": "Account, identity and seller-contract proof is separate from payout readiness. This control never creates a payout account, enables Banking, or marks South Africa settlement ready.",
+            "truth": "Account, identity, seller-contract and service-terms proof is separate from payout readiness. This control never creates a payout account, enables Banking, or marks South Africa settlement ready.",
         },
     }
