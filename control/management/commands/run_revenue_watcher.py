@@ -31,6 +31,14 @@ class Command(BaseCommand):
         result["enabled"] = True
         return result
 
+    def _dealwork_cycle(self, *, limit: int) -> dict:
+        if os.getenv("DEALWORK_WATCHER_ENABLED", "0") != "1":
+            return {"enabled": False, "mutation_performed": False}
+
+        from control.services.dealwork_runtime import run_dealwork_cycle
+
+        return run_dealwork_cycle(limit=limit)
+
     def handle(self, *args, **options):
         interval = max(15, options["interval"] or int(os.getenv("REVENUE_WATCHER_INTERVAL_SECONDS", "60")))
         limit = max(1, min(int(options["limit"]), 500))
@@ -39,6 +47,7 @@ class Command(BaseCommand):
                 heartbeat("revenue-watcher", details={"phase": "cycle"})
                 result = {
                     "agentgigs": self._agentgigs_cycle(limit=limit),
+                    "dealwork": self._dealwork_cycle(limit=limit),
                     "seller_inbound": revenue_controller_cycle(limit=limit),
                 }
                 heartbeat("revenue-watcher", details=result)

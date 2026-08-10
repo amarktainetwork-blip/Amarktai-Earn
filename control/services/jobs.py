@@ -5,6 +5,7 @@ from control.acquisition import AcquisitionThresholds, GateDecision, paid_cost_e
 from control.economics import EconomicsInput, score_job
 from control.job_state import assert_transition
 from control.models import AuditEvent, Job, JobScore, Marketplace
+from control.services.market_readiness import acquisition_cash_gate_required
 from markets.base import NormalizedOpportunity
 
 
@@ -83,10 +84,11 @@ def acquisition_decision(job: Job):
         reasons.append("MARKET_DISABLED")
     if market.status != Marketplace.Status.LIVE:
         reasons.append(f"MARKET_{market.status}")
-    if not market.payout_ready:
-        reasons.append("PAYOUT_NOT_READY")
-    if not market.south_africa_verified:
-        reasons.append("SOUTH_AFRICA_NOT_VERIFIED")
+    if acquisition_cash_gate_required(market):
+        if not market.payout_ready:
+            reasons.append("PAYOUT_NOT_READY")
+        if not market.south_africa_verified:
+            reasons.append("SOUTH_AFRICA_NOT_VERIFIED")
     thresholds = _thresholds()
     expected_gross = score.recommended_offer or job.reward
     marketplace_fee = expected_gross * job.marketplace.fee_rate
