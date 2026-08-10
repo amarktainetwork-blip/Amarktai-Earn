@@ -53,6 +53,7 @@ def priority_channel_launch_snapshot() -> dict:
         plan["package_count"] = len(packages)
         plan["packages_prepared"] = sum(1 for row in packages if row["prepared"])
         plan["packages_price_ready"] = sum(1 for row in packages if row["price_ready"])
+        plan["packages_published"] = sum(1 for row in packages if row["listing_status"] == "PUBLISHED")
         plans.append(plan)
     return {
         "section": "priority-channel-launch",
@@ -64,8 +65,8 @@ def priority_channel_launch_snapshot() -> dict:
             "prepared_packages": package_snapshot["meta"]["prepared_packages"],
             "price_ready_packages": package_snapshot["meta"]["price_ready_packages"],
             "total_packages": package_snapshot["meta"]["total_packages"],
-            "published_packages": 0,
+            "published_packages": package_snapshot["meta"]["published_packages"],
             "external_mutation_allowed": False,
-            "truth": "Preparation is local and reversible. Package manifests and draft listings may exist locally, but no account creation, listing publication, checkout activation, payout mutation or paid external execution is performed by this snapshot.",
+            "truth": "Preparation is local and reversible. Package manifests and draft listings may exist locally, while any persisted publication truth is reported rather than hidden. No account creation, listing publication, checkout activation, payout mutation or paid external execution is performed by this snapshot.",
         },
     }
