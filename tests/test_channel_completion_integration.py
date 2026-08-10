@@ -327,7 +327,7 @@ class ChannelCompletionIntegrationTests(TestCase):
                     "buyer_reference": "buyer-reference",
                     "quoted_price": "99.00",
                     "currency": "USD",
-                    "requirements": {"report_goal": "Monthly operating report", "branding_preferences": "Clean and professional"},
+                    "requirements": {"report_requirements": "Monthly operating report with clean professional presentation"},
                     "funding_state": "FUNDED",
                     "evidence_reference": "owner-observed-contra-project-contract",
                 },
