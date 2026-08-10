@@ -1,0 +1,23 @@
+{
+  "title": "Amarktai Website Data Extractor",
+  "description": "Bounded extraction of one public HTTPS page. Private/local destinations and robots-disallowed targets are rejected.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "public_url": {
+      "title": "Public HTTPS URL",
+      "type": "string",
+      "description": "A public HTTPS page that the Actor is permitted to fetch.",
+      "editor": "textfield"
+    },
+    "extraction_scope": {
+      "title": "Extraction scope",
+      "type": "string",
+      "description": "Choose bounded metadata, headings, or a page summary.",
+      "enum": ["metadata_only", "headings", "page_summary"],
+      "default": "page_summary",
+      "editor": "select"
+    }
+  },
+  "required": ["public_url"]
+}

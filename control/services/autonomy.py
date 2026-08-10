@@ -8,6 +8,7 @@ from enum import StrEnum
 class AutonomyMode(StrEnum):
     OFF = "OFF"
     SHADOW = "SHADOW"
+    MANUAL = "MANUAL"
     LOW_RISK = "LOW_RISK"
     FULL = "FULL"
 
@@ -37,6 +38,8 @@ def acquisition_autonomy(*, switch_enabled: bool) -> AutonomyDecision:
         reasons.append("AUTONOMY_OFF")
     elif mode == AutonomyMode.SHADOW:
         reasons.append("AUTONOMY_SHADOW_ONLY")
+    elif mode == AutonomyMode.MANUAL:
+        reasons.append("AUTONOMY_MANUAL_ONLY")
     if not switch_enabled:
         reasons.append("ACQUISITION_SWITCH_DISABLED")
     return AutonomyDecision(

@@ -1,6 +1,6 @@
 from django.contrib import admin
-from django.urls import include, path
-from control import banking_views, channel_views, views, webhooks
+from django.urls import path
+from control import banking_views, channel_admin_views, channel_views, lemon_views, views, webhooks
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -13,6 +13,26 @@ urlpatterns = [
     path("api/banking/rails/<slug:slug>/proof", banking_views.payment_rail_proof_api, name="payment_rail_proof_api"),
     path("api/banking/routes/<slug:market_slug>/proof", banking_views.market_settlement_route_api, name="market_settlement_route_api"),
     path("api/channels/priority-launch", channel_views.priority_channel_launch_api, name="priority_channel_launch_api"),
+    path("api/channels/publication-exports", channel_views.priority_channel_publication_exports_api, name="priority_channel_publication_exports_api"),
+    path("api/channels/commercial-pricing", channel_views.priority_channel_commercial_pricing_api, name="priority_channel_commercial_pricing_api"),
+    path("api/channels/commercial-pricing/<slug:package_slug>", channel_views.priority_channel_commercial_price_api, name="priority_channel_commercial_price_api"),
+    path("api/channels/onboarding", channel_admin_views.priority_channel_onboarding_api, name="priority_channel_onboarding_api"),
+    path("api/channels/onboarding/<slug:market_slug>", channel_admin_views.priority_channel_onboarding_update_api, name="priority_channel_onboarding_update_api"),
+    path("api/channels/publications", channel_admin_views.priority_channel_publications_api, name="priority_channel_publications_api"),
+    path("api/channels/publications/<slug:package_slug>/record", channel_admin_views.priority_channel_publication_record_api, name="priority_channel_publication_record_api"),
+    path("api/channels/ingress", channel_views.priority_channel_ingress_api, name="priority_channel_ingress_api"),
+    path("api/channels/orders", channel_views.priority_inbound_orders_api, name="priority_inbound_orders_api"),
+    path("api/channels/orders/<uuid:order_id>", channel_views.priority_inbound_order_api, name="priority_inbound_order_api"),
+    path("api/channels/orders/<uuid:order_id>/accept", channel_views.inbound_order_accept_api, name="inbound_order_accept_api"),
+    path("api/channels/orders/<uuid:order_id>/delivery", channel_views.inbound_order_delivery_api, name="inbound_order_delivery_api"),
+    path("api/channels/orders/<uuid:order_id>/buyer-acceptance", channel_views.inbound_order_buyer_acceptance_api, name="inbound_order_buyer_acceptance_api"),
+    path("api/channels/orders/<uuid:order_id>/intake-link", channel_views.inbound_order_intake_link_api, name="inbound_order_intake_link_api"),
+    path("api/channels/contra/orders", channel_views.contra_manual_order_api, name="contra_manual_order_api"),
+    path("api/channels/rapidapi/<slug:package_slug>", channel_views.rapidapi_package_api, name="rapidapi_package_api"),
+    path("api/channels/rapidapi/orders/<uuid:order_id>", channel_views.rapidapi_order_api, name="rapidapi_order_api"),
+    path("api/channels/rapidapi/orders/<uuid:order_id>/artifacts/<int:artifact_id>", channel_views.rapidapi_order_artifact_api, name="rapidapi_order_artifact_api"),
+    path("webhooks/lemon-squeezy/", lemon_views.lemon_squeezy_webhook_api, name="lemon_squeezy_webhook_api"),
+    path("intake/<str:token>/", channel_views.inbound_intake_page, name="inbound_intake_page"),
     path("api/ops/<slug:section>", views.ops_api, name="ops_api"),
     path("api/auth/csrf", views.csrf_cookie, name="csrf"),
     path("api/auth/login", views.password_login, name="password_login"),
