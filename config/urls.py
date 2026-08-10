@@ -21,6 +21,7 @@ urlpatterns = [
     path("api/channels/orders/<uuid:order_id>", channel_views.priority_inbound_order_api, name="priority_inbound_order_api"),
     path("api/channels/orders/<uuid:order_id>/accept", channel_views.inbound_order_accept_api, name="inbound_order_accept_api"),
     path("api/channels/orders/<uuid:order_id>/delivery", channel_views.inbound_order_delivery_api, name="inbound_order_delivery_api"),
+    path("api/channels/orders/<uuid:order_id>/buyer-acceptance", channel_views.inbound_order_buyer_acceptance_api, name="inbound_order_buyer_acceptance_api"),
     path("api/channels/orders/<uuid:order_id>/intake-link", channel_views.inbound_order_intake_link_api, name="inbound_order_intake_link_api"),
     path("api/channels/contra/orders", channel_views.contra_manual_order_api, name="contra_manual_order_api"),
     path("api/channels/rapidapi/<slug:package_slug>", channel_views.rapidapi_package_api, name="rapidapi_package_api"),
