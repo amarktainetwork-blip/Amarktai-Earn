@@ -140,11 +140,14 @@ def refresh_inbound_delivery_readiness(*, limit: int = 100) -> dict[str, int]:
                 transition_job(order.job_id, Job.State.SUBMITTED, actor="rapidapi-provider", metadata={"inbound_order_id": str(order.id)})
             order.refresh_from_db()
             if order.job.state == Job.State.SUBMITTED:
-                record_inbound_delivery(
+                delivered = record_inbound_delivery(
                     order,
                     remote_reference=f"/api/channels/rapidapi/orders/{order.id}",
                     actor="rapidapi-provider",
                 )
+                transition_job(order.job_id, Job.State.ACCEPTED, actor="rapidapi-provider", metadata={"inbound_order_id": str(order.id), "acceptance": "QA_VERIFIED_RESULT_AVAILABLE"})
+                delivered.remote_state = "API_RESULT_AVAILABLE"
+                delivered.save(update_fields=["remote_state", "updated_at"])
                 api_delivered += 1
             continue
         if order.remote_state != "DELIVERY_READY":
@@ -176,6 +179,29 @@ def record_manual_inbound_delivery(order_id, *, remote_reference: str, actor: st
     if order.job.state != Job.State.SUBMITTED:
         raise InboundControllerError("INBOUND_DELIVERY_JOB_NOT_SUBMITTED")
     return record_inbound_delivery(order, remote_reference=remote_reference, actor=actor)
+
+
+@transaction.atomic
+def record_inbound_buyer_acceptance(order_id, *, evidence_reference: str, actor: str = "owner") -> InboundOrder:
+    order = InboundOrder.objects.select_related("job", "marketplace").select_for_update().get(pk=order_id)
+    evidence = " ".join(str(evidence_reference or "").strip().split())[:700]
+    if not evidence:
+        raise InboundControllerError("BUYER_ACCEPTANCE_EVIDENCE_REQUIRED")
+    if order.status != InboundOrder.Status.DELIVERED:
+        raise InboundControllerError("BUYER_ACCEPTANCE_REQUIRES_DELIVERED_ORDER")
+    if order.job.state == Job.State.SUBMITTED:
+        transition_job(order.job_id, Job.State.ACCEPTED, actor=actor, metadata={"inbound_order_id": str(order.id), "buyer_acceptance_evidence": evidence})
+    order.refresh_from_db()
+    if order.job.state != Job.State.ACCEPTED:
+        raise InboundControllerError("BUYER_ACCEPTANCE_JOB_STATE_INVALID")
+    order.remote_state = "BUYER_ACCEPTED"
+    order.save(update_fields=["remote_state", "updated_at"])
+    AuditEvent.objects.create(
+        event_type="inbound.buyer_acceptance_recorded",
+        actor=str(actor)[:120],
+        metadata={"order_id": str(order.id), "job_id": str(order.job_id), "market": order.marketplace.slug, "evidence_reference": evidence},
+    )
+    return order
 
 
 def revenue_controller_cycle(*, limit: int = 50) -> dict:
