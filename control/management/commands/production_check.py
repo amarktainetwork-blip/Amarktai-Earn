@@ -6,7 +6,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 
 DOMAIN = "earn.amarktai.co.za"
-VALID_AUTONOMY_MODES = {"OFF", "SHADOW", "LOW_RISK", "FULL"}
+VALID_AUTONOMY_MODES = {"OFF", "SHADOW", "MANUAL", "LOW_RISK", "FULL"}
 
 
 def _placeholder(value: str) -> bool:
@@ -59,9 +59,11 @@ class Command(BaseCommand):
 
         mode = os.getenv("AUTONOMOUS_MODE", "OFF").upper()
         if mode not in VALID_AUTONOMY_MODES:
-            errors.append("AUTONOMOUS_MODE must be OFF, SHADOW, LOW_RISK, or FULL")
+            errors.append("AUTONOMOUS_MODE must be OFF, SHADOW, MANUAL, LOW_RISK, or FULL")
         if os.getenv("AGENTGIGS_AUTO_APPLY_ENABLED", "0") == "1" and mode not in {"LOW_RISK", "FULL"}:
             errors.append("AgentGigs auto-apply requires AUTONOMOUS_MODE=LOW_RISK or FULL")
+        if os.getenv("INBOUND_SERVICE_AUTO_ACCEPT_ENABLED", "0") == "1" and mode not in {"LOW_RISK", "FULL"}:
+            errors.append("Inbound service auto-accept requires AUTONOMOUS_MODE=LOW_RISK or FULL")
 
         if os.getenv("SANDBOX_CODING_ENABLED", "0") == "1":
             sandbox_token = os.getenv("SANDBOX_TOKEN_SECRET", "")
