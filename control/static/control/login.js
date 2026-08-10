@@ -108,7 +108,7 @@
       verificationStep.hidden = true;
       successStep.hidden = false;
       code.value = "";
-      window.setTimeout(() => window.location.assign("/"), 650);
+      window.setTimeout(() => window.location.assign("/ops/overview/"), 650);
     } catch (_requestError) {
       showError("Verification is temporarily unavailable. Please try again shortly.");
     } finally {
