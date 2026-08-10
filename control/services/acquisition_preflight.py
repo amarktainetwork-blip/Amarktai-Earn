@@ -9,6 +9,7 @@ from control.acquisition import paid_cost_envelope
 from control.models import AcquisitionPreflight, AuditEvent, GenXAccountSnapshot, MarketPolicyVersion
 from control.services.admission import decide_admission
 from control.services.autonomy import acquisition_autonomy
+from control.services.market_readiness import acquisition_cash_gate_required, acquisition_profile_blockers
 from control.services.workload_policy import evaluate_job
 from control.services.profit_brain import capture_capacity, evaluate_opportunity, persist_opportunity_decision
 from workers.registry import WorkerRegistryError, operation_spec
@@ -117,7 +118,7 @@ def run_acquisition_preflight(job, *, persist: bool = True):
             reasons.append("MARKET_ADAPTER_POLICY_NOT_VERIFIED")
         if not integration_profile.autonomous_acquisition_enabled:
             reasons.append("MARKET_AUTONOMOUS_ACQUISITION_DISABLED")
-        reasons.extend(str(reason) for reason in integration_profile.blockers)
+        reasons.extend(acquisition_profile_blockers(job.marketplace, integration_profile.blockers))
 
     enabled_operations = {item.strip() for item in os.getenv("ACQUISITION_ENABLED_OPERATIONS", "json_to_csv,csv_normalize").split(",") if item.strip()}
     if not operation or operation not in enabled_operations:
@@ -202,10 +203,12 @@ def run_acquisition_preflight(job, *, persist: bool = True):
         reasons.append("MARKET_DISABLED")
     if market.status != market.Status.LIVE:
         reasons.append("MARKET_NOT_LIVE")
-    if not market.payout_ready:
-        reasons.append("PAYOUT_NOT_READY")
-    if not market.south_africa_verified:
-        reasons.append("SOUTH_AFRICA_NOT_VERIFIED")
+    cash_gate_required = acquisition_cash_gate_required(market)
+    if cash_gate_required:
+        if not market.payout_ready:
+            reasons.append("PAYOUT_NOT_READY")
+        if not market.south_africa_verified:
+            reasons.append("SOUTH_AFRICA_NOT_VERIFIED")
 
     score = getattr(job, "jobscore", None)
     expected_gross = Decimal(str(getattr(score, "recommended_offer", None) or job.reward))
@@ -266,6 +269,8 @@ def run_acquisition_preflight(job, *, persist: bool = True):
             "risk_adjusted_profit": str(economic.risk_adjusted_profit),
             "opportunity_cost": str(economic.opportunity_cost),
             "expected_external_cost": str(external_cost),
+            "cash_gate_required_for_acquisition": cash_gate_required,
+            "platform_wallet_proving": not cash_gate_required,
             "paid_cost_envelope": {
                 "semantics": "PROFITABILITY_RELATIVE_WITH_ABSOLUTE_SAFETY_CIRCUIT_BREAKER",
                 "expected_paid_cost": str(paid_budget.expected_paid_cost),
