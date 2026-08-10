@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from control import banking_views, channel_admin_views, channel_views, views, webhooks
+from control import banking_views, channel_admin_views, channel_views, lemon_views, views, webhooks
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -31,7 +31,7 @@ urlpatterns = [
     path("api/channels/rapidapi/<slug:package_slug>", channel_views.rapidapi_package_api, name="rapidapi_package_api"),
     path("api/channels/rapidapi/orders/<uuid:order_id>", channel_views.rapidapi_order_api, name="rapidapi_order_api"),
     path("api/channels/rapidapi/orders/<uuid:order_id>/artifacts/<int:artifact_id>", channel_views.rapidapi_order_artifact_api, name="rapidapi_order_artifact_api"),
-    path("webhooks/lemon-squeezy/", channel_views.lemon_squeezy_webhook_api, name="lemon_squeezy_webhook_api"),
+    path("webhooks/lemon-squeezy/", lemon_views.lemon_squeezy_webhook_api, name="lemon_squeezy_webhook_api"),
     path("intake/<str:token>/", channel_views.inbound_intake_page, name="inbound_intake_page"),
     path("api/ops/<slug:section>", views.ops_api, name="ops_api"),
     path("api/auth/csrf", views.csrf_cookie, name="csrf"),
