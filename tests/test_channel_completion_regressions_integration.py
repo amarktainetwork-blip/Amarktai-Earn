@@ -67,7 +67,7 @@ class ChannelCompletionRegressionIntegrationTests(TestCase):
         purchased.published_at = timezone.now()
         purchased.save(update_fields=["status", "remote_listing_id", "remote_reference", "published_at", "updated_at"])
 
-        other = MarketServiceListing.objects.get(offering__slug="lemon-research-report")
+        other = MarketServiceListing.objects.get(offering__slug="lemon-research-product")
         other.status = MarketServiceListing.Status.PUBLISHED
         other.remote_listing_id = "variant-research-1"
         other.remote_reference = "https://example.invalid/lemon/variant-research-1"
@@ -78,7 +78,7 @@ class ChannelCompletionRegressionIntegrationTests(TestCase):
             "meta": {
                 "event_name": "order_created",
                 "custom_data": {
-                    "package_slug": "lemon-research-report",
+                    "package_slug": "lemon-research-product",
                     "requirements": {},
                 },
             },
