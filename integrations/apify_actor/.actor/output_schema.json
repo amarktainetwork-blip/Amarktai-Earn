@@ -1,0 +1,11 @@
+{
+  "actorOutputSchemaVersion": 1,
+  "title": "Amarktai Website Data Extractor output",
+  "properties": {
+    "results": {
+      "type": "string",
+      "title": "Dataset results",
+      "template": "{{links.apiDefaultDatasetUrl}}/items"
+    }
+  }
+}
