@@ -13,6 +13,7 @@ from apify import Actor
 
 MAX_REDIRECTS = 5
 MAX_BYTES = 5 * 1024 * 1024
+MAX_ROBOTS_BYTES = 512 * 1024
 MAX_LINKS = 500
 USER_AGENT = "AmarktaiEarnApifyActor/1.0"
 
@@ -59,9 +60,6 @@ class PageParser(HTMLParser):
             self.title = (self.title + data)[:2000]
         if self._heading_tag:
             self._heading_text.append(data)
-        if self.links and self.get_starttag_text() is not None:
-            # Link text is optional enrichment only; href remains authoritative.
-            pass
 
 
 def _public_host(hostname: str) -> bool:
@@ -91,18 +89,36 @@ def _validate_url(raw: str) -> str:
     return parsed.geturl()
 
 
+async def _bounded_stream(client: httpx.AsyncClient, url: str, *, max_bytes: int, headers: dict, timeout: int):
+    async with client.stream("GET", url, headers=headers, timeout=timeout) as response:
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in response.aiter_bytes():
+            size += len(chunk)
+            if size > max_bytes:
+                raise ValueError("Response exceeds the Actor byte limit")
+            chunks.append(chunk)
+        return response.status_code, dict(response.headers), b"".join(chunks)
+
+
 async def _robots_allows(client: httpx.AsyncClient, url: str) -> bool:
     parsed = urlparse(url)
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
     try:
-        response = await client.get(robots_url, headers={"User-Agent": USER_AGENT}, timeout=10)
-    except httpx.HTTPError:
+        status, _, body = await _bounded_stream(
+            client,
+            robots_url,
+            max_bytes=MAX_ROBOTS_BYTES,
+            headers={"User-Agent": USER_AGENT},
+            timeout=10,
+        )
+    except (httpx.HTTPError, ValueError):
         return False
-    if response.status_code >= 400:
+    if status >= 400:
         return False
     parser = RobotFileParser()
     parser.set_url(robots_url)
-    parser.parse(response.text.splitlines())
+    parser.parse(body.decode("utf-8", errors="replace").splitlines())
     return parser.can_fetch(USER_AGENT, url)
 
 
@@ -112,26 +128,29 @@ async def _fetch_page(url: str) -> tuple[str, bytes, str]:
         if not await _robots_allows(client, current):
             raise ValueError("robots.txt does not permit this Actor user agent")
         for _ in range(MAX_REDIRECTS + 1):
-            response = await client.get(
-                current,
-                headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
-                timeout=20,
-            )
-            if response.status_code in {301, 302, 303, 307, 308}:
-                location = response.headers.get("location")
+            try:
+                status, headers, body = await _bounded_stream(
+                    client,
+                    current,
+                    max_bytes=MAX_BYTES,
+                    headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+                    timeout=20,
+                )
+            except httpx.HTTPError as exc:
+                raise ValueError("Page request failed") from exc
+            if status in {301, 302, 303, 307, 308}:
+                location = headers.get("location")
                 if not location:
                     raise ValueError("Redirect response omitted Location")
                 current = _validate_url(urljoin(current, location))
                 if not await _robots_allows(client, current):
                     raise ValueError("redirect target is disallowed by robots.txt")
                 continue
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if status >= 400:
+                raise ValueError(f"Page request failed with HTTP {status}")
+            content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
             if content_type not in {"text/html", "application/xhtml+xml"}:
                 raise ValueError("Only HTML/XHTML pages are supported")
-            body = response.content
-            if len(body) > MAX_BYTES:
-                raise ValueError("Page exceeds the Actor byte limit")
             return current, body, content_type
     raise ValueError("Too many redirects")
 
