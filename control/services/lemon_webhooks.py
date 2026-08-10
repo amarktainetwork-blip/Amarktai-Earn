@@ -59,14 +59,6 @@ def _event_name(payload: dict) -> str:
 def _listing_from_payload(payload: dict) -> MarketServiceListing:
     custom = _custom(payload)
     package_slug = str(custom.get("package_slug") or "").strip()
-    if package_slug:
-        listing = MarketServiceListing.objects.select_related("offering", "marketplace").filter(
-            marketplace__slug=LEMON_MARKET,
-            offering__slug=package_slug,
-        ).first()
-        if listing:
-            return listing
-
     _, attributes = _data(payload)
     variant_id = ""
     first_item = attributes.get("first_order_item")
@@ -74,14 +66,18 @@ def _listing_from_payload(payload: dict) -> MarketServiceListing:
         variant_id = str(first_item.get("variant_id") or "").strip()
     if not variant_id:
         variant_id = str(attributes.get("variant_id") or "").strip()
-    if variant_id:
-        listing = MarketServiceListing.objects.select_related("offering", "marketplace").filter(
-            marketplace__slug=LEMON_MARKET,
-            remote_listing_id=variant_id,
-        ).first()
-        if listing:
-            return listing
-    raise ChannelIngressError("LEMON_PACKAGE_MAPPING_REQUIRED", status=409)
+    if not variant_id:
+        raise ChannelIngressError("LEMON_PURCHASED_VARIANT_REQUIRED", status=409)
+
+    listing = MarketServiceListing.objects.select_related("offering", "marketplace").filter(
+        marketplace__slug=LEMON_MARKET,
+        remote_listing_id=variant_id,
+    ).first()
+    if listing is None:
+        raise ChannelIngressError("LEMON_PURCHASED_VARIANT_NOT_MAPPED", status=409)
+    if package_slug and package_slug != listing.offering.slug:
+        raise ChannelIngressError("LEMON_PACKAGE_VARIANT_MISMATCH", status=409)
+    return listing
 
 
 def _require_published_mapping(listing: MarketServiceListing) -> None:
