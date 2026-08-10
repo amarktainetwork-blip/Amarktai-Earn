@@ -1,6 +1,6 @@
 from django.contrib import admin
-from django.urls import include, path
-from control import banking_views, channel_views, views, webhooks
+from django.urls import path
+from control import banking_views, channel_admin_views, channel_views, views, webhooks
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -16,6 +16,10 @@ urlpatterns = [
     path("api/channels/publication-exports", channel_views.priority_channel_publication_exports_api, name="priority_channel_publication_exports_api"),
     path("api/channels/commercial-pricing", channel_views.priority_channel_commercial_pricing_api, name="priority_channel_commercial_pricing_api"),
     path("api/channels/commercial-pricing/<slug:package_slug>", channel_views.priority_channel_commercial_price_api, name="priority_channel_commercial_price_api"),
+    path("api/channels/onboarding", channel_admin_views.priority_channel_onboarding_api, name="priority_channel_onboarding_api"),
+    path("api/channels/onboarding/<slug:market_slug>", channel_admin_views.priority_channel_onboarding_update_api, name="priority_channel_onboarding_update_api"),
+    path("api/channels/publications", channel_admin_views.priority_channel_publications_api, name="priority_channel_publications_api"),
+    path("api/channels/publications/<slug:package_slug>/record", channel_admin_views.priority_channel_publication_record_api, name="priority_channel_publication_record_api"),
     path("api/channels/ingress", channel_views.priority_channel_ingress_api, name="priority_channel_ingress_api"),
     path("api/channels/orders", channel_views.priority_inbound_orders_api, name="priority_inbound_orders_api"),
     path("api/channels/orders/<uuid:order_id>", channel_views.priority_inbound_order_api, name="priority_inbound_order_api"),
