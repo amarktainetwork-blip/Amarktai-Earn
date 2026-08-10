@@ -56,6 +56,8 @@ class OwnerUIIntegrationTests(TestCase):
         self.assertIn('fetch("/api/auth/csrf"', script)
         self.assertIn('post("/api/auth/login"', script)
         self.assertIn('post("/api/auth/totp"', script)
+        self.assertIn('window.location.assign("/ops/overview/")', script)
+        self.assertNotIn('window.location.assign("/")', script)
         self.assertIn("recovery: recoveryMode", script)
         self.assertNotIn("localStorage", script)
         self.assertNotIn("sessionStorage", script)
