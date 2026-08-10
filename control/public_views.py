@@ -10,3 +10,9 @@ def landing_page(request):
     if getattr(request, "owner", None):
         return redirect("overview")
     return render(request, "control/landing.html")
+
+
+@require_GET
+def terms_page(request):
+    """Public terms and earnings disclaimer page."""
+    return render(request, "control/terms.html")
