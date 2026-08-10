@@ -20,16 +20,29 @@ class OwnerUIIntegrationTests(TestCase):
     def authenticate(self):
         self.client.cookies["amarktai_access"] = issue_access(self.owner)
 
-    def test_public_root_is_branded_landing_page_without_owner_runtime_payload(self):
+    def test_public_root_is_plain_language_landing_page_without_owner_runtime_payload(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Digital work,")
-        self.assertContains(response, "Amarktai Earn is built to discover qualified demand")
+        self.assertContains(response, "Find work.")
+        self.assertContains(response, "Do it well.")
+        self.assertContains(response, "Get paid.")
+        self.assertContains(response, "Amarktai Earn is an AI-powered business system")
+        self.assertContains(response, "One system")
+        self.assertContains(response, "Lots of ways to make money")
         self.assertContains(response, 'href="/login/"')
         self.assertContains(response, "Amarktai Network")
         self.assertNotContains(response, 'data-section="overview"')
         self.assertNotContains(response, "/api/ops/")
         self.assertNotContains(response, "navJobs")
+        self.assertNotContains(response, "CONTROL PLANE")
+        self.assertNotContains(response, "BOUNDED AUTONOMY")
+        self.assertNotContains(response, "economic evidence")
+
+    def test_authenticated_owner_root_redirects_directly_to_private_overview(self):
+        self.authenticate()
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, "/ops/overview/")
 
     def test_login_page_is_branded_step_by_step_and_recovery_remains_secondary(self):
         response = self.client.get("/login/")
@@ -50,14 +63,15 @@ class OwnerUIIntegrationTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, "/ops/overview/")
 
-    def test_login_javascript_preserves_existing_auth_endpoints_and_never_uses_local_storage(self):
+    def test_login_javascript_preserves_existing_auth_endpoints_and_enters_dashboard_directly(self):
         script_path = Path(finders.find("control/login.js"))
         script = script_path.read_text(encoding="utf-8")
         self.assertIn('fetch("/api/auth/csrf"', script)
         self.assertIn('post("/api/auth/login"', script)
         self.assertIn('post("/api/auth/totp"', script)
-        self.assertIn('window.location.assign("/ops/overview/")', script)
+        self.assertIn('window.location.replace("/ops/overview/")', script)
         self.assertNotIn('window.location.assign("/")', script)
+        self.assertNotIn('window.location.replace("/")', script)
         self.assertIn("recovery: recoveryMode", script)
         self.assertNotIn("localStorage", script)
         self.assertNotIn("sessionStorage", script)
