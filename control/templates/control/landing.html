@@ -4,208 +4,274 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#050b15">
-  <meta name="description" content="Amarktai Earn is an autonomous earning operating system by Amarktai Network, built to discover, evaluate, execute, verify, deliver and govern digital work.">
-  <title>Amarktai Earn — Autonomous Economic Operations</title>
+  <meta name="theme-color" content="#07111f">
+  <meta name="description" content="Amarktai Earn finds paid digital work, chooses the jobs worth doing, gets the work done, checks the quality and tracks what was actually paid.">
+  <title>Amarktai Earn — Find work. Do it well. Get paid.</title>
   <link rel="stylesheet" href="{% static 'control/landing.css' %}">
 </head>
 <body>
-  <div class="site-glow site-glow-one" aria-hidden="true"></div>
-  <div class="site-glow site-glow-two" aria-hidden="true"></div>
+  <div class="page-noise" aria-hidden="true"></div>
 
-  <header class="site-header">
-    <a class="brand-lockup" href="/" aria-label="Amarktai Earn home">
-      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span><strong>AMARKTAI</strong><small>EARN</small></span>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Amarktai Earn home">
+      <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="brand-copy"><strong>AMARKTAI</strong><small>EARN</small></span>
     </a>
-    <nav class="site-nav" aria-label="Primary navigation">
-      <a href="#system">System</a>
-      <a href="#profit">Profit Brain</a>
-      <a href="#autonomy">Autonomy</a>
-      <a href="#control">Control</a>
+    <nav class="main-nav" aria-label="Primary navigation">
+      <a href="#what">What it does</a>
+      <a href="#earn">Ways to earn</a>
+      <a href="#loop">How it works</a>
+      <a href="#owner">Your control</a>
     </nav>
-    <a class="owner-link" href="/login/">
-      <span>Owner access</span>
-      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
-    </a>
+    <a class="login-link" href="/login/">Owner dashboard <span>→</span></a>
   </header>
 
   <main>
-    <section class="hero section-shell" aria-labelledby="hero-title">
+    <section class="hero shell">
       <div class="hero-copy">
-        <div class="eyebrow"><i></i> Autonomous economic operations</div>
-        <h1 id="hero-title">Digital work,<br><em>run as a system.</em></h1>
-        <p class="hero-lede">Amarktai Earn is built to discover qualified demand, decide what is worth doing, route work to the right digital capability, verify the result, deliver it, and preserve economic truth from opportunity to settlement.</p>
+        <div class="hero-badge"><span>●</span> Built by Amarktai Network</div>
+        <h1>Find work.<br>Do it well.<br><em>Get paid.</em></h1>
+        <p class="hero-lede">Amarktai Earn is an AI-powered business system that looks for real online work, decides what is worth taking on, gets the job done, checks the result, delivers it and keeps track of the money.</p>
         <div class="hero-actions">
-          <a class="primary-action" href="#system">Explore the system <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></a>
-          <a class="secondary-action" href="/login/">Secure owner login</a>
+          <a class="btn btn-primary" href="#loop">See how it earns <span>↓</span></a>
+          <a class="btn btn-ghost" href="/login/">Open owner dashboard</a>
         </div>
-        <div class="hero-principles" aria-label="System principles">
-          <span><i></i>Profit-aware</span>
-          <span><i></i>Independent QA</span>
-          <span><i></i>Fail-closed automation</span>
-          <span><i></i>Owner controlled</span>
+        <div class="plain-proof" aria-label="Amarktai Earn highlights">
+          <span><b>Many markets</b><small>One system watches them</small></span>
+          <span><b>Many job types</b><small>Code, research, media, data & more</small></span>
+          <span><b>One goal</b><small>Keep the good work, skip the bad deals</small></span>
         </div>
       </div>
 
-      <div class="hero-visual" aria-label="Amarktai Earn operating flow">
-        <div class="signal-grid" aria-hidden="true"></div>
-        <div class="orbit orbit-one" aria-hidden="true"></div>
-        <div class="orbit orbit-two" aria-hidden="true"></div>
-        <div class="system-core">
-          <span class="core-label">AMARKTAI</span>
-          <strong>EARN</strong>
-          <small>CONTROL PLANE</small>
+      <div class="hero-stage" aria-label="Illustration of Amarktai Earn turning opportunities into completed work">
+        <div class="stage-glow glow-one" aria-hidden="true"></div>
+        <div class="stage-glow glow-two" aria-hidden="true"></div>
+        <div class="job-card job-one">
+          <span class="job-tag">CODING BOUNTY</span>
+          <strong>Fix a production bug</strong>
+          <small>Good fit · worth checking</small>
         </div>
-        <div class="flow-node node-opportunity"><i></i><span>Demand</span><b>QUALIFY</b></div>
-        <div class="flow-node node-profit"><i></i><span>Profit Brain</span><b>DECIDE</b></div>
-        <div class="flow-node node-workers"><i></i><span>Workers</span><b>EXECUTE</b></div>
-        <div class="flow-node node-qa"><i></i><span>Independent QA</span><b>VERIFY</b></div>
-        <div class="flow-node node-delivery"><i></i><span>Delivery</span><b>RECONCILE</b></div>
-        <div class="flow-rail rail-a" aria-hidden="true"></div>
-        <div class="flow-rail rail-b" aria-hidden="true"></div>
-        <div class="flow-rail rail-c" aria-hidden="true"></div>
-        <div class="visual-status"><i></i> Controlled by evidence, policy and economics</div>
+        <div class="job-card job-two">
+          <span class="job-tag purple">RESEARCH</span>
+          <strong>Build a competitor brief</strong>
+          <small>Clear scope · low delivery risk</small>
+        </div>
+        <div class="job-card job-three">
+          <span class="job-tag orange">DATA JOB</span>
+          <strong>Collect and clean web data</strong>
+          <small>Route heavy scraping off the VPS</small>
+        </div>
+        <div class="earn-machine">
+          <div class="machine-top">
+            <span class="machine-dot"></span>
+            <small>AMARKTAI EARN</small>
+            <b>RUNNING THE LOOP</b>
+          </div>
+          <div class="machine-path">
+            <span><i>1</i><b>Find</b><small>Look for real demand</small></span>
+            <span><i>2</i><b>Choose</b><small>Is this job worth it?</small></span>
+            <span><i>3</i><b>Do</b><small>Use the right worker</small></span>
+            <span><i>4</i><b>Check</b><small>Catch mistakes first</small></span>
+            <span><i>5</i><b>Deliver</b><small>Track what happens next</small></span>
+          </div>
+          <div class="machine-footer"><span>Costs counted</span><span>Quality checked</span><span>Owner controlled</span></div>
+        </div>
+        <div class="status-pill"><i></i> Ready to work across many online income channels</div>
       </div>
     </section>
 
-    <section class="trust-strip" aria-label="Amarktai Earn design principles">
-      <span>ONE CONTROL PLANE</span><i></i>
-      <span>REAL ECONOMIC EVIDENCE</span><i></i>
-      <span>BOUNDED EXECUTION</span><i></i>
-      <span>AUDITABLE DECISIONS</span>
-    </section>
-
-    <section class="system-section section-shell" id="system" aria-labelledby="system-title">
-      <div class="section-heading">
-        <span>THE OPERATING SYSTEM</span>
-        <h2 id="system-title">From opportunity to delivery.<br>One controlled lifecycle.</h2>
-        <p>Earn is designed around a single commercial path instead of disconnected bots and scripts. Every stage can contribute evidence to the next decision.</p>
-      </div>
-      <div class="lifecycle-grid">
-        <article><b>01</b><i class="card-dot"></i><h3>Discover</h3><p>Bring in real work and demand from connected sources without confusing discovery with permission to act.</p></article>
-        <article><b>02</b><i class="card-dot"></i><h3>Qualify</h3><p>Separate genuine buyer demand from noise, unsupported work, unsafe work, or incomplete requirements.</p></article>
-        <article><b>03</b><i class="card-dot"></i><h3>Decide</h3><p>Evaluate price, fees, expected cost, capacity, quality risk and commercial value before committing resources.</p></article>
-        <article><b>04</b><i class="card-dot"></i><h3>Execute</h3><p>Turn accepted work into structured plans and route each step to the appropriate bounded worker or capability.</p></article>
-        <article><b>05</b><i class="card-dot"></i><h3>Verify</h3><p>Use independent QA and bounded repair loops before an output can advance toward delivery.</p></article>
-        <article><b>06</b><i class="card-dot"></i><h3>Deliver & learn</h3><p>Track submission, acceptance, payout state, attributable cost and observed performance back into future decisions.</p></article>
+    <section class="ticker" aria-label="Types of digital work Amarktai Earn can handle">
+      <div>
+        <span>CODING</span><i>✦</i><span>RESEARCH</span><i>✦</i><span>DATA</span><i>✦</i><span>APIs</span><i>✦</i><span>CONTENT</span><i>✦</i><span>DIGITAL PRODUCTS</span><i>✦</i><span>AUTOMATION</span><i>✦</i><span>MEDIA</span>
       </div>
     </section>
 
-    <section class="capability-section section-shell" aria-labelledby="capability-title">
-      <div class="section-heading compact-heading">
-        <span>DIGITAL WORKFORCE</span>
-        <h2 id="capability-title">Built for varied digital work.</h2>
-        <p>The execution layer is designed to compose multiple worker families instead of forcing every job through one generic agent.</p>
+    <section class="intro shell" id="what">
+      <div class="eyebrow">WHAT IS IT, REALLY?</div>
+      <div class="intro-grid">
+        <div>
+          <h2>An AI team with a <em>business brain.</em></h2>
+        </div>
+        <div class="intro-copy">
+          <p>Most AI tools wait for you to give them a task. Amarktai Earn is being built to do more: go looking for useful paid work, compare the options, organise the work and help turn that work into real income.</p>
+          <p>It is not meant to chase everything. A bad job can waste time, credits and reputation. Earn is designed to say <strong>yes to the right work and no to the wrong work.</strong></p>
+        </div>
       </div>
-      <div class="capability-grid">
-        <article><div class="cap-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 9h8M8 13h5M8 17h7"/></svg></div><h3>Documents & data</h3><p>Structured files, reports, transformations, analysis, spreadsheets and professional deliverables.</p></article>
-        <article><div class="cap-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4M8 11h6M11 8v6"/></svg></div><h3>Research & knowledge</h3><p>Evidence-led research, synthesis, localization, transcription and source-aware output workflows.</p></article>
-        <article><div class="cap-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/></svg></div><h3>Code & technical work</h3><p>Sandboxed coding, test execution, defensive review and technical documentation with constrained runtime boundaries.</p></article>
-        <article><div class="cap-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16v12H4zM8 14l2-2 3 3 2-2 3 3M8 9h.01"/></svg></div><h3>Media & content</h3><p>Media processing, content production, web output and multi-step deliverables that can combine several capabilities.</p></article>
+
+      <div class="three-up">
+        <article class="feature-card lime-card">
+          <span>01</span>
+          <div class="feature-icon">◎</div>
+          <h3>It hunts for opportunities</h3>
+          <p>Marketplaces, bounties, API sales, digital products and other online channels can all feed work into one place.</p>
+        </article>
+        <article class="feature-card blue-card">
+          <span>02</span>
+          <div class="feature-icon">↗</div>
+          <h3>It works out what is worth doing</h3>
+          <p>Price, fees, cost, time, quality risk and the chance of success all matter before the system commits resources.</p>
+        </article>
+        <article class="feature-card pink-card">
+          <span>03</span>
+          <div class="feature-icon">✓</div>
+          <h3>It checks the work before delivery</h3>
+          <p>The goal is not “generate something and hope.” Work is checked, repaired when needed and only then moved toward delivery.</p>
+        </article>
       </div>
     </section>
 
-    <section class="profit-section section-shell" id="profit" aria-labelledby="profit-title">
-      <div class="profit-panel">
-        <div class="profit-copy">
-          <span class="section-kicker">PROFIT BRAIN</span>
-          <h2 id="profit-title">The question is not “can we do it?”<br><em>It is “should we?”</em></h2>
-          <p>Amarktai Earn is built to make commercial decisions with the economics attached. The decision layer can account for revenue, platform fees, expected execution cost, capacity, risk, quality evidence and strategic value before work is admitted.</p>
-          <div class="profit-points">
-            <span><i></i>Profit and margin evidence</span>
-            <span><i></i>Cost and fee attribution</span>
-            <span><i></i>Capacity-aware admission</span>
-            <span><i></i>Quality and reputation signals</span>
+    <section class="earn-section shell" id="earn">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">WAYS TO EARN</div>
+          <h2>One system.<br><em>Lots of ways to make money.</em></h2>
+        </div>
+        <p>Earn is not tied to one freelance site. The bigger idea is a portfolio: several kinds of online work and several places to sell it, so one slow market does not stop the whole business.</p>
+      </div>
+
+      <div class="earn-grid">
+        <article class="earn-card wide-card">
+          <div class="card-top"><span class="mini-badge">MARKETPLACES</span><b>01</b></div>
+          <h3>Paid jobs & freelance work</h3>
+          <p>Find suitable posted work, score it, prepare the response and move the best opportunities into a controlled delivery flow.</p>
+          <div class="example-tags"><span>Research</span><span>Automation</span><span>Documents</span><span>Technical work</span></div>
+        </article>
+        <article class="earn-card code-card">
+          <div class="card-top"><span class="mini-badge">BOUNTIES</span><b>02</b></div>
+          <h3>Code fixes & technical challenges</h3>
+          <p>Take on issues, bug fixes and scoped technical tasks where the expected reward makes sense.</p>
+          <div class="code-lines" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        </article>
+        <article class="earn-card api-card">
+          <div class="card-top"><span class="mini-badge">RECURRING</span><b>03</b></div>
+          <h3>Sell useful APIs</h3>
+          <p>Package repeatable Amarktai capabilities so customers can pay for usage again and again.</p>
+          <div class="pulse-row" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+        </article>
+        <article class="earn-card data-card">
+          <div class="card-top"><span class="mini-badge">DATA</span><b>04</b></div>
+          <h3>Data collection & web automation</h3>
+          <p>Build sellable data workflows and scraping tools, while sending heavy scraping to infrastructure designed for it.</p>
+          <div class="data-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+        </article>
+        <article class="earn-card product-card">
+          <div class="card-top"><span class="mini-badge">PRODUCTS</span><b>05</b></div>
+          <h3>Digital products</h3>
+          <p>Create useful downloadable products and repeatable service packages that can sell without finding a brand-new client every time.</p>
+          <div class="product-stack" aria-hidden="true"><i></i><i></i><i></i></div>
+        </article>
+        <article class="earn-card wide-card media-card">
+          <div class="card-top"><span class="mini-badge">CREATIVE WORK</span><b>06</b></div>
+          <h3>Content, media & business deliverables</h3>
+          <p>Turn briefs into research, written content, images, media, structured files and multi-step deliverables using the right mix of workers.</p>
+          <div class="example-tags"><span>Content</span><span>Images</span><span>Reports</span><span>Transcription</span><span>Analysis</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="loop-section" id="loop">
+      <div class="shell">
+        <div class="section-head light-head">
+          <div>
+            <div class="eyebrow">THE MONEY LOOP</div>
+            <h2>Simple idea.<br><em>Serious execution.</em></h2>
+          </div>
+          <p>Every job should move through the same clear path. That makes it easier to scale without losing track of quality, cost or whether the money actually arrived.</p>
+        </div>
+        <div class="loop-list">
+          <article><span>1</span><div><h3>Find</h3><p>Look across approved sources for real demand.</p></div><b>→</b></article>
+          <article><span>2</span><div><h3>Choose</h3><p>Skip work that looks unprofitable, unclear or too risky.</p></div><b>→</b></article>
+          <article><span>3</span><div><h3>Build</h3><p>Break the job into steps and use the right worker for each one.</p></div><b>→</b></article>
+          <article><span>4</span><div><h3>Check</h3><p>Review the result and repair problems before the client sees them.</p></div><b>→</b></article>
+          <article><span>5</span><div><h3>Deliver</h3><p>Send the work, track acceptance and keep payout status separate from promises.</p></div><b>→</b></article>
+          <article><span>6</span><div><h3>Learn</h3><p>Use real results to make better choices next time.</p></div><b>↺</b></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="choice-section shell">
+      <div class="choice-copy">
+        <div class="eyebrow">THE PROFIT FILTER</div>
+        <h2>It should not take <em>every</em> job.</h2>
+        <p>Winning is not about being busy. It is about doing work that has a sensible chance of paying enough after fees, AI costs, tools, retries and delivery risk.</p>
+        <ul>
+          <li><i>✓</i><span><strong>Good fit?</strong> Can our workers actually do it well?</span></li>
+          <li><i>✓</i><span><strong>Enough upside?</strong> Is the expected reward worth the cost?</span></li>
+          <li><i>✓</i><span><strong>Clear enough?</strong> Do we understand what must be delivered?</span></li>
+          <li><i>✓</i><span><strong>Safe to take?</strong> Are the market, payment and operating rules ready?</span></li>
+        </ul>
+      </div>
+      <div class="choice-board">
+        <div class="decision accepted">
+          <div><span>GOOD OPPORTUNITY</span><b>TAKE A CLOSER LOOK</b></div>
+          <strong>Clear brief</strong><strong>Supported work</strong><strong>Healthy margin</strong><strong>Delivery path ready</strong>
+          <footer><i></i> Candidate for work</footer>
+        </div>
+        <div class="decision passed">
+          <div><span>BAD DEAL</span><b>SKIP IT</b></div>
+          <strong>Unclear scope</strong><strong>Low reward</strong><strong>High delivery risk</strong><strong>Payment route uncertain</strong>
+          <footer><i></i> Protect time, money and reputation</footer>
+        </div>
+      </div>
+    </section>
+
+    <section class="portfolio-section shell">
+      <div class="portfolio-card">
+        <div class="portfolio-copy">
+          <div class="eyebrow">NOT ONE BET</div>
+          <h2>Built to earn across the internet, not depend on one website.</h2>
+          <p>Freelance work can be quiet. Bounties can be unpredictable. Products take time to grow. APIs need customers. That is why Amarktai Earn is designed as a portfolio of earning routes instead of a single source of income.</p>
+          <div class="portfolio-pills"><span>Job markets</span><span>Bounties</span><span>API sales</span><span>Data products</span><span>Digital products</span><span>Direct services</span></div>
+        </div>
+        <div class="portfolio-visual" aria-hidden="true">
+          <div class="orbit-ring ring-a"></div><div class="orbit-ring ring-b"></div>
+          <div class="center-ball">EARN</div>
+          <span class="orbit-chip chip-a">JOBS</span><span class="orbit-chip chip-b">APIs</span><span class="orbit-chip chip-c">DATA</span><span class="orbit-chip chip-d">PRODUCTS</span><span class="orbit-chip chip-e">BOUNTIES</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="owner-section shell" id="owner">
+      <div class="owner-panel">
+        <div class="owner-copy">
+          <div class="eyebrow">YOU STAY IN CHARGE</div>
+          <h2>The system can do the repetitive work.<br><em>You set the rules.</em></h2>
+          <p>The private owner dashboard is where markets, jobs, workers, costs, payouts, security and automation controls live. Nothing needs to become fully automatic just because it is connected.</p>
+          <div class="owner-actions">
+            <a class="btn btn-primary" href="/login/">Open owner dashboard <span>→</span></a>
+            <span>Protected owner access with two-factor authentication.</span>
           </div>
         </div>
-        <div class="decision-card" aria-label="Illustrative Profit Brain decision model">
-          <div class="decision-head"><span>OPPORTUNITY DECISION</span><i></i></div>
-          <div class="decision-row"><span>Demand quality</span><b>VERIFIED</b></div>
-          <div class="decision-row"><span>Execution fit</span><b>SUPPORTED</b></div>
-          <div class="decision-row"><span>Expected economics</span><b>POSITIVE</b></div>
-          <div class="decision-row"><span>Capacity</span><b>AVAILABLE</b></div>
-          <div class="decision-divider"></div>
-          <div class="decision-result"><span>Decision</span><strong>ADMIT</strong><small>Only when all required gates agree.</small></div>
-        </div>
-      </div>
-    </section>
-
-    <section class="autonomy-section section-shell" id="autonomy" aria-labelledby="autonomy-title">
-      <div class="section-heading">
-        <span>BOUNDED AUTONOMY</span>
-        <h2 id="autonomy-title">Automation is a permission level,<br>not a personality trait.</h2>
-        <p>Earn separates observation, owner-controlled actions and bounded autonomous mutation. A market or channel does not become autonomous just because its integration exists.</p>
-      </div>
-      <div class="mode-track">
-        <article class="mode-card"><div><b>OFF</b><span>01</span></div><h3>No autonomous mutation</h3><p>The control plane can remain inert while configuration and evidence are established.</p></article>
-        <article class="mode-card"><div><b>SHADOW</b><span>02</span></div><h3>Observe and evaluate</h3><p>Discover, score and model decisions without taking external commercial action.</p></article>
-        <article class="mode-card"><div><b>MANUAL</b><span>03</span></div><h3>Owner-authorized action</h3><p>The system prepares and executes bounded paths where the owner explicitly controls commitment.</p></article>
-        <article class="mode-card active-mode"><div><b>LOW RISK</b><span>04</span></div><h3>Bounded autonomous action</h3><p>Only approved low-risk mutations can proceed when every runtime, policy and economic gate remains satisfied.</p></article>
-      </div>
-    </section>
-
-    <section class="truth-section section-shell" id="control" aria-labelledby="truth-title">
-      <div class="truth-panel">
-        <div class="truth-copy">
-          <span class="section-kicker">TRUTH BEFORE ACTION</span>
-          <h2 id="truth-title">Ready for work is not the same as ready for cash.</h2>
-          <p>Commercial readiness is intentionally split into distinct domains. That keeps the system useful without pretending that a connected source, a payout route or an autonomy switch means more than it actually does.</p>
-        </div>
-        <div class="truth-domains">
-          <article><i></i><span>WORK</span><strong>Can this source produce work we are allowed and able to do?</strong></article>
-          <article><i></i><span>LIVE PROVING</span><strong>Can we safely prove the real workflow under current controls?</strong></article>
-          <article><i></i><span>CASH</span><strong>Is the final payout and settlement route actually verified?</strong></article>
-          <article><i></i><span>AUTONOMY</span><strong>Are all policy, runtime and operating gates armed for mutation?</strong></article>
-        </div>
-      </div>
-    </section>
-
-    <section class="control-section section-shell" aria-labelledby="control-title">
-      <div class="control-layout">
-        <div class="control-visual" aria-hidden="true">
-          <div class="control-window">
-            <div class="window-top"><i></i><i></i><i></i><span>OWNER CONTROL PLANE</span></div>
-            <div class="window-body">
-              <div class="mini-sidebar"><b></b><b></b><b></b><b></b><b></b></div>
-              <div class="mini-main">
-                <span class="mini-label"></span>
-                <strong class="mini-title"></strong>
-                <div class="mini-metrics"><i></i><i></i><i></i><i></i></div>
-                <div class="mini-chart"><span></span><span></span><span></span><span></span><span></span><span></span></div>
-                <div class="mini-table"><i></i><i></i><i></i></div>
-              </div>
+        <div class="owner-console" aria-hidden="true">
+          <div class="console-head"><i></i><i></i><i></i><span>AMARKTAI EARN</span></div>
+          <div class="console-body">
+            <aside><b></b><b></b><b></b><b></b><b></b><b></b></aside>
+            <div class="console-main">
+              <div class="console-title"><i></i><i></i></div>
+              <div class="console-stats"><span></span><span></span><span></span></div>
+              <div class="console-chart"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="console-list"><b></b><b></b><b></b></div>
             </div>
           </div>
         </div>
-        <div class="control-copy">
-          <span class="section-kicker">PRIVATE OWNER WORKSPACE</span>
-          <h2 id="control-title">Autonomy does not remove oversight.</h2>
-          <p>The public site explains the system. Runtime truth, market controls, security state, financial evidence and operational detail stay inside a private owner workspace protected by authentication and MFA.</p>
-          <ul>
-            <li><i></i><span><strong>One control plane</strong> for work, workers, money, markets, alerts and runtime health.</span></li>
-            <li><i></i><span><strong>Auditable evidence</strong> behind important state changes and commercial decisions.</span></li>
-            <li><i></i><span><strong>Fail-closed controls</strong> when required proof, policy or runtime conditions are absent.</span></li>
-          </ul>
-        </div>
       </div>
     </section>
 
-    <section class="final-cta section-shell" aria-labelledby="cta-title">
-      <div class="cta-orbit" aria-hidden="true"></div>
-      <span>AMARKTAI EARN</span>
-      <h2 id="cta-title">Build income like an operating system.</h2>
-      <p>Discover. Decide. Execute. Verify. Deliver. Learn. Keep every important commercial state grounded in evidence.</p>
-      <a class="primary-action" href="/login/">Owner access <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></a>
+    <section class="final shell">
+      <span class="final-kicker">AMARKTAI EARN</span>
+      <h2>Find the work.<br><em>Win the good jobs.</em><br>Keep getting better.</h2>
+      <p>Amarktai Earn is being built to turn a growing set of AI capabilities, marketplaces and sales channels into one practical online earning business.</p>
+      <a class="btn btn-primary final-btn" href="/login/">Owner dashboard <span>→</span></a>
+      <div class="final-scribble" aria-hidden="true">↗</div>
     </section>
   </main>
 
-  <footer class="site-footer section-shell">
-    <a class="brand-lockup footer-brand" href="/" aria-label="Amarktai Earn home">
-      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span><strong>AMARKTAI</strong><small>EARN</small></span>
+  <footer class="footer shell">
+    <a class="brand footer-brand" href="/" aria-label="Amarktai Earn home">
+      <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="brand-copy"><strong>AMARKTAI</strong><small>EARN</small></span>
     </a>
-    <p>Autonomous economic operations by <strong>Amarktai Network</strong>.</p>
+    <p>AI-powered earning infrastructure by <strong>Amarktai Network</strong>.</p>
     <span>© 2026 Amarktai Network</span>
   </footer>
 </body>
