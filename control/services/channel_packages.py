@@ -354,41 +354,90 @@ def _package_manifest(spec: ChannelPackageSpec, assumptions: dict, pricing_block
     }
 
 
+def _merged_channel_package_metadata(existing, manifest: dict) -> dict:
+    value = dict(existing) if isinstance(existing, dict) else {}
+    value["channel_package"] = manifest
+    return value
+
+
+def _offering_catalog_values(base: ServiceOffering, spec: ChannelPackageSpec, price: Decimal, minimum: Decimal, assumptions: dict, manifest: dict) -> dict:
+    known_market_fee = assumptions["known_marketplace_fee_rate"]
+    return {
+        "display_name": spec.display_name,
+        "description": spec.description,
+        "capability": base.capability,
+        "operation": base.operation,
+        "worker_class": base.worker_class,
+        "pricing_model": spec.pricing_model,
+        "currency": "USD",
+        "advertised_price": price,
+        "minimum_profitable_price": minimum,
+        "platform_fee_rate": _decimal(known_market_fee) if known_market_fee is not None else Decimal("0"),
+        "expected_genx_cost": base.expected_genx_cost,
+        "max_genx_credits": base.max_genx_credits,
+        "expected_external_cost": base.expected_external_cost,
+        "expected_operational_cost": base.expected_operational_cost,
+        "expected_minutes": base.expected_minutes,
+        "sla_minutes": base.sla_minutes,
+        "input_schema": base.input_schema,
+        "output_schema": base.output_schema,
+        "terms_metadata": _merged_channel_package_metadata(base.terms_metadata, manifest),
+    }
+
+
+def _refresh_inactive_offering(offering: ServiceOffering, values: dict) -> bool:
+    if offering.enabled or offering.accepting_orders:
+        return False
+    changed = []
+    for field, value in values.items():
+        if getattr(offering, field) != value:
+            setattr(offering, field, value)
+            changed.append(field)
+    if changed:
+        offering.save(update_fields=[*changed, "updated_at"])
+    return bool(changed)
+
+
+def _listing_catalog_values(spec: ChannelPackageSpec, price: Decimal, manifest: dict, existing_metadata=None) -> dict:
+    return {
+        "published_price": price,
+        "currency": "USD",
+        "pricing_model": spec.pricing_model,
+        "platform_metadata": _merged_channel_package_metadata(existing_metadata, manifest),
+    }
+
+
+def _refresh_unpublished_listing(listing: MarketServiceListing, values: dict) -> bool:
+    if listing.status == MarketServiceListing.Status.PUBLISHED or listing.remote_listing_id or listing.remote_reference:
+        return False
+    changed = []
+    for field, value in values.items():
+        if getattr(listing, field) != value:
+            setattr(listing, field, value)
+            changed.append(field)
+    if changed:
+        listing.save(update_fields=[*changed, "updated_at"])
+    return bool(changed)
+
+
 @transaction.atomic
 def sync_priority_channel_packages() -> dict[str, int]:
     bootstrap_revenue_market_catalog()
     sync_candidate_service_offerings()
 
-    offerings_created = listings_created = unchanged = 0
+    offerings_created = listings_created = offerings_updated = listings_updated = unchanged = 0
+    active_offerings_preserved = published_listings_preserved = 0
     for spec in PACKAGE_SPECS:
         market = Marketplace.objects.get(slug=spec.market)
         base = ServiceOffering.objects.get(slug=spec.operation.replace("_", "-"))
         price, minimum, pricing_blockers, assumptions = _price_for_package(base, market, spec)
         manifest = _package_manifest(spec, assumptions, pricing_blockers)
+        offering_values = _offering_catalog_values(base, spec, price, minimum, assumptions, manifest)
 
-        known_market_fee = assumptions["known_marketplace_fee_rate"]
         offering, offering_created = ServiceOffering.objects.get_or_create(
             slug=spec.slug,
             defaults={
-                "display_name": spec.display_name,
-                "description": spec.description,
-                "capability": base.capability,
-                "operation": base.operation,
-                "worker_class": base.worker_class,
-                "pricing_model": spec.pricing_model,
-                "currency": "USD",
-                "advertised_price": price,
-                "minimum_profitable_price": minimum,
-                "platform_fee_rate": _decimal(known_market_fee) if known_market_fee is not None else Decimal("0"),
-                "expected_genx_cost": base.expected_genx_cost,
-                "max_genx_credits": base.max_genx_credits,
-                "expected_external_cost": base.expected_external_cost,
-                "expected_operational_cost": base.expected_operational_cost,
-                "expected_minutes": base.expected_minutes,
-                "sla_minutes": base.sla_minutes,
-                "input_schema": base.input_schema,
-                "output_schema": base.output_schema,
-                "terms_metadata": {**(base.terms_metadata or {}), "channel_package": manifest},
+                **offering_values,
                 "proof_evidence": dict(base.proof_evidence or {}),
                 "enabled": False,
                 "accepting_orders": False,
@@ -396,26 +445,48 @@ def sync_priority_channel_packages() -> dict[str, int]:
             },
         )
         offerings_created += int(offering_created)
+        offering_updated = False
+        if not offering_created:
+            offering_updated = _refresh_inactive_offering(offering, offering_values)
+            offerings_updated += int(offering_updated)
+            active_offerings_preserved += int((offering.enabled or offering.accepting_orders) and not offering_updated)
 
+        listing_values = _listing_catalog_values(spec, price, manifest)
         listing, listing_created = MarketServiceListing.objects.get_or_create(
             offering=offering,
             marketplace=market,
             defaults={
                 "status": MarketServiceListing.Status.DRAFT,
-                "published_price": price,
-                "currency": "USD",
-                "pricing_model": spec.pricing_model,
-                "platform_metadata": {"channel_package": manifest},
+                **listing_values,
             },
         )
         listings_created += int(listing_created)
-        unchanged += int(not offering_created and not listing_created)
+        listing_updated = False
+        if not listing_created:
+            listing_values = _listing_catalog_values(spec, price, manifest, listing.platform_metadata)
+            listing_updated = _refresh_unpublished_listing(listing, listing_values)
+            listings_updated += int(listing_updated)
+            published_listings_preserved += int(
+                (listing.status == MarketServiceListing.Status.PUBLISHED or bool(listing.remote_listing_id) or bool(listing.remote_reference))
+                and not listing_updated
+            )
+
+        unchanged += int(
+            not offering_created
+            and not listing_created
+            and not offering_updated
+            and not listing_updated
+        )
 
     return {
         "catalog_version": PACKAGE_CATALOG_VERSION,
         "packages": len(PACKAGE_SPECS),
         "offerings_created": offerings_created,
         "listings_created": listings_created,
+        "offerings_updated": offerings_updated,
+        "listings_updated": listings_updated,
+        "active_offerings_preserved": active_offerings_preserved,
+        "published_listings_preserved": published_listings_preserved,
         "unchanged": unchanged,
     }
 
@@ -457,6 +528,7 @@ def priority_channel_package_snapshot() -> dict:
             "shadow_price": None if listing is None else str(listing.published_price),
             "currency": None if listing is None else listing.currency,
             "listing_status": None if listing is None else listing.status,
+            "remote_listing_recorded": bool(listing and (listing.remote_listing_id or listing.remote_reference)),
             "offering_proof_state": None if offering is None else offering.proof_state,
             "offering_enabled": False if offering is None else bool(offering.enabled),
             "accepting_orders": False if offering is None else bool(offering.accepting_orders),
@@ -466,6 +538,7 @@ def priority_channel_package_snapshot() -> dict:
             "buyer_inputs": list(spec.buyer_inputs),
             "deliverables": list(spec.deliverables),
         })
+    published = sum(1 for row in rows if row["listing_status"] == MarketServiceListing.Status.PUBLISHED)
     return {
         "section": "priority-channel-packages",
         "rows": rows,
@@ -474,8 +547,8 @@ def priority_channel_package_snapshot() -> dict:
             "total_packages": len(rows),
             "prepared_packages": sum(1 for row in rows if row["prepared"]),
             "price_ready_packages": sum(1 for row in rows if row["price_ready"]),
-            "published_packages": 0,
+            "published_packages": published,
             "external_mutation_allowed": False,
-            "truth": "Package manifests and draft listings are local preparation only. No marketplace listing, checkout, subscription, Actor, or API product is published by this catalog.",
+            "truth": "Package catalog sync is local and performs no external publication. Published counts are derived from persisted listing state and remote publication evidence is preserved rather than overwritten.",
         },
     }
