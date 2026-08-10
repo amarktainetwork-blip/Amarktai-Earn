@@ -1,0 +1,57 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07111f">
+  <title>Amarktai Earn · Secure Order Intake</title>
+  <link rel="stylesheet" href="{% static 'control/intake.css' %}">
+</head>
+<body>
+  <main class="intake-shell">
+    <section class="intake-card">
+      <div class="brand"><span></span><strong>AMARKTAI</strong><small>EARN</small></div>
+      {% if error %}
+        <div class="intake-state error">
+          <small>SECURE ORDER INTAKE</small>
+          <h1>This intake link cannot be used</h1>
+          <p>{{ error }}</p>
+        </div>
+      {% else %}
+        <div class="intake-state">
+          <small>SECURE ORDER INTAKE</small>
+          <h1>{{ snapshot.package_name }}</h1>
+          <p>Provide the remaining information for your order. Files are validated and attached only to this order.</p>
+        </div>
+        <div class="order-meta">
+          <span>Order <strong>{{ snapshot.order_id }}</strong></span>
+          <span>Status <strong>{{ snapshot.remote_state|default:snapshot.status }}</strong></span>
+        </div>
+        {% if submitted and not snapshot.missing_inputs %}
+          <div class="success-box"><strong>Input complete</strong><p>Your order now has the required buyer input. Processing remains subject to the agreed order and platform status.</p></div>
+        {% endif %}
+        {% if snapshot.editable %}
+          <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+            {% for field in snapshot.input_fields %}
+              <label class="field {% if field.complete %}complete{% endif %}">
+                <span>{{ field.label }}{% if field.complete %}<i>Recorded</i>{% endif %}</span>
+                {% if field.type == 'file' %}
+                  <input type="file" name="{{ field.key }}" {% if not field.complete %}required{% endif %}>
+                {% else %}
+                  <textarea name="{{ field.key }}" rows="4" {% if not field.complete %}required{% endif %}>{{ field.value }}</textarea>
+                {% endif %}
+              </label>
+            {% endfor %}
+            <button type="submit">Save order information</button>
+          </form>
+        {% else %}
+          <div class="success-box"><strong>Intake closed</strong><p>This order is no longer accepting buyer-input changes.</p></div>
+        {% endif %}
+        <p class="security-note">Do not upload passwords, API keys, banking credentials, private keys, or unrelated personal documents.</p>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>
