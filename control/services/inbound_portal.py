@@ -166,7 +166,12 @@ def submit_buyer_intake(
     uploads: Iterable,
     actor: str = "buyer-intake",
 ) -> InboundOrder:
-    order = InboundOrder.objects.select_related("listing__offering", "marketplace", "job").select_for_update().get(pk=order.pk)
+    order = (
+        InboundOrder.objects
+        .select_related("listing__offering", "marketplace", "job")
+        .select_for_update(of=("self",))
+        .get(pk=order.pk)
+    )
     if order.status not in EDITABLE_ORDER_STATES:
         raise IntakePortalError("ORDER_NO_LONGER_ACCEPTS_BUYER_INPUT")
     spec = buyer_input_spec(order)
