@@ -138,6 +138,11 @@ def _contra_exports(rows: list[dict], commercial_by_slug: dict[str, dict]) -> li
                 "price": payload["pricing"]["public_price"],
                 "currency": payload["pricing"]["currency"],
             },
+            "inbound_contract": {
+                "mode": "OWNER_MANUAL_IMPORT_PLUS_SIGNED_BUYER_INTAKE",
+                "import_path": "/api/channels/contra/orders",
+                "external_mutation_performed": False,
+            },
             "publication_blockers": list(dict.fromkeys([
                 *price_blockers,
                 "PUBLIC_AUTOMATION_CONTRACT_NOT_VERIFIED",
@@ -146,6 +151,47 @@ def _contra_exports(rows: list[dict], commercial_by_slug: dict[str, dict]) -> li
         })
         exports.append(payload)
     return exports
+
+
+def _rapidapi_accepted_schema() -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "accepted": {"type": "boolean"},
+            "created": {"type": "boolean"},
+            "order_id": {"type": "string", "format": "uuid"},
+            "status_path": {"type": "string"},
+            "order_status": {"type": "string"},
+            "job_state": {"type": "string"},
+        },
+        "required": ["accepted", "order_id", "status_path"],
+    }
+
+
+def _rapidapi_status_schema() -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "order_id": {"type": "string", "format": "uuid"},
+            "package_slug": {"type": "string"},
+            "order_status": {"type": "string"},
+            "remote_state": {"type": "string"},
+            "job_state": {"type": "string"},
+            "workplan_state": {"type": ["string", "null"]},
+            "artifacts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "artifact_id": {"type": "integer"},
+                        "mime_type": {"type": "string"},
+                        "size_bytes": {"type": "integer"},
+                        "download_path": {"type": "string"},
+                    },
+                },
+            },
+        },
+    }
 
 
 def _rapidapi_export(rows: list[dict], commercial_by_slug: dict[str, dict]) -> dict:
@@ -168,22 +214,53 @@ def _rapidapi_export(rows: list[dict], commercial_by_slug: dict[str, dict]) -> d
             "post": {
                 "operationId": row["package_slug"].replace("-", "_"),
                 "summary": row["display_name"],
-                "description": row.get("sales_copy") or "",
+                "description": (row.get("sales_copy") or "") + " Requests are accepted asynchronously; poll the returned status path for QA-verified artifacts.",
                 "requestBody": {
                     "required": True,
                     "content": {"application/json": {"schema": schema}},
                 },
                 "responses": {
-                    "200": {
-                        "description": "Successful canonical Amarktai response.",
-                        "content": {"application/json": {"schema": _package_output_schema(row)}},
+                    "202": {
+                        "description": "Request authenticated, persisted and queued for canonical execution.",
+                        "content": {"application/json": {"schema": _rapidapi_accepted_schema()}},
                     },
+                    "400": {"description": "Invalid request payload."},
                     "401": {"description": "Rapid proxy authentication failed."},
-                    "409": {"description": "Idempotency payload conflict."},
+                    "409": {"description": "Idempotency or order-state conflict."},
                     "503": {"description": "Package or provider ingress is not activated."},
                 },
             }
         }
+    paths["/orders/{order_id}"] = {
+        "get": {
+            "operationId": "get_order_status",
+            "summary": "Get asynchronous order status and QA-verified artifact references",
+            "parameters": [{"name": "order_id", "in": "path", "required": True, "schema": {"type": "string", "format": "uuid"}}],
+            "responses": {
+                "200": {"description": "Canonical order status.", "content": {"application/json": {"schema": _rapidapi_status_schema()}}},
+                "401": {"description": "Rapid proxy authentication failed."},
+                "403": {"description": "Order does not belong to the RapidAPI user."},
+                "404": {"description": "Order not found."},
+            },
+        }
+    }
+    paths["/orders/{order_id}/artifacts/{artifact_id}"] = {
+        "get": {
+            "operationId": "download_order_artifact",
+            "summary": "Download a QA-verified result artifact",
+            "parameters": [
+                {"name": "order_id", "in": "path", "required": True, "schema": {"type": "string", "format": "uuid"}},
+                {"name": "artifact_id", "in": "path", "required": True, "schema": {"type": "integer"}},
+            ],
+            "responses": {
+                "200": {"description": "QA-verified result artifact."},
+                "401": {"description": "Rapid proxy authentication failed."},
+                "403": {"description": "Order does not belong to the RapidAPI user."},
+                "404": {"description": "Artifact not found."},
+                "409": {"description": "Result is not QA-ready yet."},
+            },
+        }
+    }
     secret_configured = bool(os.getenv("RAPIDAPI_PROXY_SECRET", "").strip())
     ingress_enabled = _truthy_env("RAPIDAPI_PUBLIC_INGRESS_ENABLED") and secret_configured
     price_blockers = sorted({
@@ -202,14 +279,17 @@ def _rapidapi_export(rows: list[dict], commercial_by_slug: dict[str, dict]) -> d
                 "version": "1.0.0-draft",
                 "description": "Local provider export only. No RapidAPI listing or public ingress is activated by this document.",
             },
+            "servers": [{"url": "https://earn.amarktai.co.za/api/channels/rapidapi"}],
             "paths": paths,
         },
         "provider_ingress_contract": {
             "mode": "RAPID_PROXY_SECRET",
-            "required_header": "X-RapidAPI-Proxy-Secret",
+            "required_proxy_header": "X-RapidAPI-Proxy-Secret",
+            "required_buyer_header": "X-RapidAPI-User",
             "comparison": "CONSTANT_TIME",
             "secret_configured": secret_configured,
             "ingress_enabled": ingress_enabled,
+            "execution_mode": "ASYNC_202_POLL_ARTIFACT",
             "public_endpoint_state": "CONFIGURED_BUT_FAIL_CLOSED" if secret_configured else "NOT_CONFIGURED",
         },
         "packages": packages,
@@ -257,7 +337,8 @@ def _apify_export(rows: list[dict], commercial_by_slug: dict[str, dict]) -> dict
                 "actorSpecification": 1,
                 "name": "amarktai-website-data-extractor",
                 "title": row["display_name"],
-                "version": "0.1.0",
+                "version": "0.1",
+                "dockerfile": "./Dockerfile",
                 "input": "./input_schema.json",
                 "output": "./output_schema.json",
             },
@@ -275,7 +356,7 @@ def _apify_export(rows: list[dict], commercial_by_slug: dict[str, dict]) -> dict
             "root": "integrations/apify_actor",
             "actor_definition": "integrations/apify_actor/.actor/actor.json",
             "runtime": "integrations/apify_actor/src/main.py",
-            "dockerfile": "integrations/apify_actor/Dockerfile",
+            "dockerfile": "integrations/apify_actor/.actor/Dockerfile",
             "source_state": "REPOSITORY_BUNDLE_PREPARED",
         },
         "package": package,
@@ -322,11 +403,13 @@ def _lemon_export(rows: list[dict], commercial_by_slug: dict[str, dict]) -> dict
         "products": products,
         "webhook_contract": {
             "method": "POST",
+            "path": "/webhooks/lemon-squeezy/",
             "signature_header": "X-Signature",
             "signature_algorithm": "HMAC-SHA256",
             "secret_configured": secret_configured,
             "receiver_enabled": webhook_enabled,
             "receiver_state": "CONFIGURED_BUT_FAIL_CLOSED" if secret_configured else "NOT_CONFIGURED",
+            "buyer_intake": "SIGNED_EXPIRING_ORDER_LINK",
             "recommended_events": [
                 "order_created",
                 "subscription_created",
