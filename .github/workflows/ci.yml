@@ -80,6 +80,8 @@ jobs:
       - run: python manage.py migrate --noinput
       - run: python manage.py healthcheck
       - run: python -m unittest discover -s tests -p 'test_*_stdlib.py' -q
+      - name: Webdock host compliance integration
+        run: python manage.py test tests.test_webdock_host_compliance_integration -v 2
       - name: Priority pricing onboarding publication integration
         run: >-
           python manage.py test
@@ -107,7 +109,7 @@ jobs:
         if: always()
         run: python manage.py test tests.test_channel_completion_regressions_integration -v 2
       - name: Full Django integration matrix
-        run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration tests.test_dependency_media_integration tests.test_v1_acceptance_integration tests.test_profit_brain_integration tests.test_multifile_composite_integration tests.test_expanded_workers_integration tests.test_multi_market_adapters_integration tests.test_synthetic_safety_integration tests.test_final_freeze_integration tests.test_owner_ui_integration tests.test_genx_async_session_integration tests.test_two_sided_revenue_integration tests.test_banking_integration tests.test_phase5_market_readiness_integration tests.test_phase3_channels_integration tests.test_channel_completion_integration tests.test_channel_completion_regressions_integration -v 2
+        run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration tests.test_dependency_media_integration tests.test_v1_acceptance_integration tests.test_profit_brain_integration tests.test_multifile_composite_integration tests.test_expanded_workers_integration tests.test_multi_market_adapters_integration tests.test_synthetic_safety_integration tests.test_final_freeze_integration tests.test_owner_ui_integration tests.test_genx_async_session_integration tests.test_two_sided_revenue_integration tests.test_banking_integration tests.test_phase5_market_readiness_integration tests.test_phase3_channels_integration tests.test_channel_completion_integration tests.test_channel_completion_regressions_integration tests.test_webdock_host_compliance_integration -v 2
       - name: Production configuration preflight
         env:
           AMARKTAI_ENV: production

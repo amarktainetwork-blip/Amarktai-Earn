@@ -4,6 +4,8 @@ from cryptography.fernet import Fernet
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
+from control.services.host_policy import runtime_policy_errors
+
 
 DOMAIN = "earn.amarktai.co.za"
 VALID_AUTONOMY_MODES = {"OFF", "SHADOW", "MANUAL", "LOW_RISK", "FULL"}
@@ -56,6 +58,11 @@ class Command(BaseCommand):
         throttle_pepper = os.getenv("AUTH_THROTTLE_PEPPER", "")
         if _placeholder(throttle_pepper) or len(throttle_pepper.encode()) < 32:
             errors.append("AUTH_THROTTLE_PEPPER must contain at least 32 non-placeholder bytes")
+
+        # Hosting-provider policy is a production invariant, not a dashboard hint.
+        # On Webdock, prohibited local workloads must stop the process before any
+        # watcher/worker/web service starts. Off-host settlement remains possible.
+        errors.extend(runtime_policy_errors())
 
         mode = os.getenv("AUTONOMOUS_MODE", "OFF").upper()
         if mode not in VALID_AUTONOMY_MODES:

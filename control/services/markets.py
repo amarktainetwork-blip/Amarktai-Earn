@@ -112,13 +112,14 @@ def bootstrap_market_integrations() -> dict[str, int]:
             defaults={
                 "source_url": definition.source_urls[0],
                 "automation_allowed": definition.automation_allowed,
-                "webdock_compatible": True,
+                "webdock_compatible": definition.webdock_compatible,
                 "checked_at": profile.docs_checked_at,
                 "snapshot": {
                     "source_urls": list(definition.source_urls),
                     "capabilities": definition.capabilities.as_dict(),
                     "blockers": list(definition.blockers),
                     "evidence": definition.evidence,
+                    "webdock_compatible": definition.webdock_compatible,
                 },
             },
         )
