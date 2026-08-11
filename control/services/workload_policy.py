@@ -13,6 +13,11 @@ class WorkloadDecision:
 # Host-level workload guardrails. These deliberately target execution intent,
 # not mere subject matter: writing about Bitcoin or receiving an off-host USDC
 # payout is different from operating blockchain infrastructure on this VPS.
+#
+# IMPORTANT: reason-code names are part of the V1 acceptance/audit contract.
+# Existing canonical names such as PROHIBITED_UNAUTHORIZED_SCANNING and
+# PROHIBITED_LOCAL_INFERENCE are preserved even where Webdock's current policy
+# requires us to broaden the patterns they cover.
 _PROHIBITED = {
     "PROHIBITED_CRYPTO_MINING": (
         r"\bcrypto(?:currency)? mining\b",
@@ -33,7 +38,7 @@ _PROHIBITED = {
         r"\bsell (?:unused )?bandwidth\b",
         r"\b(?:open|residential) proxy service\b",
     ),
-    "PROHIBITED_NETWORK_SCANNING": (
+    "PROHIBITED_UNAUTHORIZED_SCANNING": (
         r"\b(?:network|port|host|internet[- ]wide|vulnerability) scan(?:ner|ning)?\b",
         r"\b(?:nmap|masscan|zmap)\b",
         r"\bscan (?:random |public |internet )?(?:hosts|ips|networks|ports)\b",
@@ -78,7 +83,7 @@ _PROHIBITED = {
         r"\btraffic exchange\b",
         r"\bautosurf\b",
     ),
-    "PROHIBITED_LOCAL_NEURAL_RUNTIME": (
+    "PROHIBITED_LOCAL_INFERENCE": (
         r"\b(?:run|host|deploy|serve)\b.{0,55}\b(?:neural net(?:work)?|llm|language model|ai model)\b.{0,35}\b(?:locally|on (?:the )?(?:vps|server|host)|self[- ]hosted)\b",
         r"\b(?:local|self[- ]hosted)\b.{0,30}\b(?:gpu )?(?:llm|neural net(?:work)?|model) (?:inference|server|runtime)\b",
         r"\b(?:train|training|fine[- ]?tune|fine[- ]?tuning)\b.{0,55}\b(?:neural net(?:work)?|llm|ai model)\b.{0,35}\b(?:on (?:the )?(?:vps|server|host)|locally)\b",
