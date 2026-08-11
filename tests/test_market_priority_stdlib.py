@@ -26,14 +26,22 @@ class MarketPriorityStdlibTests(unittest.TestCase):
         self.assertEqual(ARCHIVED_MARKETS, {"agentmarket", "chowdr"})
         self.assertNotIn("internal-genx-proof", CANONICAL_EARNING_MARKETS)
 
-    def test_activation_order_starts_with_best_autonomous_sa_routes(self):
+    def test_activation_order_starts_with_usable_owner_receipt_routes(self):
         ordered = sorted(PRIORITIES.items(), key=lambda item: item[1].rank)
         self.assertEqual(
-            [slug for slug, _priority in ordered[:4]],
-            ["lemon-squeezy", "rapidapi", "apify-store", "taskbounty"],
+            [slug for slug, _priority in ordered[:5]],
+            ["lemon-squeezy", "taskbounty", "rapidapi", "apify-store", "contra"],
         )
-        self.assertTrue(all(priority.tier == "ACTIVATE_FIRST" for _slug, priority in ordered[:4]))
+        self.assertTrue(all(priority.tier == "ACTIVATE_FIRST" for _slug, priority in ordered[:5]))
         self.assertEqual([priority.rank for _slug, priority in ordered], list(range(1, 28)))
+
+    def test_stripe_only_owner_routes_are_practically_blocked(self):
+        for slug in ("agentgigs", "callboard"):
+            priority = PRIORITIES[slug]
+            self.assertEqual(priority.tier, "BLOCKED_OWNER_RAIL")
+            self.assertEqual(priority.payout_autonomy_score, 0)
+            self.assertEqual(priority.south_africa_setup_score, 0)
+            self.assertIn("Stripe Connect", priority.payout_path)
 
     def test_test_credit_candidates_are_archived_not_presented_as_revenue(self):
         self.assertEqual(PRIORITIES["agentmarket"].tier, "ARCHIVE")
