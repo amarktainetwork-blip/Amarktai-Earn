@@ -39,7 +39,9 @@ class PublicShellRegressionTests(unittest.TestCase):
             self.assertIn(expected_copyright, source)
             self.assertIn(expected_network, source)
 
-        footer = landing[landing.index('<footer class="footer shell">'):landing.index("</footer>")]
+        footer_start = landing.index('<footer class="footer shell">')
+        footer_end = landing.index("</footer>", footer_start)
+        footer = landing[footer_start:footer_end]
         self.assertEqual(footer.count("AMARKT<span class=\"brand-ai\">AI</span>"), 1)
         self.assertNotIn("AI-powered earning infrastructure by", footer)
         self.assertIn(".footer .brand-ai{color:var(--blue)}", shell_css)
