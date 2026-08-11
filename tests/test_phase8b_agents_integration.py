@@ -10,7 +10,6 @@ from django.test import TestCase
 from control.models import (
     Artifact,
     AuditEvent,
-    Execution,
     GenXCall,
     GenXModelCatalog,
     Job,
@@ -213,6 +212,8 @@ class GenXSessionAccountingIntegrationTests(TestCase):
             max_allowed_credits=Decimal("1.00"),
             request_key=request_key,
             tools=[{"type": "web_search"}],
+            preferred_model="dynamic-text-ci",
+            preferred_override_reason="DEBUG_PROOF",
         )
 
     def test_session_call_reserves_budget_records_usage_and_does_not_replay_message(self):

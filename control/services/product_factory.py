@@ -7,7 +7,6 @@ from decimal import Decimal
 from typing import Any
 
 from django.db import transaction
-from django.db.models import Sum
 from django.utils import timezone
 
 from control.models import (
@@ -290,10 +289,55 @@ def generate_internal_opportunities() -> int:
 
 def _refresh_product_roi(product: ProductCandidate, *, now=None) -> None:
     total_cost = product.cost_basis + product.publication_cost + product.promotion_cost
-    product.net_profit = product.payout_received - total_cost
-    product.return_on_production_cost = None if total_cost <= 0 else product.net_profit / total_cost
-    if product.break_even_at is None and total_cost > 0 and product.payout_received >= total_cost:
+    calculated_profit = product.payout_received - total_cost
+    product.net_profit = calculated_profit if product.cost_basis_resolved or calculated_profit <= 0 else Decimal("0")
+    product.return_on_production_cost = (
+        None if not product.cost_basis_resolved or total_cost <= 0 else product.net_profit / total_cost
+    )
+    if product.cost_basis_resolved and product.break_even_at is None and total_cost > 0 and product.payout_received >= total_cost:
         product.break_even_at = now or timezone.now()
+
+
+@transaction.atomic
+def refresh_product_cost_basis_for_job(job_id) -> ProductCandidate | None:
+    """Recompute owned-product AI cost whenever authoritative GenX billing catches up."""
+    product = ProductCandidate.objects.select_for_update().filter(job_id=job_id).first()
+    if product is None:
+        return None
+    calls = list(GenXCall.objects.filter(job_id=job_id).order_by("created_at", "id"))
+    unresolved = []
+    known_cost = Decimal("0")
+    for call in calls:
+        metadata = call.requested_metadata if isinstance(call.requested_metadata, dict) else {}
+        cost_truth = str(metadata.get("cost_equivalent_truth") or "").upper()
+        billing_truth = str(metadata.get("billing_truth") or "").upper()
+        no_charge = call.status in {"FAILED", "CANCELLED"} and billing_truth == "NOT_APPLICABLE"
+        if no_charge:
+            continue
+        if call.cost_equivalent is None or cost_truth not in {"ACTUAL", "ACTUAL_ZERO_CREDITS"}:
+            unresolved.append(str(call.id))
+        else:
+            known_cost += call.cost_equivalent
+    product.cost_basis = known_cost
+    product.cost_basis_resolved = not unresolved
+    evidence = dict(product.qa_evidence or {})
+    evidence["genx_cost_truth"] = "ACTUAL" if not unresolved else "UNRESOLVED"
+    evidence["unresolved_genx_call_ids"] = unresolved
+    product.qa_evidence = evidence
+    if unresolved:
+        product.state = ProductCandidate.State.PAUSED
+        product.paused_reason = "GENX_MONETARY_COST_UNRESOLVED"
+        product.break_even_at = None
+    elif product.paused_reason == "GENX_MONETARY_COST_UNRESOLVED":
+        product.paused_reason = ""
+        if evidence.get("last_qa_passed") is True:
+            product.state = ProductCandidate.State.READY_TO_PUBLISH
+    _refresh_product_roi(product)
+    product.save(update_fields=[
+        "cost_basis", "cost_basis_resolved", "qa_evidence", "state", "paused_reason",
+        "net_profit", "return_on_production_cost", "break_even_at", "updated_at",
+    ])
+    return product
 
 
 @transaction.atomic
@@ -642,22 +686,37 @@ def record_internal_execution_outcome(*, execution, qa_passed: bool) -> None:
     if opportunity is None:
         return
     product = ProductCandidate.objects.select_for_update().get(pk=opportunity.product_id)
-    calls = GenXCall.objects.filter(
+    calls = list(GenXCall.objects.filter(
         job=execution.job,
         created_at__gte=execution.started_at,
         created_at__lte=execution.ended_at or timezone.now(),
+    ))
+    actual_cost = sum((call.cost_equivalent or Decimal("0") for call in calls), Decimal("0"))
+    unresolved_cost = any(
+        call.cost_equivalent is None
+        or str((call.requested_metadata or {}).get("cost_equivalent_truth") or "").upper() not in {"ACTUAL", "ACTUAL_ZERO_CREDITS"}
+        for call in calls
+        if not (
+            call.status in {"FAILED", "CANCELLED"}
+            and str((call.requested_metadata or {}).get("billing_truth") or "").upper() == "NOT_APPLICABLE"
+        )
     )
-    actual_cost = calls.aggregate(total=Sum("cost_equivalent"))["total"] or Decimal("0")
-    product.cost_basis += actual_cost
+    product.cost_basis = actual_cost
+    product.cost_basis_resolved = not unresolved_cost
     evidence = dict(product.qa_evidence or {})
     evidence["last_execution_id"] = execution.id
     evidence["last_qa_passed"] = bool(qa_passed)
     evidence["last_checked_at"] = timezone.now().isoformat()
-    if qa_passed:
+    if qa_passed and not unresolved_cost:
         product.inventory_quantity = min(product.inventory_quantity + 1, product.max_inventory_quantity)
         product.state = ProductCandidate.State.READY_TO_PUBLISH
         opportunity.state = InternalOpportunity.State.COMPLETED
         opportunity.reason_codes = []
+    elif qa_passed:
+        product.state = ProductCandidate.State.PAUSED
+        product.paused_reason = "GENX_MONETARY_COST_UNRESOLVED"
+        opportunity.state = InternalOpportunity.State.BLOCKED
+        opportunity.reason_codes = ["GENX_MONETARY_COST_UNRESOLVED"]
     else:
         evidence["rejected_assets"] = int(evidence.get("rejected_assets") or 0) + 1
         product.state = ProductCandidate.State.ECONOMICS_APPROVED
@@ -668,12 +727,14 @@ def record_internal_execution_outcome(*, execution, qa_passed: bool) -> None:
     product.save(
         update_fields=[
             "cost_basis",
+            "cost_basis_resolved",
             "inventory_quantity",
             "state",
             "qa_evidence",
             "net_profit",
             "return_on_production_cost",
             "break_even_at",
+            "paused_reason",
             "updated_at",
         ]
     )
@@ -686,6 +747,7 @@ def record_internal_execution_outcome(*, execution, qa_passed: bool) -> None:
             "job_id": str(execution.job_id),
             "execution_id": execution.id,
             "actual_cost": str(actual_cost),
+            "cost_basis_resolved": product.cost_basis_resolved,
             "auto_publish": False,
             "revenue_recognized": False,
         },

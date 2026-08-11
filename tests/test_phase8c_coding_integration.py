@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import io
-import json
 import os
 import tarfile
 import tempfile
 from decimal import Decimal
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.utils import timezone
 
-from control.models import Artifact, GenXCall, GenXModelCatalog, Job, JobScore, Marketplace, QAResult, Worker
+from control.models import Artifact, GenXCall, GenXCreditValuation, GenXModelCatalog, Job, JobScore, Marketplace, ModelStat, QAResult, Worker
 from control.ops import agents_snapshot, live_work_snapshot
 from control.sandbox_tokens import issue_sandbox_token
 from control.services.github_repos import GitHubRepositoryError, _safe_extract_tar, ensure_repository_snapshot
@@ -71,6 +70,24 @@ class Phase8CCodingAgentIntegrationTests(TestCase):
             active=True,
             price_hint="0.10000000",
             model_payload={"capabilities": ["code", "coding", "software"]},
+        )
+        GenXCreditValuation.objects.create(
+            version="phase8c-owner-cost-basis",
+            currency="USD",
+            monetary_cost_per_credit=Decimal("1"),
+            source="verified test fixture invoice",
+            evidence={"invoice_digest": "phase8c"},
+            effective_at=timezone.now(),
+            verified=True,
+        )
+        ModelStat.objects.create(
+            model="dynamic-coding-ci",
+            task_class="coding_sandbox",
+            attempts=10,
+            successful_executions=10,
+            qa_accepted=10,
+            qa_rejected=0,
+            credits=Decimal("1"),
         )
 
     def tearDown(self):

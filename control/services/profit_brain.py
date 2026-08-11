@@ -132,7 +132,7 @@ def _genx_monetary_cost_known(call: GenXCall, *, as_of=None) -> bool:
     monetary_truth = str(metadata.get("cost_equivalent_truth") or "").upper()
     if monetary_truth in {"ACTUAL", "ACTUAL_USD", "AUTHORITATIVE"}:
         return True
-    if call.cost_equivalent > ZERO:
+    if call.cost_equivalent is not None and call.cost_equivalent > ZERO:
         return call.status in {"COMPLETED", "FAILED", "CANCELLED"}
     return call.status in {"FAILED", "CANCELLED"} and str(metadata.get("billing_truth") or "").upper() == "NOT_APPLICABLE"
 
@@ -600,7 +600,7 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
                 on_time += 1
         gross = sum((payout.gross for payout in settled_payouts), ZERO)
         fees = sum((payout.fee for payout in settled_payouts), ZERO)
-        genx_cost = sum((call.cost_equivalent for call in genx), ZERO)
+        genx_cost = sum((call.cost_equivalent or ZERO for call in genx), ZERO)
         expected_cost = sum((_decimal(job.jobscore.expected_genx_cost) + _decimal(job.jobscore.expected_external_cost) for job in selected if hasattr(job, "jobscore")), ZERO)
         actual_cost = genx_cost
         settled_cash = sum((payout.net for payout in settled_payouts), ZERO)
@@ -644,6 +644,9 @@ def refresh_performance(*, window_days: int = 30) -> list[PerformanceAggregate]:
             ),
             as_of=end,
         )
+        if not monetary_coverage_complete and profit > ZERO:
+            # Unknown AI cost can never produce positive reported settled profit.
+            profit = ZERO
         stage = classify_growth_stage(
             sample_count=len(selected), completed_jobs=completed,
             settled_profit=profit if monetary_coverage_complete else ZERO,

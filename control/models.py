@@ -666,6 +666,28 @@ class GenXAccountSnapshot(Timestamped):
     raw = models.JSONField(default=dict)
 
 
+class GenXCreditValuation(Timestamped):
+    """Versioned owner/provider-authoritative monetary acquisition cost for one GenX credit."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    version = models.CharField(max_length=80, unique=True)
+    currency = models.CharField(max_length=3, default="USD")
+    monetary_cost_per_credit = models.DecimalField(max_digits=20, decimal_places=10)
+    source = models.CharField(max_length=255)
+    evidence = models.JSONField(default=dict)
+    effective_at = models.DateTimeField()
+    verified = models.BooleanField(default=False)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(monetary_cost_per_credit__gt=0),
+                name="genx_credit_valuation_cost_positive",
+            ),
+        ]
+
+
 class GenXCall(Timestamped):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     request_key = models.CharField(max_length=180, null=True, blank=True, unique=True)
@@ -683,7 +705,7 @@ class GenXCall(Timestamped):
     result_url = models.URLField(blank=True)
     latency_ms = models.PositiveIntegerField(default=0)
     status = models.CharField(max_length=32)
-    cost_equivalent = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    cost_equivalent = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True, default=None)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     error_code = models.CharField(max_length=120, blank=True)
@@ -1314,6 +1336,7 @@ class ProductCandidate(Timestamped):
     rights_evidence = models.JSONField(default=dict)
     qa_evidence = models.JSONField(default=dict)
     cost_basis = models.DecimalField(max_digits=16, decimal_places=4, default=0)
+    cost_basis_resolved = models.BooleanField(default=True)
     publication_cost = models.DecimalField(max_digits=16, decimal_places=4, default=0)
     promotion_cost = models.DecimalField(max_digits=16, decimal_places=4, default=0)
     impressions = models.PositiveBigIntegerField(default=0)

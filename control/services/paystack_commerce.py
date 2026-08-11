@@ -10,21 +10,25 @@ from decimal import ROUND_HALF_UP, Decimal
 import requests
 from django.db import transaction
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from control.models import (
     AuditEvent,
     CommercePayment,
     FeePolicy,
     InboundOrder,
+    InboundSettlementEvent,
     MarketIntegrationProfile,
     Marketplace,
     MarketServiceListing,
     OwnerReceipt,
+    Payout,
     ServiceOffering,
     WebhookEvent,
 )
 from control.services.integration_accounts import read_credentials
-from control.services.seller_services import receive_inbound_order
+from control.services.finance import record_payout_state
+from control.services.seller_services import receive_inbound_order, reconcile_inbound_settlement
 
 CENT = Decimal("0.01")
 PAYSTACK_BASE_URL = "https://api.paystack.co"
@@ -74,14 +78,35 @@ def _profile() -> MarketIntegrationProfile:
     return profile
 
 
-def _request(session, method, url, **kwargs):
+def _disarm_authentication_failure() -> None:
+    profile = MarketIntegrationProfile.objects.select_related("marketplace").filter(marketplace__slug="paystack").first()
+    if profile is None:
+        return
+    profile.api_connection_state = "UNVERIFIED"
+    profile.live_proving_state = "BLOCKED"
+    profile.autonomous_acquisition_enabled = False
+    profile.last_error_category = "AUTHENTICATION"
+    profile.last_safe_error = "Paystack rejected the configured credentials."
+    profile.marketplace.enabled = False
+    profile.marketplace.payout_ready = False
+    profile.marketplace.save(update_fields=["enabled", "payout_ready", "updated_at"])
+    profile.save(update_fields=[
+        "api_connection_state", "live_proving_state", "autonomous_acquisition_enabled",
+        "last_error_category", "last_safe_error", "updated_at",
+    ])
+
+
+def _request(session, method, url, *, mutation: bool = False, **kwargs):
     try:
         response = session.request(method, url, timeout=15, **kwargs)
     except requests.Timeout as exc:
-        raise PaystackCommerceError("UNKNOWN_EXTERNAL_MUTATION", "Paystack initialization timed out after the request; reconciliation is required.", status=502) from exc
+        code = "UNKNOWN_EXTERNAL_MUTATION" if mutation else "TIMEOUT"
+        message = "Paystack mutation timed out; reconciliation is required." if mutation else "Paystack read reconciliation timed out without changing local truth."
+        raise PaystackCommerceError(code, message, status=502) from exc
     except requests.RequestException as exc:
         raise PaystackCommerceError("NETWORK", "Paystack could not be reached safely.", status=502) from exc
     if response.status_code in {401, 403}:
+        _disarm_authentication_failure()
         raise PaystackCommerceError("AUTHENTICATION", "Paystack rejected the configured credentials.", status=409)
     if response.status_code == 429:
         raise PaystackCommerceError("RATE_LIMIT", "Paystack rate-limited the request; it was not replayed.", status=429)
@@ -156,6 +181,7 @@ def initialize_checkout(*, offering_slug: str, customer_email: str, idempotency_
             f"{PAYSTACK_BASE_URL}/transaction/initialize",
             headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json", "Accept": "application/json"},
             json=body,
+            mutation=True,
         )
     except PaystackCommerceError as exc:
         if exc.code == "UNKNOWN_EXTERNAL_MUTATION":
@@ -279,18 +305,33 @@ def dispatch_webhook(*, raw_body: bytes, signature: str) -> dict:
         payment.save(update_fields=["order", "state", "authoritative", "provider_fee", "paid_at", "evidence", "updated_at"])
         from control.services.product_factory import record_owned_product_sale
 
-        record_owned_product_sale(
-            offering=payment.offering,
-            channel="paystack",
-            event_key=f"paystack:{reference}",
-            gross=payment.amount,
-        )
-        OwnerReceipt.objects.get_or_create(
-            marketplace=market,
-            external_reference=reference,
-            state=OwnerReceipt.State.PAYSTACK_BALANCE,
-            defaults={"commerce_payment": payment, "rail": "paystack", "amount": payment.amount - fee, "currency": payment.currency, "authoritative": True, "human_withdrawal_required": False, "evidence": {"webhook_event_id": event.id, "raw_body_hash": raw_hash}},
-        )
+        test_evidence = bool(payment.evidence.get("proof_mode")) or str(data.get("domain") or "").casefold() == "test"
+        if not test_evidence:
+            record_owned_product_sale(
+                offering=payment.offering,
+                channel="paystack",
+                event_key=f"paystack:{reference}",
+                gross=payment.amount,
+            )
+            payout = record_payout_state(
+                job_id=order.job_id,
+                target_state=Payout.State.EARNED,
+                gross=payment.amount,
+                fee=fee,
+                currency=payment.currency,
+                external_reference=f"paystack:charge:{reference}",
+                advance_job_state=False,
+            )
+            if payout.state == Payout.State.EARNED:
+                record_payout_state(
+                    job_id=order.job_id,
+                    target_state=Payout.State.PAYOUT_PENDING,
+                    gross=payment.amount,
+                    fee=fee,
+                    currency=payment.currency,
+                    external_reference=f"paystack:charge:{reference}",
+                    advance_job_state=False,
+                )
         event.inbound_order = order
         event.status = "PROCESSED"
         event.processed_at = timezone.now()
@@ -314,14 +355,45 @@ def dispatch_webhook(*, raw_body: bytes, signature: str) -> dict:
         if event_name == "refund.processed":
             from control.services.product_factory import record_owned_product_sale
 
-            record_owned_product_sale(
-                offering=payment.offering,
-                channel="paystack",
-                event_key=f"paystack:{reference}",
-                gross=payment.amount,
-                refunded=True,
+            if not bool(payment.evidence.get("proof_mode")) and str(payment.evidence.get("domain") or "").casefold() != "test":
+                record_owned_product_sale(
+                    offering=payment.offering,
+                    channel="paystack",
+                    event_key=f"paystack:{reference}",
+                    gross=payment.amount,
+                    refunded=True,
+                )
+            payout = Payout.objects.filter(job_id=payment.order.job_id).first() if payment.order_id else None
+            if payout and payout.state != Payout.State.REVERSED:
+                record_payout_state(
+                    job_id=payout.job_id,
+                    target_state=Payout.State.REVERSED,
+                    gross=payout.gross,
+                    fee=payout.fee,
+                    currency=payout.currency,
+                    external_reference=f"paystack:refund:{reference}",
+                    advance_job_state=False,
+                )
+            production_payment = (
+                not bool(payment.evidence.get("proof_mode"))
+                and str(payment.evidence.get("domain") or "").casefold() == "live"
             )
-            OwnerReceipt.objects.get_or_create(marketplace=market, external_reference=reference, state=OwnerReceipt.State.REVERSED, defaults={"commerce_payment": payment, "rail": "paystack", "amount": payment.amount, "currency": payment.currency, "authoritative": True, "human_withdrawal_required": False, "evidence": {"webhook_event_id": event.id}})
+            if production_payment:
+                OwnerReceipt.objects.get_or_create(
+                    marketplace=market,
+                    external_reference=reference,
+                    state=OwnerReceipt.State.REVERSED,
+                    defaults={
+                        "commerce_payment": payment,
+                        "payout": payout,
+                        "rail": "paystack",
+                        "amount": payout.net if payout else payment.amount,
+                        "currency": payment.currency,
+                        "authoritative": True,
+                        "human_withdrawal_required": False,
+                        "evidence": {"webhook_event_id": event.id},
+                    },
+                )
         event.status = "PROCESSED"
         event.processed_at = timezone.now()
     else:
@@ -352,3 +424,159 @@ def reconcile_payment(payment_id, *, session=None) -> CommercePayment:
     dispatch_webhook(raw_body=synthetic, signature=signature)
     payment.refresh_from_db()
     return payment
+
+
+def _settlement_rows(session, secret: str, settlement_id: str, *, max_pages: int = 5) -> list[dict]:
+    rows: list[dict] = []
+    for page in range(1, max(1, min(max_pages, 10)) + 1):
+        payload = _request(
+            session,
+            "GET",
+            f"{PAYSTACK_BASE_URL}/settlement/{settlement_id}/transactions",
+            headers={"Authorization": f"Bearer {secret}", "Accept": "application/json"},
+            params={"perPage": 100, "page": page},
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        meta = payload.get("meta") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict) or payload.get("status") is not True or not isinstance(data, list):
+            raise PaystackCommerceError("MALFORMED_RESPONSE", "Paystack returned malformed settlement-transaction evidence.", status=502)
+        if not all(isinstance(row, dict) for row in data):
+            raise PaystackCommerceError("MALFORMED_RESPONSE", "Paystack returned a malformed settlement transaction row.", status=502)
+        rows.extend(data)
+        page_count = int(meta.get("pageCount") or page) if isinstance(meta, dict) else page
+        if page >= page_count:
+            break
+        if page == max_pages:
+            raise PaystackCommerceError("SETTLEMENT_PAGE_BOUND_EXCEEDED", "Settlement reconciliation exceeded its bounded page limit.", status=409)
+    return rows
+
+
+def reconcile_paystack_settlements(*, session=None, limit: int = 50) -> dict[str, int]:
+    """Apply settlement truth only from a successful settlement containing the exact transaction."""
+    profile = _profile()
+    secret = read_credentials("paystack").get("secret_key", "")
+    if not secret:
+        raise PaystackCommerceError("PAYSTACK_CREDENTIALS_REQUIRED", "Paystack credentials are not configured.", status=409)
+    limit = max(1, min(int(limit), 100))
+    session = session or requests.Session()
+    payload = _request(
+        session,
+        "GET",
+        f"{PAYSTACK_BASE_URL}/settlement",
+        headers={"Authorization": f"Bearer {secret}", "Accept": "application/json"},
+        params={"perPage": limit, "page": 1},
+    )
+    settlements = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or payload.get("status") is not True or not isinstance(settlements, list) or not all(isinstance(row, dict) for row in settlements):
+        raise PaystackCommerceError("MALFORMED_RESPONSE", "Paystack returned malformed settlement evidence.", status=502)
+    result = {"checked": 0, "pending": 0, "failed": 0, "matched": 0, "settled": 0, "test_proofs": 0, "duplicates": 0, "unrelated": 0, "deductions_unresolved": 0}
+    for settlement in settlements[:limit]:
+        result["checked"] += 1
+        settlement_id = str(settlement.get("id") or "").strip()
+        status = str(settlement.get("status") or "").casefold()
+        currency = str(settlement.get("currency") or "").upper()
+        settlement_domain = str(settlement.get("domain") or "").casefold()
+        if not settlement_id or status not in {"pending", "processing", "success", "failed"} or len(currency) != 3 or settlement_domain not in {"test", "live"}:
+            raise PaystackCommerceError("MALFORMED_RESPONSE", "Paystack returned an invalid settlement identity or status.", status=502)
+        if status in {"pending", "processing"}:
+            result["pending"] += 1
+            continue
+        if status == "failed":
+            result["failed"] += 1
+            continue
+        deductions = settlement.get("deductions")
+        if deductions not in (None, [], {}, 0, "0"):
+            result["deductions_unresolved"] += 1
+            continue
+        transactions = _settlement_rows(session, secret, settlement_id)
+        for row in transactions:
+            reference = str(row.get("reference") or "").strip()
+            tx_status = str(row.get("status") or "").casefold()
+            if not reference or tx_status != "success":
+                raise PaystackCommerceError("MALFORMED_RESPONSE", "Paystack settlement contained an invalid transaction row.", status=502)
+            payment = CommercePayment.objects.select_related("order__job", "marketplace").filter(
+                provider="paystack", external_reference=reference
+            ).first()
+            if payment is None:
+                result["unrelated"] += 1
+                continue
+            if payment.state == CommercePayment.State.REVERSED:
+                continue
+            if payment.state != CommercePayment.State.PAID or payment.order_id is None:
+                raise PaystackCommerceError("PAYMENT_MAPPING_REQUIRED", "A settlement transaction mapped to non-authoritative local payment truth.", status=409)
+            tx_amount = _money(Decimal(str(row.get("amount") or 0)) / Decimal("100"))
+            tx_fee = _money(Decimal(str(row.get("fees") or 0)) / Decimal("100"))
+            tx_currency = str(row.get("currency") or "").upper()
+            tx_domain = str(row.get("domain") or settlement_domain).casefold()
+            payment_domain = str(payment.evidence.get("domain") or "").casefold()
+            if tx_amount != payment.amount or tx_fee != payment.provider_fee or tx_currency != payment.currency or tx_currency != currency or tx_domain != settlement_domain or payment_domain != settlement_domain:
+                raise PaystackCommerceError("SETTLEMENT_EVIDENCE_MISMATCH", "Settlement transaction economics did not match the canonical payment.", status=409)
+            result["matched"] += 1
+            event_reference = f"paystack:settlement:{settlement_id}:transaction:{row.get('id') or reference}"
+            evidence = {
+                "irreversible": True,
+                "provider": "paystack",
+                "domain": settlement_domain,
+                "settlement_id": settlement_id,
+                "settlement_status": status,
+                "settlement_date": str(settlement.get("settlement_date") or ""),
+                "effective_amount_subunit": str(settlement.get("effective_amount") or ""),
+                "total_fees_subunit": str(settlement.get("total_fees") or ""),
+                "deductions": deductions,
+                "transaction_id": str(row.get("id") or ""),
+                "transaction_reference_hash": hashlib.sha256(reference.encode()).hexdigest(),
+            }
+            if settlement_domain == "test" or bool(payment.evidence.get("proof_mode")):
+                persisted = dict(payment.evidence or {})
+                proof_key = f"{settlement_id}:{row.get('id') or reference}"
+                if persisted.get("test_settlement_proof_key") == proof_key:
+                    result["duplicates"] += 1
+                else:
+                    persisted.update({
+                        "test_settlement_proof_key": proof_key,
+                        "test_settlement_proven": True,
+                        "test_settlement_evidence": evidence,
+                    })
+                    CommercePayment.objects.filter(pk=payment.pk).update(evidence=persisted)
+                    AuditEvent.objects.create(
+                        event_type="paystack.test_settlement_proven",
+                        actor="paystack-settlement-api",
+                        metadata={"payment_id": str(payment.id), "settlement_id": settlement_id, "cash_recorded": False},
+                    )
+                    result["test_proofs"] += 1
+                continue
+            event, created = reconcile_inbound_settlement(
+                payment.order,
+                remote_event_id=event_reference,
+                state=InboundSettlementEvent.State.SETTLED,
+                gross=payment.amount,
+                fee=payment.provider_fee,
+                currency=payment.currency,
+                authoritative=True,
+                evidence_source="paystack-settlement-api",
+                evidence=evidence,
+                advance_job_state=False,
+            )
+            payout = Payout.objects.get(job_id=payment.order.job_id, currency=payment.currency)
+            observed_at = parse_datetime(str(settlement.get("settlement_date") or "")) or timezone.now()
+            _receipt, receipt_created = OwnerReceipt.objects.get_or_create(
+                marketplace=profile.marketplace,
+                external_reference=event_reference,
+                state=OwnerReceipt.State.FIAT_SETTLED,
+                defaults={
+                    "payout": payout,
+                    "commerce_payment": payment,
+                    "rail": "paystack_settlement",
+                    "amount": payout.net,
+                    "currency": payout.currency,
+                    "authoritative": True,
+                    "human_withdrawal_required": False,
+                    "evidence": {**evidence, "inbound_settlement_event_id": event.id},
+                    "observed_at": observed_at,
+                },
+            )
+            if created and receipt_created:
+                result["settled"] += 1
+            else:
+                result["duplicates"] += 1
+    return result

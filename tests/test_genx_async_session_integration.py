@@ -91,6 +91,8 @@ class GenXAsyncSessionTruthTests(TestCase):
             estimated_credits=Decimal("0.25"),
             max_allowed_credits=Decimal("1"),
             request_key=request_key,
+            preferred_model="gpt-5-nano",
+            preferred_override_reason="DEBUG_PROOF",
         )
 
     def test_ack_is_polled_and_actual_terminal_usage_is_reconciled_once(self):
@@ -101,7 +103,8 @@ class GenXAsyncSessionTruthTests(TestCase):
         self.assertEqual(client.status_during_wait, "SUBMITTED")
         self.assertEqual(call.status, "COMPLETED")
         self.assertEqual(call.credits, Decimal("0.008"))
-        self.assertEqual(call.cost_equivalent, Decimal("0"))
+        self.assertIsNone(call.cost_equivalent)
+        self.assertEqual(call.requested_metadata["cost_equivalent_truth"], "UNRESOLVED_VALUATION")
         self.assertEqual(call.result_url, "data/plain;base64,T0s=")
         self.assertEqual(call.requested_metadata["billing_truth"], "ACTUAL")
         self.assertEqual(call.requested_metadata["session_id"], "session-1")
@@ -127,7 +130,7 @@ class GenXAsyncSessionTruthTests(TestCase):
 
         self.assertEqual(call.status, "COMPLETED")
         self.assertEqual(call.credits, Decimal("0"))
-        self.assertEqual(call.cost_equivalent, Decimal("0"))
+        self.assertIsNone(call.cost_equivalent)
         self.assertEqual(call.requested_metadata["billing_truth"], "UNRESOLVED")
         self.assertEqual(response["assistant_text"], "OK")
         self.assertEqual(Alert.objects.filter(alert_type="GENX_USAGE_MISSING", status="OPEN").count(), 1)

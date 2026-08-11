@@ -24,6 +24,7 @@ from control.models import (
     Marketplace,
     MarketplaceCredential,
     ModelStat,
+    OwnerReceipt,
     Payout,
     ProductCandidate,
     ServiceOffering,
@@ -233,6 +234,8 @@ class PaystackDirectCommerceTests(TestCase):
         self.assertEqual(WebhookEvent.objects.count(), 1)
         payment.refresh_from_db()
         self.assertEqual(payment.state, CommercePayment.State.PAID)
+        self.assertFalse(Payout.objects.filter(job_id=payment.order.job_id).exists())
+        self.assertFalse(OwnerReceipt.objects.filter(authoritative=True).exists())
         refund = json.dumps({"event": "refund.processed", "data": {"transaction_reference": payment.external_reference, "status": "processed", "amount": 10000, "currency": "ZAR", "domain": "test"}}, sort_keys=True, separators=(",", ":")).encode()
         refund_signature = hmac.new(b"sk_test_paystack_webhook", refund, hashlib.sha512).hexdigest()
         dispatch_webhook(raw_body=refund, signature=refund_signature)
@@ -267,7 +270,13 @@ class GenXEconomicRouterTests(TestCase):
     def test_task_specific_quality_constrained_expected_profit_routing(self):
         cheap_unreliable = ModelCandidate("cheap", price_hint=Decimal("1"), attempts=20, qa_accepted=10, qa_rejected=10, repair_required=8, credits=Decimal("20"), total_repair_cost=Decimal("16"))
         stronger = ModelCandidate("stronger", price_hint=Decimal("3"), attempts=20, qa_accepted=19, qa_rejected=1, repair_required=1, credits=Decimal("60"), total_repair_cost=Decimal("2"))
-        routes = route_models([cheap_unreliable, stronger], expected_revenue=Decimal("100"), required_quality=Decimal("0.80"), max_genx_cost=Decimal("10"))
+        routes = route_models(
+            [cheap_unreliable, stronger],
+            expected_revenue=Decimal("100"),
+            required_quality=Decimal("0.80"),
+            max_genx_credits=Decimal("10"),
+            monetary_cost_per_credit=Decimal("1"),
+        )
         self.assertEqual([route.candidate.model_id for route in routes], ["stronger"])
         self.assertGreater(routes[0].expected_net_profit, 0)
 
@@ -341,6 +350,7 @@ class ProductFactoryTests(TestCase):
             task_class="image_generation",
             status="COMPLETED",
             cost_equivalent=Decimal("3"),
+            requested_metadata={"billing_truth": "ACTUAL", "cost_equivalent_truth": "ACTUAL", "valuation_version": "test-fixture"},
         )
         execution.ended_at = timezone.now()
         execution.save(update_fields=["ended_at", "updated_at"])

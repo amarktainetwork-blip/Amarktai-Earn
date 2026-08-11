@@ -21,6 +21,7 @@ from control.models import (
     Worker,
 )
 from control.services.admission import AdmissionDenied, require_admission
+from control.services.genx_valuation import current_credit_valuation, monetary_cost_for_credits
 from gateways.genx.client import GenXClient, GenXError
 from gateways.genx.contracts import (
     ModelCandidate,
@@ -29,8 +30,8 @@ from gateways.genx.contracts import (
     effective_reserved_credits,
     model_id,
     price_hint,
+    pricing_credit_estimate,
     pricing_index,
-    rank_models,
     records,
     result_url,
     route_models,
@@ -43,6 +44,9 @@ from gateways.genx.output import (
 )
 
 
+ZERO = Decimal("0")
+
+
 class GenXGatewayError(RuntimeError):
     pass
 
@@ -52,6 +56,10 @@ class GenXBudgetExceeded(GenXGatewayError):
 
 
 class GenXModelUnavailable(GenXGatewayError):
+    pass
+
+
+class GenXMonetaryValuationUnavailable(GenXModelUnavailable):
     pass
 
 
@@ -127,18 +135,36 @@ class GenXGateway:
         task_class: str,
         category: str,
         preferred_model: str | None = None,
+        preferred_override_reason: str = "",
+        eligible_model_ids: list[str] | tuple[str, ...] | None = None,
         required_quality: Decimal = Decimal("0.80"),
         expected_revenue: Decimal = Decimal("0"),
         non_genx_cost: Decimal = Decimal("0"),
-        max_genx_cost: Decimal | None = None,
+        max_genx_credits: Decimal | None = None,
+        estimated_credits: Decimal = Decimal("0.25"),
+        params: dict[str, Any] | None = None,
+        accounting_currency: str = "USD",
         allow_exploration: bool = False,
         economically_fragile: bool = False,
     ) -> GenXModelCatalog:
         catalog = GenXModelCatalog.objects.filter(active=True, category=category)
+        if eligible_model_ids is not None:
+            eligible = tuple(dict.fromkeys(str(value) for value in eligible_model_ids if value))
+            if not eligible:
+                raise GenXModelUnavailable(f"no active GenX models satisfy the required capability for {task_class!r}")
+            catalog = catalog.filter(model_id__in=eligible)
         if preferred_model:
+            allowed_reasons = {"ADMIN_PROOF", "DEBUG_PROOF", "CONTROLLER_SIGNED_ECONOMIC_SELECTION"}
+            if preferred_override_reason not in allowed_reasons:
+                raise GenXModelUnavailable("explicit GenX model override is restricted to controlled proof/debug boundaries")
             selected = catalog.filter(model_id=preferred_model).first()
             if not selected:
                 raise GenXModelUnavailable(f"preferred model {preferred_model!r} is not active for category {category!r}")
+            AuditEvent.objects.create(
+                event_type="genx.explicit_model_override",
+                actor="genx-router",
+                metadata={"task_class": task_class, "model": selected.model_id, "reason": preferred_override_reason},
+            )
             return selected
 
         rows = list(catalog)
@@ -149,10 +175,19 @@ class GenXGateway:
         by_id = {row.model_id: row for row in rows}
         for row in rows:
             stat = stats.get(row.model_id)
+            historical_average = None
+            if stat and stat.attempts and stat.credits > 0:
+                historical_average = stat.credits / Decimal(stat.attempts)
             candidates.append(
                 ModelCandidate(
                     model_id=row.model_id,
                     price_hint=row.price_hint,
+                    expected_credits=pricing_credit_estimate(
+                        row.pricing_payload,
+                        params,
+                        historical_average=historical_average,
+                        reserved_envelope=estimated_credits,
+                    ),
                     attempts=stat.attempts if stat else 0,
                     accepted=stat.accepted if stat else 0,
                     profit=stat.profit if stat else Decimal("0"),
@@ -168,37 +203,49 @@ class GenXGateway:
                     net_profit=stat.net_profit if stat else Decimal("0"),
                 )
             )
-        if expected_revenue > 0:
-            if not economically_fragile and not any(candidate.attempts for candidate in candidates):
-                allow_exploration = True
-            routed = route_models(
-                candidates,
-                expected_revenue=expected_revenue,
-                non_genx_cost=non_genx_cost,
-                required_quality=required_quality,
-                max_genx_cost=max_genx_cost,
-                allow_exploration=allow_exploration and not economically_fragile,
-                exploration_fraction=Decimal(os.getenv("GENX_EXPLORATION_BUDGET_FRACTION", "0.05")),
+        valuation = current_credit_valuation(currency=accounting_currency)
+        routed = route_models(
+            candidates,
+            expected_revenue=expected_revenue,
+            non_genx_cost=non_genx_cost,
+            required_quality=required_quality,
+            max_genx_credits=max_genx_credits,
+            monetary_cost_per_credit=valuation.monetary_cost_per_credit if valuation else None,
+            allow_exploration=allow_exploration and not economically_fragile,
+            exploration_fraction=Decimal(os.getenv("GENX_EXPLORATION_BUDGET_FRACTION", "0.05")),
+        )
+        if expected_revenue > 0 and valuation is None:
+            AuditEvent.objects.create(
+                severity="WARNING",
+                event_type="genx.monetary_profit_unresolved",
+                actor="genx-router",
+                metadata={"task_class": task_class, "category": category, "currency": accounting_currency},
             )
-            if routed and routed[0].expected_net_profit > 0:
-                selected = routed[0]
-                AuditEvent.objects.create(
-                    event_type="genx.economic_model_selected",
-                    actor="genx-router",
-                    metadata={
-                        "task_class": task_class,
-                        "category": category,
-                        "model": selected.candidate.model_id,
-                        "expected_net_profit": str(selected.expected_net_profit),
-                        "expected_total_cost": str(selected.expected_total_cost),
-                        "quality_probability": str(selected.quality_probability),
-                        "required_quality": str(required_quality),
-                        "exploration": selected.exploration,
-                    },
-                )
-                return by_id[selected.candidate.model_id]
-            raise GenXModelUnavailable("no active model satisfies the task quality floor and positive expected-profit constraint")
-        return by_id[rank_models(candidates)[0].model_id]
+            raise GenXMonetaryValuationUnavailable(
+                f"no verified GenX credit valuation exists in {accounting_currency}; monetary profitability is unresolved"
+            )
+        if not routed:
+            raise GenXModelUnavailable("no active model satisfies the task quality, credit-budget, and economic constraints")
+        selected = routed[0]
+        AuditEvent.objects.create(
+            event_type="genx.economic_model_selected",
+            actor="genx-router",
+            metadata={
+                "task_class": task_class,
+                "category": category,
+                "model": selected.candidate.model_id,
+                "cost_basis": selected.cost_basis,
+                "expected_net_profit": str(selected.expected_net_profit) if selected.expected_net_profit is not None else None,
+                "non_currency_score": str(selected.non_currency_score),
+                "expected_credits": str(selected.expected_credits),
+                "expected_total_cost": str(selected.expected_total_cost) if selected.expected_total_cost is not None else None,
+                "quality_probability": str(selected.quality_probability),
+                "required_quality": str(required_quality),
+                "valuation_version": valuation.version if valuation else None,
+                "exploration": selected.exploration,
+            },
+        )
+        return by_id[selected.candidate.model_id]
 
     @transaction.atomic
     def _reserve_call(
@@ -275,6 +322,8 @@ class GenXGateway:
         max_allowed_credits: Decimal,
         request_key: str | None = None,
         preferred_model: str | None = None,
+        preferred_override_reason: str = "",
+        eligible_model_ids: list[str] | tuple[str, ...] | None = None,
         wait_timeout_seconds: int = 180,
         required_quality: Decimal = Decimal("0.80"),
         expected_revenue: Decimal | None = None,
@@ -287,10 +336,15 @@ class GenXGateway:
             task_class=task_class,
             category=category,
             preferred_model=preferred_model,
+            preferred_override_reason=preferred_override_reason,
+            eligible_model_ids=eligible_model_ids,
             required_quality=required_quality,
             expected_revenue=expected_revenue if expected_revenue is not None else Decimal("0"),
             non_genx_cost=non_genx_cost,
-            max_genx_cost=max_allowed_credits,
+            max_genx_credits=max_allowed_credits,
+            estimated_credits=estimated_credits,
+            params=params,
+            accounting_currency=job.currency,
             allow_exploration=allow_exploration,
             economically_fragile=economically_fragile,
         )
@@ -306,6 +360,17 @@ class GenXGateway:
             "model_requested": selected.model_id,
             "max_credits": str(max_allowed_credits),
         }
+        estimated_cost = monetary_cost_for_credits(
+            credits=Decimal(estimated_credits), currency=job.currency, at=timezone.now()
+        )
+        metadata.update({
+            "accounting_currency": job.currency,
+            "cost_equivalent_truth": "ESTIMATED" if estimated_cost else "UNRESOLVED",
+            "estimated_cost_equivalent": str(estimated_cost.amount) if estimated_cost else None,
+            "valuation_version": estimated_cost.version if estimated_cost else None,
+            "valuation_source": estimated_cost.source if estimated_cost else None,
+            "valuation_id": estimated_cost.valuation_id if estimated_cost else None,
+        })
         call, created = self._reserve_call(
             job_id=job.id,
             worker_id=worker_id,
@@ -344,11 +409,16 @@ class GenXGateway:
                 and not GenXCall.objects.filter(pk=call.pk).exclude(external_job_id="").exists()
             )
             next_status = "FAILED" if confirmed_rejection else "UNKNOWN_REMOTE_STATE"
+            failure_metadata = dict(call.requested_metadata or metadata)
+            if confirmed_rejection:
+                failure_metadata.update({"billing_truth": "NOT_APPLICABLE", "cost_equivalent_truth": "NOT_APPLICABLE"})
             GenXCall.objects.filter(pk=call.pk).update(
                 status=next_status,
                 latency_ms=int((time.monotonic() - started) * 1000),
                 completed_at=timezone.now() if confirmed_rejection else None,
                 error_code=exc.__class__.__name__,
+                cost_equivalent=ZERO if confirmed_rejection else None,
+                requested_metadata=failure_metadata,
             )
             AuditEvent.objects.create(
                 severity="ERROR" if confirmed_rejection else "WARNING",
@@ -371,11 +441,33 @@ class GenXGateway:
         request_key: str,
         tools: list | None = None,
         preferred_model: str | None = None,
+        preferred_override_reason: str = "",
+        eligible_model_ids: list[str] | tuple[str, ...] | None = None,
         wait_timeout_seconds: int = 180,
+        required_quality: Decimal = Decimal("0.80"),
+        expected_revenue: Decimal | None = None,
+        non_genx_cost: Decimal = Decimal("0"),
+        allow_exploration: bool = False,
+        economically_fragile: bool = False,
     ) -> tuple[GenXCall, dict[str, Any]]:
         """Submit one session message, then reconcile its asynchronous remote job."""
-        selected = self.select_model(task_class=task_class, category="text", preferred_model=preferred_model)
         job = Job.objects.select_related("marketplace").get(pk=job_id)
+        selected = self.select_model(
+            task_class=task_class,
+            category="text",
+            preferred_model=preferred_model,
+            preferred_override_reason=preferred_override_reason,
+            eligible_model_ids=eligible_model_ids,
+            required_quality=required_quality,
+            expected_revenue=expected_revenue if expected_revenue is not None else Decimal("0"),
+            non_genx_cost=non_genx_cost,
+            max_genx_credits=max_allowed_credits,
+            estimated_credits=estimated_credits,
+            params={"tools": tools or []},
+            accounting_currency=job.currency,
+            allow_exploration=allow_exploration,
+            economically_fragile=economically_fragile,
+        )
         try:
             require_admission(purpose="GENX", job=job)
         except AdmissionDenied as exc:
@@ -389,6 +481,17 @@ class GenXGateway:
             "transport": "session",
             "max_credits": str(max_allowed_credits),
         }
+        estimated_cost = monetary_cost_for_credits(
+            credits=Decimal(estimated_credits), currency=job.currency, at=timezone.now()
+        )
+        metadata.update({
+            "accounting_currency": job.currency,
+            "cost_equivalent_truth": "ESTIMATED" if estimated_cost else "UNRESOLVED",
+            "estimated_cost_equivalent": str(estimated_cost.amount) if estimated_cost else None,
+            "valuation_version": estimated_cost.version if estimated_cost else None,
+            "valuation_source": estimated_cost.source if estimated_cost else None,
+            "valuation_id": estimated_cost.valuation_id if estimated_cost else None,
+        })
         call, created = self._reserve_call(
             job_id=job.id,
             worker_id=worker_id,
@@ -487,12 +590,13 @@ class GenXGateway:
             current = GenXCall.objects.get(pk=call.pk)
             failure_metadata = dict(current.requested_metadata or metadata)
             if confirmed_rejection:
-                failure_metadata["billing_truth"] = "NOT_APPLICABLE"
+                failure_metadata.update({"billing_truth": "NOT_APPLICABLE", "cost_equivalent_truth": "NOT_APPLICABLE"})
             GenXCall.objects.filter(pk=call.pk).update(
                 status=next_status,
                 latency_ms=int((time.monotonic() - started) * 1000),
                 completed_at=timezone.now() if confirmed_rejection else None,
                 error_code=exc.__class__.__name__,
+                cost_equivalent=ZERO if confirmed_rejection else None,
                 requested_metadata=failure_metadata,
             )
             AuditEvent.objects.create(
@@ -691,7 +795,7 @@ class GenXGateway:
         source = str(source).upper()
         if source not in {"POLL", "WEBHOOK", "OPERATOR_EVIDENCE"}:
             raise ValueError("unsupported GenX reconciliation source")
-        call = GenXCall.objects.select_for_update().get(pk=call_id)
+        call = GenXCall.objects.select_for_update().select_related("job").get(pk=call_id)
         was_terminal = call.status in {"COMPLETED", "FAILED", "CANCELLED"} and call.completed_at is not None
         status = str(payload.get("status") or "UNKNOWN").upper()
         if status not in {"COMPLETED", "FAILED", "CANCELLED"}:
@@ -699,6 +803,7 @@ class GenXGateway:
         metadata = dict(call.requested_metadata or {})
         previous_billing_truth = str(metadata.get("billing_truth") or "")
         previous_credits = call.credits
+        previous_cost = call.cost_equivalent
         usage_value = usage_credits(payload)
         if usage_value is not None and usage_value < 0:
             usage_value = None
@@ -714,6 +819,45 @@ class GenXGateway:
             "billing_source": source,
             "remote_job_id": str(payload.get("job_id") or metadata.get("remote_job_id") or call.external_job_id),
         })
+        accounting_currency = call.job.currency if call.job_id else str(metadata.get("accounting_currency") or "USD")
+        metadata["accounting_currency"] = accounting_currency
+        if usage_value is not None:
+            resolved_cost = monetary_cost_for_credits(
+                credits=usage_value,
+                currency=accounting_currency,
+                at=call.completed_at or timezone.now(),
+            )
+            if resolved_cost is not None:
+                call.cost_equivalent = resolved_cost.amount
+                metadata.update({
+                    "cost_equivalent_truth": "ACTUAL",
+                    "valuation_id": resolved_cost.valuation_id,
+                    "valuation_version": resolved_cost.version,
+                    "valuation_source": resolved_cost.source,
+                    "valuation_effective_at": resolved_cost.effective_at,
+                    "monetary_cost_per_credit": str(resolved_cost.monetary_cost_per_credit),
+                })
+            elif usage_value == ZERO:
+                call.cost_equivalent = ZERO
+                metadata["cost_equivalent_truth"] = "ACTUAL_ZERO_CREDITS"
+            else:
+                call.cost_equivalent = None
+                metadata["cost_equivalent_truth"] = "UNRESOLVED_VALUATION"
+        elif previous_billing_truth != "ACTUAL":
+            call.cost_equivalent = None
+            estimate = monetary_cost_for_credits(
+                credits=call.estimated_credits,
+                currency=accounting_currency,
+                at=call.started_at or timezone.now(),
+            )
+            metadata["cost_equivalent_truth"] = "ESTIMATED_USAGE" if estimate else "UNRESOLVED"
+            metadata["estimated_cost_equivalent"] = str(estimate.amount) if estimate else None
+            if estimate:
+                metadata.update({
+                    "valuation_id": estimate.valuation_id,
+                    "valuation_version": estimate.version,
+                    "valuation_source": estimate.source,
+                })
         call.status = status
         if usage_value is not None:
             call.usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {
@@ -728,7 +872,7 @@ class GenXGateway:
         call.requested_metadata = metadata
         call.save(
             update_fields=[
-                "status", "credits", "usage", "requested_metadata", "result_url",
+                "status", "credits", "usage", "cost_equivalent", "requested_metadata", "result_url",
                 "latency_ms", "completed_at", "error_code", "updated_at",
             ]
         )
@@ -754,6 +898,14 @@ class GenXGateway:
             stat, _ = ModelStat.objects.select_for_update().get_or_create(model=call.model, task_class=call.task_class)
             stat.credits += usage_value - previous_credits
             stat.save(update_fields=["credits", "updated_at"])
+
+        if call.cost_equivalent is not None and call.cost_equivalent != previous_cost:
+            stat, _ = ModelStat.objects.select_for_update().get_or_create(model=call.model, task_class=call.task_class)
+            cost_delta = call.cost_equivalent - (previous_cost or ZERO)
+            stat.cost_equivalent += cost_delta
+            stat.profit -= cost_delta
+            stat.net_profit -= cost_delta
+            stat.save(update_fields=["cost_equivalent", "profit", "net_profit", "updated_at"])
 
         if status == "COMPLETED" and billing_truth == "UNRESOLVED":
             existing = Alert.objects.filter(
@@ -795,6 +947,22 @@ class GenXGateway:
                         "billing_truth": billing_truth, "credits": str(usage_value),
                     },
                 )
+        if usage_value is not None and usage_value > ZERO and call.cost_equivalent is None:
+            Alert.objects.get_or_create(
+                alert_type="GENX_CREDIT_VALUATION_MISSING",
+                status="OPEN",
+                metadata={"call_id": str(call.id), "currency": accounting_currency},
+                defaults={
+                    "severity": "CRITICAL",
+                    "message": "Actual GenX credits are known but no authoritative monetary valuation is effective.",
+                },
+            )
+        elif call.cost_equivalent is not None:
+            Alert.objects.filter(
+                alert_type="GENX_CREDIT_VALUATION_MISSING",
+                status="OPEN",
+                metadata__call_id=str(call.id),
+            ).update(status="RESOLVED", resolved_at=timezone.now())
         if usage_value is not None and usage_value > call.max_allowed_credits:
             Alert.objects.get_or_create(
                 alert_type="GENX_CALL_BUDGET_OVERRUN",
@@ -834,8 +1002,15 @@ class GenXGateway:
                 "latency_ms": call.latency_ms,
                 "usage_source": source,
                 "billing_truth": billing_truth,
+                "cost_equivalent": str(call.cost_equivalent) if call.cost_equivalent is not None else None,
+                "cost_equivalent_truth": metadata.get("cost_equivalent_truth"),
+                "valuation_version": metadata.get("valuation_version"),
             },
         )
+        if call.job_id:
+            from control.services.product_factory import refresh_product_cost_basis_for_job
+
+            refresh_product_cost_basis_for_job(call.job_id)
         return call
 
     def reconcile(

@@ -8,7 +8,6 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from django.db import transaction
-from django.db.models import Sum
 from django.utils import timezone
 
 from control.models import AuditEvent, Execution, GenXCall, Job, QAResult, Submission
@@ -711,7 +710,6 @@ def _execute_composite_plan(plan_id: int) -> WorkPlan:
             plan.save(update_fields=["execution_attempts", "repair_attempts", "status", "updated_at"])
             job_id = plan.job_id
             worker_id = f"{step.worker_class}-{str(job_id)[:8]}-{step.key[:24]}"
-            operation = step.operation
             worker_class = step.worker_class
             step_id = step.id
             allow_repair = repair or plan.job.state == Job.State.EXECUTING
@@ -740,13 +738,20 @@ def _execute_composite_plan(plan_id: int) -> WorkPlan:
         qa = QAResult.objects.filter(execution=execution).order_by("-created_at").first()
         step.execution = execution
         step.qa_result = qa
-        step.actual_cost = GenXCall.objects.filter(
+        step_calls = list(GenXCall.objects.filter(
             job_id=job_id,
             worker_id=execution.worker_id,
             created_at__gte=execution.started_at,
             created_at__lte=execution.ended_at or timezone.now(),
-        ).aggregate(total=Sum("cost_equivalent"))["total"] or Decimal("0")
+        ))
+        step.actual_cost = sum((call.cost_equivalent or Decimal("0") for call in step_calls), Decimal("0"))
         step.output_artifacts.set(execution.artifacts.all())
+        if any(call.cost_equivalent is None for call in step_calls):
+            step.status = WorkPlanStep.Status.BLOCKED
+            step.reason_codes = ["GENX_MONETARY_COST_UNRESOLVED"]
+            step.save(update_fields=["execution", "qa_result", "actual_cost", "status", "reason_codes", "updated_at"])
+            WorkPlan.objects.filter(pk=plan_id).update(status=WorkPlan.Status.BLOCKED, reason_codes=[f"COMPOSITE_STEP_COST_UNRESOLVED:{step.key}"])
+            return WorkPlan.objects.get(pk=plan_id)
         if execution.status == "QA_PASSED" and qa and qa.passed:
             step.status = WorkPlanStep.Status.QA_PASSED
             step.reason_codes = []
@@ -789,11 +794,17 @@ def execute_work_plan(plan_id: int) -> WorkPlan:
             for prior in prior_repairs:
                 if prior.started_at is None:
                     continue
-                repair_cost += GenXCall.objects.filter(
+                prior_calls = list(GenXCall.objects.filter(
                     job=plan.job,
                     created_at__gte=prior.started_at,
                     created_at__lte=prior.ended_at or timezone.now(),
-                ).aggregate(total=Sum("cost_equivalent"))["total"] or Decimal("0")
+                ))
+                if any(call.cost_equivalent is None for call in prior_calls):
+                    plan.status = WorkPlan.Status.BLOCKED
+                    plan.reason_codes = [*plan.reason_codes, "GENX_MONETARY_COST_UNRESOLVED"]
+                    plan.save(update_fields=["status", "reason_codes", "updated_at"])
+                    return plan
+                repair_cost += sum((call.cost_equivalent or Decimal("0") for call in prior_calls), Decimal("0"))
             estimated_next = getattr(getattr(plan.job, "jobscore", None), "expected_genx_cost", Decimal("0"))
             if repair_cost + estimated_next > plan.max_repair_cost:
                 plan.status = WorkPlan.Status.BLOCKED

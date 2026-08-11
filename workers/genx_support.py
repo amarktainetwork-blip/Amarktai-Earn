@@ -9,7 +9,7 @@ from typing import Any
 
 from control.models import GenXModelCatalog, Job
 from gateways.genx.output import extract_session_assistant_text, extract_session_sources, extract_text
-from gateways.genx.service import GenXGateway, GenXGatewayError
+from gateways.genx.service import GenXGateway
 
 
 class GenXWorkerError(RuntimeError):
@@ -58,17 +58,25 @@ def catalog_supports(*keywords: str, fallback_category: str | None = None) -> bo
 
 
 def select_specialist(*keywords: str, fallback_category: str | None = None) -> GenXModelCatalog:
+    """Legacy catalogue helper for non-production inspection; it does not select a paid model."""
+    ids = capability_model_ids(*keywords, fallback_category=fallback_category)
+    row = GenXModelCatalog.objects.filter(model_id__in=ids).order_by("model_id").first()
+    if row:
+        return row
+    raise GenXWorkerError(f"no active GenX model matched capability: {', '.join(keywords) or fallback_category}")
+
+
+def capability_model_ids(*keywords: str, fallback_category: str | None = None) -> list[str]:
+    """Filter the live catalogue by capability without making an economic selection."""
     rows = list(GenXModelCatalog.objects.filter(active=True))
     wanted = tuple(word.casefold() for word in keywords if word)
     matched = [row for row in rows if wanted and any(word in _searchable_model_text(row) for word in wanted)]
     if matched:
-        matched.sort(key=lambda row: (row.price_hint is None, row.price_hint or Decimal("999999999"), row.model_id))
-        return matched[0]
+        return sorted(row.model_id for row in matched)
     if fallback_category:
         fallback = [row for row in rows if row.category.casefold() == fallback_category.casefold()]
         if fallback:
-            fallback.sort(key=lambda row: (row.price_hint is None, row.price_hint or Decimal("999999999"), row.model_id))
-            return fallback[0]
+            return sorted(row.model_id for row in fallback)
     raise GenXWorkerError(f"no active GenX model matched capability: {', '.join(keywords) or fallback_category}")
 
 
@@ -104,17 +112,17 @@ def generate_text(request, *, prompt: str, task_class: str, capability_keywords:
     gateway = GenXGateway()
     estimated, call_limit = credit_envelope(request.job_id, request.inputs)
     job = Job.objects.get(pk=request.job_id)
-    selected = select_specialist(*capability_keywords, fallback_category="text") if capability_keywords else None
+    eligible = capability_model_ids(*capability_keywords, fallback_category="text") if capability_keywords else None
     call = gateway.run(
         job_id=request.job_id,
         worker_id=request.worker_id,
-        category=selected.category if selected else "text",
+        category="text",
         task_class=task_class,
         params={"prompt": prompt},
         estimated_credits=estimated,
         max_allowed_credits=call_limit,
         request_key=_request_key(request, task_class, hashlib.sha256(prompt.encode()).hexdigest()[:12]),
-        preferred_model=selected.model_id if selected else None,
+        eligible_model_ids=eligible,
         wait_timeout_seconds=int(os.getenv("GENX_WORKER_TIMEOUT_SECONDS", "240")),
         required_quality=Decimal(str(request.inputs.get("minimum_quality", "0.80"))),
         allow_exploration=bool(request.inputs.get("allow_model_exploration", False)),
@@ -133,6 +141,8 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
         "End with a Sources section containing the URLs you actually used. Do not invent sources."
     )
     message = f"Research task: {query}\n\nRequirements:\n{requirements or 'Provide the strongest evidence and note uncertainty.'}"
+    job = Job.objects.get(pk=request.job_id)
+    eligible = capability_model_ids("web_search", "research", fallback_category="text")
     call, response = gateway.run_session(
         job_id=request.job_id,
         worker_id=request.worker_id,
@@ -143,6 +153,11 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
         max_allowed_credits=call_limit,
         request_key=_request_key(request, "research_web", hashlib.sha256(message.encode()).hexdigest()[:12]),
         tools=[{"type": "web_search"}],
+        eligible_model_ids=eligible,
+        required_quality=Decimal(str(request.inputs.get("minimum_quality", "0.80"))),
+        expected_revenue=job.reward,
+        allow_exploration=bool(request.inputs.get("allow_model_exploration", False)),
+        economically_fragile=bool(request.inputs.get("economically_fragile", False)),
     )
     text = str(response.get("assistant_text") or "") if isinstance(response, dict) else ""
     if not text:
@@ -185,7 +200,24 @@ def model_parameter_names(payload: Any) -> set[str]:
 
 def transcribe_media(request, source: Path) -> tuple[str, Any]:
     gateway = GenXGateway()
-    selected = select_specialist("transcription", "transcribe", "speech to text")
+    eligible = capability_model_ids("transcription", "transcribe", "speech to text")
+    estimated, call_limit = credit_envelope(request.job_id, request.inputs)
+    job = Job.objects.get(pk=request.job_id)
+    required_quality = Decimal(str(request.inputs.get("minimum_quality", "0.85")))
+    allow_exploration = bool(request.inputs.get("allow_model_exploration", False))
+    economically_fragile = bool(request.inputs.get("economically_fragile", False))
+    selected = gateway.select_model(
+        task_class="transcription",
+        category="audio",
+        eligible_model_ids=eligible,
+        required_quality=required_quality,
+        expected_revenue=job.reward,
+        max_genx_credits=call_limit,
+        estimated_credits=estimated,
+        accounting_currency=job.currency,
+        allow_exploration=allow_exploration,
+        economically_fragile=economically_fragile,
+    )
     uploaded = gateway.client.upload_file(source)
     file_id = str(uploaded.get("file_id") or uploaded.get("id") or "")
     file_url = str(uploaded.get("url") or uploaded.get("download_url") or "")
@@ -202,7 +234,6 @@ def transcribe_media(request, source: Path) -> tuple[str, Any]:
                 break
     if not params:
         raise GenXWorkerError("transcription model schema exposes no recognized uploaded-file input")
-    estimated, call_limit = credit_envelope(request.job_id, request.inputs)
     call = gateway.run(
         job_id=request.job_id,
         worker_id=request.worker_id,
@@ -212,8 +243,12 @@ def transcribe_media(request, source: Path) -> tuple[str, Any]:
         estimated_credits=estimated,
         max_allowed_credits=call_limit,
         request_key=_request_key(request, "transcription", file_id or source.name),
-        preferred_model=selected.model_id,
+        eligible_model_ids=[selected.model_id],
         wait_timeout_seconds=int(os.getenv("GENX_TRANSCRIPTION_TIMEOUT_SECONDS", "600")),
+        required_quality=required_quality,
+        expected_revenue=job.reward,
+        allow_exploration=allow_exploration,
+        economically_fragile=economically_fragile,
     )
     text = _terminal_text(gateway, call)
     if file_id and call.status == "COMPLETED":

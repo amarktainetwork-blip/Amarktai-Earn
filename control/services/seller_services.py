@@ -156,7 +156,7 @@ def source_capability_blockers(offering: ServiceOffering) -> list[str]:
 
 def _latest_execution_proof(offering: ServiceOffering):
     try:
-        spec = operation_spec(offering.operation)
+        operation_spec(offering.operation)
     except WorkerRegistryError:
         return None
     return QAResult.objects.filter(
@@ -815,6 +815,7 @@ def _record_authoritative_inbound_payout(
     fee: Decimal,
     currency: str,
     remote_event_id: str,
+    advance_job_state: bool = True,
 ):
     payout = Payout.objects.select_for_update().filter(job_id=order.job_id, currency=currency).first()
     if payout is None and target_state in {Payout.State.PAYOUT_PENDING, Payout.State.SETTLED}:
@@ -825,6 +826,7 @@ def _record_authoritative_inbound_payout(
             fee=fee,
             currency=currency,
             external_reference=remote_event_id,
+            advance_job_state=advance_job_state,
         )
     return record_payout_state(
         job_id=order.job_id,
@@ -834,6 +836,7 @@ def _record_authoritative_inbound_payout(
         currency=currency,
         external_reference=remote_event_id,
         settled_at=timezone.now() if target_state == Payout.State.SETTLED else None,
+        advance_job_state=advance_job_state,
     )
 
 
@@ -849,6 +852,7 @@ def reconcile_inbound_settlement(
     authoritative: bool,
     evidence_source: str,
     evidence: dict,
+    advance_job_state: bool = True,
 ) -> tuple[InboundSettlementEvent, bool]:
     order = InboundOrder.objects.select_related("job", "marketplace").select_for_update(of=("self",)).get(pk=order.pk)
     state = state.upper()
@@ -862,9 +866,9 @@ def reconcile_inbound_settlement(
     gross = _money(_decimal(gross)); fee = _money(_decimal(fee)); net = _money(gross - fee)
     if gross < 0 or fee < 0 or net < 0 or currency != order.currency:
         raise ValueError("INBOUND_SETTLEMENT_AMOUNT_INVALID")
-    if authoritative and state == InboundSettlementEvent.State.PAYOUT_PENDING and order.job.state not in {Job.State.ACCEPTED, Job.State.PAYOUT_PENDING}:
+    if authoritative and advance_job_state and state == InboundSettlementEvent.State.PAYOUT_PENDING and order.job.state not in {Job.State.ACCEPTED, Job.State.PAYOUT_PENDING}:
         raise ValueError("INBOUND_SETTLEMENT_JOB_NOT_ACCEPTED")
-    if authoritative and state == InboundSettlementEvent.State.SETTLED and order.job.state not in {Job.State.ACCEPTED, Job.State.PAYOUT_PENDING, Job.State.SETTLED}:
+    if authoritative and advance_job_state and state == InboundSettlementEvent.State.SETTLED and order.job.state not in {Job.State.ACCEPTED, Job.State.PAYOUT_PENDING, Job.State.SETTLED}:
         raise ValueError("INBOUND_SETTLEMENT_JOB_NOT_ACCEPTED")
     if authoritative and state == InboundSettlementEvent.State.SETTLED:
         if not isinstance(evidence, dict) or evidence.get("irreversible") is not True:
@@ -906,6 +910,7 @@ def reconcile_inbound_settlement(
             fee=fee,
             currency=currency,
             remote_event_id=remote_event_id,
+            advance_job_state=advance_job_state,
         )
         if payout_state == Payout.State.SETTLED:
             order.status = InboundOrder.Status.SETTLED

@@ -11,7 +11,8 @@ from control.services.dependencies import DependencyPreparationError, Dependency
 from control.sandbox_tokens import issue_sandbox_token
 from sandbox_broker.client import SandboxBrokerClient, SandboxBrokerError
 from planning.models import RepositorySnapshot
-from workers.genx_support import GenXWorkerError, select_specialist
+from gateways.genx.service import GenXGateway
+from workers.genx_support import GenXWorkerError, capability_model_ids
 
 
 class CodingWorkerError(RuntimeError):
@@ -78,10 +79,27 @@ def run_ai_coding_sandbox(request, *, agent: str) -> dict[str, Any]:
     if not source or not task or not test_command:
         raise CodingWorkerError("coding request is missing repository, instructions, or test command")
     try:
-        selected = select_specialist("code", "coding", "software", fallback_category="text")
+        eligible = capability_model_ids("code", "coding", "software", fallback_category="text")
     except GenXWorkerError as exc:
         raise CodingWorkerError(str(exc)) from exc
     budget = _job_budget(request.job_id)
+    job = Job.objects.get(pk=request.job_id)
+    estimated = min(
+        Decimal(str(request.inputs.get("estimated_genx_credits") or os.getenv("GENX_DEFAULT_ESTIMATED_CREDITS", "0.25"))),
+        budget,
+    )
+    selected = GenXGateway().select_model(
+        task_class="coding_sandbox",
+        category="text",
+        eligible_model_ids=eligible,
+        required_quality=Decimal(str(request.inputs.get("minimum_quality", "0.85"))),
+        expected_revenue=job.reward,
+        max_genx_credits=budget,
+        estimated_credits=estimated,
+        accounting_currency=job.currency,
+        allow_exploration=bool(request.inputs.get("allow_model_exploration", False)),
+        economically_fragile=bool(request.inputs.get("economically_fragile", False)),
+    )
     token = issue_sandbox_token(
         job_id=request.job_id,
         worker_id=request.worker_id,

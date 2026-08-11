@@ -21,12 +21,10 @@ def record_execution_outcome(*, execution, qa_passed: bool, repair_required: boo
     )
     if not calls:
         return 0
-    payout = Payout.objects.filter(job_id=execution.job_id).first()
-    authoritative_revenue = payout.net if payout and payout.state == Payout.State.SETTLED else ZERO
     # A passed QA result is not cash. Model economics receive revenue only from
-    # the authoritative settlement hook below; this stage records actual costs
-    # and quality outcomes without promoting expected job value into revenue.
-    attributable_revenue = authoritative_revenue / Decimal(len(calls))
+    # the authoritative settlement hook below; actual monetary call costs are
+    # recorded at GenX billing reconciliation, never duplicated at QA time.
+    authoritative_revenue = ZERO
     recorded = 0
     for call in calls:
         metadata = dict(call.requested_metadata or {})
@@ -43,16 +41,11 @@ def record_execution_outcome(*, execution, qa_passed: bool, repair_required: boo
         if repair_required:
             stat.repair_required += 1
             stat.retry_count += 1
-            stat.total_repair_cost += call.cost_equivalent
-        stat.revenue += attributable_revenue
-        stat.gross_profit += attributable_revenue
-        stat.cost_equivalent += call.cost_equivalent
-        actual_net = attributable_revenue - call.cost_equivalent
-        stat.profit += actual_net
-        stat.net_profit += actual_net
+            if call.cost_equivalent is not None:
+                stat.total_repair_cost += call.cost_equivalent
         stat.save(update_fields=[
             "qa_accepted", "accepted", "qa_rejected", "repair_required", "retry_count",
-            "total_repair_cost", "revenue", "gross_profit", "cost_equivalent", "profit", "net_profit", "updated_at",
+            "total_repair_cost", "updated_at",
         ])
         recorded_ids.append(execution_key)
         metadata["economic_outcome_execution_ids"] = recorded_ids[-20:]

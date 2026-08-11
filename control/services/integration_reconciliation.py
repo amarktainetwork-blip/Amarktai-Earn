@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from control.models import AuditEvent, CommercePayment, MarketIntegrationProfile, WebhookEvent
 from control.services.integration_accounts import BY_SLUG
-from control.services.paystack_commerce import PaystackCommerceError, reconcile_payment
+from control.services.paystack_commerce import PaystackCommerceError, reconcile_payment, reconcile_paystack_settlements
 
 
 def _paystack(limit: int) -> dict[str, Any]:
@@ -22,7 +22,8 @@ def _paystack(limit: int) -> dict[str, Any]:
             if exc.code == "AUTHENTICATION":
                 raise
             failed += 1
-    return {"checked": len(rows), "reconciled": reconciled, "paid": paid, "failed": failed}
+    settlements = reconcile_paystack_settlements(limit=limit)
+    return {"checked": len(rows), "reconciled": reconciled, "paid": paid, "failed": failed, "settlements": settlements}
 
 
 HANDLERS = {"paystack": _paystack}

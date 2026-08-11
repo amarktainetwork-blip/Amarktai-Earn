@@ -71,25 +71,61 @@ def pricing_index(payload: Any) -> dict[str, dict[str, Any]]:
     return indexed
 
 
-def _numeric_price_candidates(value: Any, parent_key: str = "") -> list[Decimal]:
-    candidates: list[Decimal] = []
-    key = parent_key.lower()
-    if isinstance(value, dict):
-        for child_key, child_value in value.items():
-            candidates.extend(_numeric_price_candidates(child_value, str(child_key)))
-    elif isinstance(value, list):
-        for child in value:
-            candidates.extend(_numeric_price_candidates(child, parent_key))
-    elif any(token in key for token in ("credit", "price", "cost")):
-        number = _decimal(value)
-        if number is not None and number >= ZERO:
-            candidates.append(number)
-    return candidates
-
-
 def price_hint(payload: Any) -> Decimal | None:
-    candidates = [value for value in _numeric_price_candidates(payload) if value > ZERO]
-    return min(candidates) if candidates else None
+    """Return only an explicit per-call credit price, never an arbitrary nested minimum."""
+    if not isinstance(payload, dict):
+        return None
+    containers = [payload]
+    if isinstance(payload.get("pricing"), dict):
+        containers.append(payload["pricing"])
+    for container in containers:
+        for key in ("credits_per_call", "credit_cost_per_call", "fixed_credits"):
+            value = _decimal(container.get(key))
+            if value is not None and value > ZERO:
+                return value
+    return None
+
+
+def pricing_credit_estimate(
+    payload: Any,
+    params: dict[str, Any] | None,
+    *,
+    historical_average: Decimal | None,
+    reserved_envelope: Decimal,
+) -> Decimal:
+    """Estimate credits only when the provider metric and its request unit are both known."""
+    params = params if isinstance(params, dict) else {}
+    pricing = payload.get("pricing") if isinstance(payload, dict) and isinstance(payload.get("pricing"), dict) else payload
+    if isinstance(pricing, dict):
+        fixed = price_hint(pricing)
+        if fixed is not None:
+            return fixed
+        metric_contracts = (
+            (("credits_per_image", "credit_per_image"), ("image_count", "num_images", "n"), Decimal("1")),
+            (("credits_per_audio_second", "credits_per_second"), ("audio_seconds", "duration_seconds"), None),
+            (("credits_per_video_second",), ("video_seconds", "duration_seconds"), None),
+            (("credits_per_minute",), ("duration_minutes",), None),
+            (("credits_per_1000_tokens", "credits_per_1k_tokens"), ("estimated_tokens", "max_tokens"), None),
+        )
+        for rate_keys, unit_keys, default_units in metric_contracts:
+            rate = next((_decimal(pricing.get(key)) for key in rate_keys if key in pricing), None)
+            units = next((_decimal(params.get(key)) for key in unit_keys if key in params), default_units)
+            if rate is not None and rate > ZERO and units is not None and units > ZERO:
+                divisor = Decimal("1000") if any("1000" in key or "1k" in key for key in rate_keys) else Decimal("1")
+                return (rate * units) / divisor
+        input_rate = _decimal(pricing.get("input_credits_per_1000_tokens"))
+        output_rate = _decimal(pricing.get("output_credits_per_1000_tokens"))
+        input_tokens = _decimal(params.get("estimated_input_tokens"))
+        output_tokens = _decimal(params.get("max_output_tokens"))
+        if all(value is not None and value >= ZERO for value in (input_rate, output_rate, input_tokens, output_tokens)) and (input_tokens or output_tokens):
+            return ((input_rate * input_tokens) + (output_rate * output_tokens)) / Decimal("1000")
+        input_rate = _decimal(pricing.get("input_credits_per_million"))
+        output_rate = _decimal(pricing.get("output_credits_per_million"))
+        if all(value is not None and value >= ZERO for value in (input_rate, output_rate, input_tokens, output_tokens)) and (input_tokens or output_tokens):
+            return ((input_rate * input_tokens) + (output_rate * output_tokens)) / Decimal("1000000")
+    if historical_average is not None and historical_average > ZERO:
+        return historical_average
+    return Decimal(reserved_envelope)
 
 
 def _find_decimal(payload: Any, candidate_keys: tuple[str, ...]) -> Decimal | None:
@@ -146,6 +182,7 @@ def result_url(payload: Any) -> str:
 class ModelCandidate:
     model_id: str
     price_hint: Decimal | None = None
+    expected_credits: Decimal = ZERO
     attempts: int = 0
     accepted: int = 0
     profit: Decimal = ZERO
@@ -194,10 +231,13 @@ class ModelCandidate:
 @dataclass(frozen=True)
 class EconomicRoute:
     candidate: ModelCandidate
-    expected_net_profit: Decimal
-    expected_total_cost: Decimal
+    expected_net_profit: Decimal | None
+    expected_total_cost: Decimal | None
+    expected_credits: Decimal
+    non_currency_score: Decimal
     quality_probability: Decimal
     exploration: bool
+    cost_basis: str
 
 
 def route_models(
@@ -206,11 +246,12 @@ def route_models(
     expected_revenue: Decimal,
     non_genx_cost: Decimal = ZERO,
     required_quality: Decimal = Decimal("0.80"),
-    max_genx_cost: Decimal | None = None,
+    max_genx_credits: Decimal | None = None,
+    monetary_cost_per_credit: Decimal | None = None,
     allow_exploration: bool = False,
     exploration_fraction: Decimal = Decimal("0.05"),
 ) -> list[EconomicRoute]:
-    """Rank task-scoped models by quality-constrained expected net profit."""
+    """Rank in money only with a valuation; otherwise use a named credit-efficiency score."""
     routes: list[EconomicRoute] = []
     for candidate in candidates:
         unproven = candidate.attempts == 0
@@ -219,29 +260,50 @@ def route_models(
         quality = candidate.qa_acceptance_probability
         if not unproven and quality < required_quality:
             continue
-        expected_genx = candidate.average_credits
-        if expected_genx <= ZERO:
-            expected_genx = candidate.price_hint or ZERO
-        expected_repair = candidate.repair_probability * (
-            candidate.average_repair_cost or expected_genx
-        )
-        expected_retry = candidate.failure_probability * expected_genx
-        total_cost = expected_genx + expected_repair + expected_retry + non_genx_cost
-        if max_genx_cost is not None and expected_genx + expected_repair + expected_retry > max_genx_cost:
+        expected_credits = candidate.expected_credits or candidate.average_credits or candidate.price_hint or ZERO
+        expected_repair_credits = candidate.repair_probability * expected_credits
+        expected_retry_credits = candidate.failure_probability * expected_credits
+        total_credits = expected_credits + expected_repair_credits + expected_retry_credits
+        if expected_credits <= ZERO:
             continue
-        expected_net = (expected_revenue * quality) - total_cost
+        if max_genx_credits is not None and total_credits > max_genx_credits:
+            continue
         exploration = unproven
-        if exploration and expected_genx > expected_revenue * exploration_fraction:
+        if exploration and (max_genx_credits is None or total_credits > max_genx_credits * exploration_fraction):
             continue
-        if expected_net <= ZERO:
-            continue
-        routes.append(EconomicRoute(candidate, expected_net, total_cost, quality, exploration))
+        success_probability = max(ZERO, Decimal("1") - candidate.failure_probability)
+        non_currency_score = (quality * success_probability) / max(total_credits, Decimal("0.00000001"))
+        expected_net: Decimal | None = None
+        expected_total_cost: Decimal | None = None
+        cost_basis = "CREDIT_EFFICIENCY"
+        if monetary_cost_per_credit is not None:
+            expected_genx_money = expected_credits * monetary_cost_per_credit
+            historical_repair_money = candidate.average_repair_cost
+            expected_repair_money = candidate.repair_probability * (historical_repair_money or expected_genx_money)
+            expected_retry_money = candidate.failure_probability * expected_genx_money
+            expected_total_cost = expected_genx_money + expected_repair_money + expected_retry_money + non_genx_cost
+            expected_net = (expected_revenue * quality) - expected_total_cost
+            if expected_net <= ZERO:
+                continue
+            cost_basis = "AUTHORITATIVE_MONETARY_VALUATION"
+        routes.append(EconomicRoute(
+            candidate=candidate,
+            expected_net_profit=expected_net,
+            expected_total_cost=expected_total_cost,
+            expected_credits=total_credits,
+            non_currency_score=non_currency_score,
+            quality_probability=quality,
+            exploration=exploration,
+            cost_basis=cost_basis,
+        ))
     return sorted(
         routes,
         key=lambda route: (
-            -route.expected_net_profit,
+            0 if route.expected_net_profit is not None else 1,
+            -(route.expected_net_profit or ZERO),
+            -route.non_currency_score,
             -route.quality_probability,
-            route.expected_total_cost,
+            route.expected_total_cost if route.expected_total_cost is not None else Decimal("999999999"),
             route.candidate.model_id,
         ),
     )

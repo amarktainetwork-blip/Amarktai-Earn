@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from control.models import Job
+from control.models import GenXModelCatalog, Job
 from gateways.genx.client import GenXError
 from gateways.genx.service import GenXGateway
 from workers.base import Worker, WorkRequest, WorkResult
@@ -43,12 +43,25 @@ class ImageProductWorker(Worker):
             source = Path(str(request.inputs.get("source") or ""))
             if not source.is_file():
                 return WorkResult(ok=False, error="image editing requires a verified source image")
+            source_fields = {
+                "input_image_file_id", "image_file_id", "input_file_id", "file_id", "asset_id",
+                "input_image_url", "image_url", "input_url", "file_url", "url",
+            }
+            eligible = [
+                row.model_id
+                for row in GenXModelCatalog.objects.filter(active=True, category="image")
+                if model_parameter_names(row.model_payload) & source_fields
+            ]
             selected = gateway.select_model(
                 task_class="image_editing",
                 category="image",
+                eligible_model_ids=eligible,
                 required_quality=required_quality,
                 expected_revenue=job.reward,
-                max_genx_cost=call_limit,
+                max_genx_credits=call_limit,
+                estimated_credits=estimated,
+                params=params,
+                accounting_currency=job.currency,
                 allow_exploration=allow_exploration,
                 economically_fragile=economically_fragile,
             )
@@ -86,7 +99,7 @@ class ImageProductWorker(Worker):
                 estimated_credits=estimated,
                 max_allowed_credits=call_limit,
                 request_key=request_key,
-                preferred_model=selected.model_id if selected else None,
+                eligible_model_ids=[selected.model_id] if selected else None,
                 wait_timeout_seconds=int(os.getenv("GENX_IMAGE_TIMEOUT_SECONDS", "420")),
                 required_quality=required_quality,
                 expected_revenue=job.reward,

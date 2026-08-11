@@ -48,7 +48,12 @@ def _recompute_treasury(job: Job, currency: str) -> TreasuryBalance:
     return treasury
 
 
-def _validate_job_money_state(job: Job, current_payout_state: str | None, target_state: str) -> None:
+def _validate_job_money_state(job: Job, current_payout_state: str | None, target_state: str, *, advance_job_state: bool) -> None:
+    if not advance_job_state:
+        source_type = str((job.normalized_payload or {}).get("source_type") or "")
+        if source_type != "INBOUND_SERVICE_ORDER" or job.state == Job.State.FAILED:
+            raise ValueError("non-advancing payout lifecycle is restricted to funded direct-commerce orders")
+        return
     if current_payout_state is None and target_state == Payout.State.EARNED and job.state not in {Job.State.SUBMITTED, Job.State.ACCEPTED}:
         raise ValueError(f"job must be SUBMITTED or ACCEPTED before earnings can be recorded, got {job.state}")
     if target_state == Payout.State.PAYOUT_PENDING and job.state not in {Job.State.ACCEPTED, Job.State.PAYOUT_PENDING}:
@@ -70,6 +75,7 @@ def record_payout_state(
     external_reference: str = "",
     expected_date=None,
     settled_at=None,
+    advance_job_state: bool = True,
 ) -> Payout:
     job = Job.objects.select_for_update().select_related("marketplace").get(pk=job_id)
     gross = Decimal(gross)
@@ -80,7 +86,7 @@ def record_payout_state(
     payout = Payout.objects.select_for_update().filter(job=job, currency=currency).first()
     current = payout.state if payout else None
     assert_payout_transition(current, target_state)
-    _validate_job_money_state(job, current, target_state)
+    _validate_job_money_state(job, current, target_state, advance_job_state=advance_job_state)
     net = gross - fee
 
     if payout is not None and (payout.gross != gross or payout.fee != fee or payout.net != net):
@@ -115,7 +121,7 @@ def record_payout_state(
 
     reference = external_reference or payout.external_reference or f"job:{job.id}"
     if target_state == Payout.State.EARNED:
-        if job.state == Job.State.SUBMITTED:
+        if advance_job_state and job.state == Job.State.SUBMITTED:
             transition_job(job.id, Job.State.ACCEPTED, actor="treasury", metadata={"payout_id": payout.id})
         _post_once(
             entry_key=f"payout:{payout.id}:earned",
@@ -128,13 +134,13 @@ def record_payout_state(
             metadata={"job_id": str(job.id), "payout_id": payout.id},
         )
     elif target_state == Payout.State.PAYOUT_PENDING:
-        if job.state == Job.State.ACCEPTED:
+        if advance_job_state and job.state == Job.State.ACCEPTED:
             transition_job(job.id, Job.State.PAYOUT_PENDING, actor="treasury", metadata={"payout_id": payout.id})
     elif target_state == Payout.State.SETTLED:
-        if job.state == Job.State.ACCEPTED:
+        if advance_job_state and job.state == Job.State.ACCEPTED:
             transition_job(job.id, Job.State.PAYOUT_PENDING, actor="treasury", metadata={"payout_id": payout.id})
             job.refresh_from_db()
-        if job.state == Job.State.PAYOUT_PENDING:
+        if advance_job_state and job.state == Job.State.PAYOUT_PENDING:
             transition_job(job.id, Job.State.SETTLED, actor="treasury", metadata={"payout_id": payout.id})
         _post_once(
             entry_key=f"payout:{payout.id}:settled",
