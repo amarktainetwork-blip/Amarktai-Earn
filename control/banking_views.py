@@ -65,8 +65,8 @@ def banking_page(request):
         "control/banking.html",
         {
             "section": "banking",
-            "page_title": "Banking",
-            "page_description": "Owner payment rails, payout receipt, and final settlement proof",
+            "page_title": "Treasury & Settlement",
+            "page_description": "Automatic payout receipt, human withdrawals, crypto settlement, and account setup",
             "advanced_section": False,
         },
     )
