@@ -24,6 +24,7 @@ class MarketDefinition:
     automation_allowed: bool
     blockers: tuple[str, ...]
     evidence: dict
+    webdock_compatible: bool = True
 
 
 DEFINITIONS = (
@@ -36,6 +37,7 @@ DEFINITIONS = (
         automation_allowed=True,
         blockers=("ACCOUNT_PAYOUT_NOT_VERIFIED", "SOUTH_AFRICA_NON_CRYPTO_PAYOUT_NOT_VERIFIED"),
         evidence={"mode": "REST_AND_WEBHOOK", "account_proof_required": True},
+        webdock_compatible=True,
     ),
     MarketDefinition(
         slug="dealwork", display_name="Dealwork",
@@ -50,6 +52,7 @@ DEFINITIONS = (
             "SERVICE_LISTING_CONTRACT_NOT_PROVED",
         ),
         evidence={"mode": "MCP_TOOLS_DISCOVERED_AT_RUNTIME", "service_listings_enabled": False},
+        webdock_compatible=True,
     ),
     MarketDefinition(
         slug="callboard", display_name="Callboard",
@@ -60,6 +63,7 @@ DEFINITIONS = (
         automation_allowed=True,
         blockers=("AGENT_OWNER_CLAIM_NOT_VERIFIED", "ACCOUNT_PAYOUT_NOT_VERIFIED", "SOUTH_AFRICA_NON_CRYPTO_PAYOUT_NOT_VERIFIED"),
         evidence={"mode": "OPENAPI_V2", "submission_payload": "OPENAPI_SHAPED_ONLY"},
+        webdock_compatible=True,
     ),
     MarketDefinition(
         slug="opire", display_name="Opire",
@@ -74,6 +78,7 @@ DEFINITIONS = (
             "ACCOUNT_PAYOUT_NOT_VERIFIED", "SOUTH_AFRICA_NON_CRYPTO_PAYOUT_NOT_VERIFIED",
         ),
         evidence={"mode": "SOURCE_WIRED_IMPORT", "claim_is_settlement": False},
+        webdock_compatible=True,
     ),
     MarketDefinition(
         slug="algora", display_name="Algora",
@@ -88,6 +93,7 @@ DEFINITIONS = (
             "SOUTH_AFRICA_NON_CRYPTO_PAYOUT_NOT_VERIFIED",
         ),
         evidence={"mode": "SOURCE_WIRED_IMPORT", "claim_or_merged_pr_is_settlement": False},
+        webdock_compatible=True,
     ),
     MarketDefinition(
         slug="taskbounty", display_name="TaskBounty",
@@ -110,6 +116,7 @@ DEFINITIONS = (
             "ai_generated_work_disclosure_required": True,
             "resubmission_only_after_failed_verification": True,
         },
+        webdock_compatible=True,
     ),
 )
 
