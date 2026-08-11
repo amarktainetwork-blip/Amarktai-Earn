@@ -19,130 +19,126 @@ class MarketPriority:
     priority_reason: str
 
 
-# Commercial ordering is intentionally explicit instead of pretending that every
-# catalogued market has equal value. Ordering is decided by:
-#   1. autonomous payout/settlement after one-time owner KYC/KYA,
-#   2. South African owner setup friction,
-#   3. scalable autonomous earning ceiling,
-# with real-money/payout evidence acting as a fail-closed maturity gate.
-#
-# Scores are prioritisation inputs, not earnings promises. Actual readiness still
-# comes exclusively from market_readiness() and observed settlement evidence.
+# Commercial ordering is explicit and owner-specific. A payout may be automatic
+# into PayPal/crypto/platform balance while the final bank withdrawal is human.
+# Human withdrawal does not block autonomous earning. An unavailable owner rail
+# (notably Stripe for this owner) is a hard practical priority penalty.
+# Scores are planning inputs, never earnings promises or readiness claims.
 PRIORITIES: dict[str, MarketPriority] = {
     "lemon-squeezy": MarketPriority(
-        1, "ACTIVATE_FIRST", "CONNECT_AND_PUBLISH", 5, 5, 5, "HIGH",
-        "Automatic scheduled South African bank payout or PayPal after merchant KYC",
-        "South Africa is explicitly supported for bank payouts; direct products, subscriptions and usage-style sales can recur without winning each job manually.",
-    ),
-    "rapidapi": MarketPriority(
-        2, "ACTIVATE_FIRST", "CONNECT_AND_PUBLISH", 5, 5, 5, "HIGH",
-        "Automatic provider payout to PayPal; South African PayPal can withdraw through the local FNB-linked route",
-        "Recurring API subscriptions and overages have a high autonomous ceiling, although the 25% marketplace fee and delayed payout cycle must be priced in.",
-    ),
-    "apify-store": MarketPriority(
-        3, "ACTIVATE_FIRST", "CONNECT_AND_PUBLISH", 5, 4, 5, "HIGH",
-        "Automatic monthly creator payout after KYC; PayPal/Wise and other payout methods are supported by Apify",
-        "Paid Actors can earn repeatedly while scraper-heavy execution stays on Apify infrastructure rather than Webdock.",
+        1, "ACTIVATE_FIRST", "OPEN_ACCOUNT_CONNECT_PAYPAL_AND_PUBLISH", 5, 5, 5, "HIGH",
+        "Automatic scheduled payout to verified PayPal; human withdrawal happens outside AmarktAI",
+        "South Africa is supported and recurring products/subscriptions can earn without winning each job manually.",
     ),
     "taskbounty": MarketPriority(
-        4, "ACTIVATE_FIRST", "CONNECT_PAYOUT_AND_PROVE", 5, 4, 3, "HIGH",
-        "Headless public crypto payout address or bank payout; private wallet keys remain off Webdock",
-        "The agent API supports autonomous bounty discovery/submission and headless crypto payout configuration; revenue is real but bounty inventory is naturally lumpy.",
+        2, "ACTIVATE_FIRST", "OPEN_SOLVER_ACCOUNT_AND_SET_CRYPTO_PAYOUT", 5, 5, 3, "HIGH",
+        "Headless public crypto payout address; private keys and any cash-out remain outside Webdock",
+        "API-native bounty discovery/submission plus headless crypto payout gives the cleanest autonomous work-to-payment path, although bounty supply is lumpy.",
     ),
-    "nevermined": MarketPriority(
-        5, "PROVE_PAYOUT", "PROVE_OFFHOST_OR_SA_SETTLEMENT", 5, 3, 5, "HIGH",
-        "Automatic per-request fiat or stablecoin settlement; stablecoin custody/signing must remain off Webdock",
-        "Excellent agent-to-agent and API monetisation fit with automatic metering, but the South African fiat route must be proven or replaced by an approved off-host settlement route.",
+    "rapidapi": MarketPriority(
+        3, "ACTIVATE_FIRST", "OPEN_PROVIDER_ACCOUNT_LINK_PAYPAL_AND_PUBLISH", 5, 5, 5, "HIGH",
+        "Automatic provider payout to PayPal; human South African withdrawal happens later outside AmarktAI",
+        "Recurring API subscriptions and usage have a high autonomous ceiling; the 25% marketplace fee must be priced in.",
     ),
-    "agentgigs": MarketPriority(
-        6, "PROVE_PAYOUT", "PROVE_SA_STRIPE_CONNECT", 5, 2, 4, "HIGH",
-        "Automatic Stripe Connect release after approved delivery and cooldown",
-        "Job operations are API-native and autonomous after one-time human onboarding, but the owner's South African Connect payout capability remains the critical gate.",
-    ),
-    "callboard": MarketPriority(
-        7, "PROVE_PAYOUT", "PROVE_SA_STRIPE_CONNECT", 5, 2, 4, "HIGH",
-        "Stripe Connect payout after owner claim and payout onboarding",
-        "The public API is strongly automation-oriented, but South African connected-account payout proof is still required before it can be treated as a cash route.",
+    "apify-store": MarketPriority(
+        4, "ACTIVATE_FIRST", "OPEN_CREATOR_ACCOUNT_LINK_PAYOUT_AND_PUBLISH", 5, 4, 5, "HIGH",
+        "Automatic monthly creator payout to PayPal/Wise; human withdrawal can occur later",
+        "Paid Actors can earn repeatedly while scraper-heavy execution stays on Apify infrastructure rather than Webdock.",
     ),
     "contra": MarketPriority(
-        8, "PROVE_PAYOUT", "ONBOARD_OWNER_AND_PROVE_PAYOUT", 3, 4, 5, "HIGH",
-        "Contra wallet followed by local bank, PayPal, Payoneer or crypto withdrawal depending on account eligibility",
-        "Very high project and direct-sales upside with several global payout methods, but public acquisition/payout automation is weaker than the API-native channels above.",
+        5, "ACTIVATE_FIRST", "OPEN_ACCOUNT_AND_PROVE_PAYOUT", 3, 5, 5, "HIGH",
+        "Contra wallet followed by PayPal, Payoneer or crypto withdrawal; final withdrawal is human",
+        "Very high project/direct-sales upside and usable non-Stripe payout choices make it worth onboarding early even though acquisition is less API-native.",
     ),
     "dealwork": MarketPriority(
-        9, "PROVE_PAYOUT", "COMPLETE_KYA_AND_WITHDRAWAL_PROOF", 4, 3, 3, "MEDIUM",
-        "Automatic platform-wallet receipt after approval; final withdrawal rail still requires proof",
-        "Good bounded live-job proving path because escrow and agent work are native, but platform-wallet balance must not be confused with final settled cash.",
+        6, "PROVE_PAYOUT", "COMPLETE_KYA_AND_WITHDRAWAL_PROOF", 4, 4, 3, "MEDIUM",
+        "Automatic platform-wallet receipt after approval; human final withdrawal route still requires proof",
+        "Good bounded live-job proving path; platform-wallet balance must not be confused with final settled cash.",
     ),
-    "coinbase-x402-bazaar": MarketPriority(
-        10, "BUILD_OFFHOST", "BUILD_EXTERNAL_SETTLEMENT_BRIDGE", 5, 3, 5, "MEDIUM",
-        "Autonomous x402/on-chain settlement through an external wallet/CASP bridge",
-        "High machine-to-machine monetisation ceiling, but all signing, wallet and chain execution must remain off Webdock and commercial demand must be proven.",
+    "nevermined": MarketPriority(
+        7, "PROVE_PAYOUT", "OPEN_ACCOUNT_AND_PROVE_CRYPTO_OR_PAYPAL_ROUTE", 5, 3, 5, "MEDIUM",
+        "Automatic per-request settlement where supported; crypto custody/signing stays off Webdock",
+        "Strong agent/API monetisation fit, but this owner's usable settlement route must be proven before activation.",
     ),
     "skyfire": MarketPriority(
-        11, "PROVE_PAYOUT", "PROVE_SELLER_KYA_AND_SETTLEMENT", 5, 2, 4, "MEDIUM",
-        "Agent payment-token settlement after seller onboarding",
-        "Strong machine-commerce design, but seller approval, South African availability and final settlement route are not yet proven for this owner.",
+        8, "PROVE_PAYOUT", "OPEN_SELLER_ACCOUNT_AND_PROVE_SETTLEMENT", 5, 3, 4, "MEDIUM",
+        "Agent payment-token settlement after seller onboarding; final withdrawal can be human/off-host",
+        "Strong machine-commerce design, but seller approval and a usable owner payout route remain unproven.",
     ),
     "algora": MarketPriority(
-        12, "OPPORTUNISTIC", "PROVE_SOLVER_MUTATION_AND_PAYOUT", 2, 3, 4, "MEDIUM",
+        9, "OPPORTUNISTIC", "OPEN_ACCOUNT_AND_PROVE_SOLVER_PAYOUT", 2, 4, 4, "MEDIUM",
         "Bounty reward after accepted claim/PR using the platform payout route",
-        "Individual bounty wins can be valuable, but solver mutation and payout automation are not yet strong enough for the first autonomous lane.",
+        "Individual wins can be valuable; keep opportunistic until solver mutation and payout are proven.",
     ),
     "opire": MarketPriority(
-        13, "OPPORTUNISTIC", "KEEP_MANUAL_UNTIL_SOLVER_API_EXISTS", 1, 3, 4, "MEDIUM",
+        10, "OPPORTUNISTIC", "OPEN_ACCOUNT_KEEP_MANUAL_UNTIL_SOLVER_API_EXISTS", 1, 4, 4, "MEDIUM",
         "Reward payout after creator approval",
-        "Useful coding-bounty upside, but no verified public solver mutation contract and non-escrow reward flow make it unsuitable for unattended acquisition today.",
+        "Useful coding-bounty upside, but no verified public solver mutation contract makes unattended acquisition inappropriate today.",
+    ),
+    "coinbase-x402-bazaar": MarketPriority(
+        11, "BUILD_OFFHOST", "BUILD_EXTERNAL_SETTLEMENT_BRIDGE_AFTER_CORE", 5, 3, 5, "MEDIUM",
+        "Autonomous x402/on-chain settlement through an external wallet/CASP bridge",
+        "High machine-to-machine ceiling, but signing, wallet and chain execution must stay off Webdock.",
     ),
     "swarms": MarketPriority(
-        14, "BACKLOG", "VERIFY_PUBLISHING_AND_PAYOUT", 2, 2, 4, "LOW",
+        12, "BACKLOG", "VERIFY_PUBLISHING_AND_PAYOUT", 2, 2, 4, "LOW",
         "Unverified marketplace payout route",
-        "Potential reusable-agent sales are attractive, but publishing contract, payout route and licence constraints need proof first.",
+        "Potential reusable-agent sales are attractive, but publishing contract and payout route need proof first.",
     ),
     "hyrve": MarketPriority(
-        15, "BACKLOG", "VERIFY_API_AND_SA_PAYOUT", 2, 2, 3, "LOW",
+        13, "BACKLOG", "VERIFY_API_AND_NON_STRIPE_PAYOUT", 1, 2, 3, "LOW",
         "Claimed Stripe/bank withdrawal route requiring account proof",
-        "Potential work and service sales exist, but public automation and South African payout are still unverified.",
+        "Potential work exists, but current payout and public automation are too uncertain for near-term effort.",
     ),
     "agentverserun": MarketPriority(
-        16, "BACKLOG", "VERIFY_REAL_AUTOMATION_AND_PAYOUT", 2, 2, 3, "LOW",
+        14, "BACKLOG", "VERIFY_REAL_AUTOMATION_AND_NON_STRIPE_PAYOUT", 1, 2, 3, "LOW",
         "Claimed Stripe settlement requiring account proof",
-        "Storefront/project potential remains secondary until the public automation contract and payout route are demonstrated.",
+        "Storefront/project potential remains secondary until a usable payout route and automation contract are demonstrated.",
     ),
     "virtuals-acp": MarketPriority(
-        17, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 5, "LOW",
+        15, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 5, "LOW",
         "Off-host on-chain settlement only",
-        "Potentially high autonomous agent-commerce ceiling, but requires a separate compliant settlement/runtime bridge and stronger revenue proof.",
+        "Potentially high autonomous agent-commerce ceiling, but it requires a separate compliant bridge and stronger demand proof.",
     ),
     "olas-mech": MarketPriority(
-        18, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 4, "LOW",
+        16, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 4, "LOW",
         "Off-host on-chain settlement only",
-        "Agent-call monetisation is conceptually strong, but it is infrastructure-heavier and less immediate than proven fiat/PayPal channels.",
+        "Agent-call monetisation is conceptually strong but less immediate than proven PayPal/crypto channels.",
     ),
     "masumi-sokosumi": MarketPriority(
-        19, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 4, "LOW",
+        17, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 4, "LOW",
         "Off-host on-chain settlement only",
-        "Keep as a future agent-to-agent commerce lane after external wallet/CASP settlement is operational.",
+        "Future agent-to-agent commerce lane after external wallet/CASP settlement is operational.",
     ),
     "singularitynet": MarketPriority(
-        20, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 4, "LOW",
+        18, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 4, "LOW",
         "Off-host on-chain settlement only",
-        "Potential service marketplace revenue, but not worth delaying the simpler South-African-payable channels.",
+        "Potential service revenue, but it must not delay simpler usable channels.",
     ),
     "fetch-agentverse": MarketPriority(
-        21, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 4, "LOW",
+        19, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 4, "LOW",
         "Off-host blockchain settlement only",
         "Keep the blockchain path external and revisit after the core treasury bridge is proven.",
     ),
     "okx-ai": MarketPriority(
-        22, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 3, "LOW",
+        20, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 3, "LOW",
         "Off-host wallet settlement only",
-        "Potential agent ecosystem income is currently less proven than the higher-ranked machine-commerce routes.",
+        "Potential agent ecosystem income is currently less proven than higher-ranked routes.",
     ),
     "agrenting": MarketPriority(
-        23, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 3, "LOW",
+        21, "BUILD_OFFHOST", "RESEARCH_AFTER_CORE_CHANNELS", 5, 2, 3, "LOW",
         "Off-host wallet/on-chain settlement only",
-        "Do not spend core implementation time here until real demand and the external settlement bridge are proven.",
+        "Do not spend core implementation time until demand and the external bridge are proven.",
+    ),
+    "agentgigs": MarketPriority(
+        22, "BLOCKED_OWNER_RAIL", "PAUSE_UNTIL_NON_STRIPE_PAYOUT_EXISTS", 0, 0, 4, "HIGH",
+        "Current owner payout contract requires Stripe Connect, which is unavailable to this owner",
+        "The work API is attractive, but an unusable owner payout rail makes implementation pointless until the platform offers another route.",
+    ),
+    "callboard": MarketPriority(
+        23, "BLOCKED_OWNER_RAIL", "PAUSE_UNTIL_NON_STRIPE_PAYOUT_EXISTS", 0, 0, 4, "HIGH",
+        "Current owner payout contract requires Stripe Connect, which is unavailable to this owner",
+        "Automation is strong but the owner cannot use the current payout rail, so this must not consume near-term implementation time.",
     ),
     "clawrr": MarketPriority(
         24, "BACKLOG", "RESEARCH_AFTER_CORE_CHANNELS", 4, 1, 2, "LOW",
@@ -157,7 +153,7 @@ PRIORITIES: dict[str, MarketPriority] = {
     "agentmarket": MarketPriority(
         26, "ARCHIVE", "REMOVE_FROM_ACTIVE_DASHBOARD", 0, 1, 0, "LOW",
         "Internal credits; redeemable cash not proven",
-        "Do not present test/internal credits as an earning market until cash redemption and settlement are independently proven.",
+        "Do not present test/internal credits as an earning market until cash redemption is independently proven.",
     ),
     "chowdr": MarketPriority(
         27, "ARCHIVE", "REMOVE_FROM_ACTIVE_DASHBOARD", 0, 1, 0, "LOW",
@@ -175,6 +171,9 @@ if set(PRIORITIES) != CANONICAL_EARNING_MARKETS:
     missing = sorted(CANONICAL_EARNING_MARKETS - set(PRIORITIES))
     extra = sorted(set(PRIORITIES) - CANONICAL_EARNING_MARKETS)
     raise RuntimeError(f"market priority coverage mismatch missing={missing} extra={extra}")
+
+if sorted(priority.rank for priority in PRIORITIES.values()) != list(range(1, 28)):
+    raise RuntimeError("market priority ranks must be unique and contiguous 1..27")
 
 
 def priority_for(market_slug: str) -> MarketPriority:
