@@ -15,10 +15,10 @@ from control.services.auth_security import (
     verify_reauthentication,
 )
 from control.services.market_control import (
-    market_controls_snapshot,
     update_market_compliance_proof,
     update_market_operating_state,
 )
+from control.services.market_priority_dashboard import market_controls_snapshot
 
 
 def _json(request):
@@ -70,7 +70,7 @@ def markets_page(request):
         {
             "section": "markets",
             "page_title": "Markets",
-            "page_description": "Work, live proving, settlement, and autonomy readiness",
+            "page_description": "Commercial priority, payout, settlement, and autonomy readiness",
             "advanced_section": False,
         },
     )
