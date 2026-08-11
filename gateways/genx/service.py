@@ -795,7 +795,9 @@ class GenXGateway:
         source = str(source).upper()
         if source not in {"POLL", "WEBHOOK", "OPERATOR_EVIDENCE"}:
             raise ValueError("unsupported GenX reconciliation source")
-        call = GenXCall.objects.select_for_update().select_related("job").get(pk=call_id)
+        # Lock only the call row. ``job`` is nullable, so joining it here turns
+        # this into an outer-join FOR UPDATE that PostgreSQL correctly rejects.
+        call = GenXCall.objects.select_for_update().get(pk=call_id)
         was_terminal = call.status in {"COMPLETED", "FAILED", "CANCELLED"} and call.completed_at is not None
         status = str(payload.get("status") or "UNKNOWN").upper()
         if status not in {"COMPLETED", "FAILED", "CANCELLED"}:
