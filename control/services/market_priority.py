@@ -56,9 +56,9 @@ PRIORITIES: dict[str, MarketPriority] = {
         "Good bounded live-job proving path; platform-wallet balance must not be confused with final settled cash.",
     ),
     "nevermined": MarketPriority(
-        7, "PROVE_PAYOUT", "OPEN_ACCOUNT_AND_PROVE_CRYPTO_OR_PAYPAL_ROUTE", 5, 3, 5, "MEDIUM",
-        "Automatic per-request settlement where supported; crypto custody/signing stays off Webdock",
-        "Strong agent/API monetisation fit, but this owner's usable settlement route must be proven before activation.",
+        7, "PROVE_PAYOUT", "IMPLEMENT_AND_PROVE_STABLECOIN_SETTLEMENT", 5, 3, 5, "HIGH",
+        "Nevermined supports USDC/EURC settlement, but AmarktAI stablecoin execution is not implemented yet",
+        "Keep the account ready for the high-value agent/API monetisation path, but do not present it as active until the external stablecoin settlement connector is implemented and proven.",
     ),
     "skyfire": MarketPriority(
         8, "PROVE_PAYOUT", "OPEN_SELLER_ACCOUNT_AND_PROVE_SETTLEMENT", 5, 3, 4, "MEDIUM",
@@ -166,10 +166,10 @@ PRIORITIES: dict[str, MarketPriority] = {
 CANONICAL_EARNING_MARKETS = frozenset(set(LEGACY_MARKETS) | set(REVENUE_MARKETS))
 ARCHIVED_MARKETS = frozenset(slug for slug, priority in PRIORITIES.items() if priority.tier == "ARCHIVE")
 
-# Only routes that have a practical owner-usable payout path and enough contract
-# evidence to justify near-term activation stay in the owner earning control plane.
-# Everything else remains catalogued for audit/research without pretending it can
-# earn this owner money today.
+# Only routes with an owner-usable payout path AND an implemented AmarktAI
+# execution/settlement contract remain active. A platform capability by itself is
+# not enough. For example, Nevermined supports stablecoins, but AmarktAI's current
+# Nevermined adapter has not implemented that stablecoin path yet.
 CURRENTLY_PAYABLE_MARKETS = frozenset({
     "lemon-squeezy",
     "taskbounty",
@@ -177,7 +177,6 @@ CURRENTLY_PAYABLE_MARKETS = frozenset({
     "apify-store",
     "contra",
     "dealwork",
-    "nevermined",
     "algora",
 })
 ACTIVE_MARKETS = CURRENTLY_PAYABLE_MARKETS
