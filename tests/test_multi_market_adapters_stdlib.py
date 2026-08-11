@@ -59,11 +59,16 @@ class MarketAdapterContractTests(unittest.TestCase):
         }
         self.assertEqual(set(MarketCapabilities().as_dict()), expected)
         self.assertEqual(set(BY_SLUG), {"agentgigs", "dealwork", "callboard", "opire", "algora", "taskbounty"})
-        for definition in BY_SLUG.values():
+        for slug, definition in BY_SLUG.items():
             self.assertEqual(set(definition.capabilities.as_dict()), expected)
             self.assertFalse(definition.capabilities.payout_ready)
             self.assertTrue(definition.source_urls)
-            self.assertIn("SOUTH_AFRICA", " ".join(definition.blockers))
+            if slug == "taskbounty":
+                self.assertIn("EXTERNAL_PAYOUT_ADDRESS_NOT_VERIFIED", definition.blockers)
+                self.assertTrue(definition.evidence["external_crypto_receipt_allowed"])
+                self.assertTrue(definition.evidence["private_keys_prohibited_on_webdock"])
+            else:
+                self.assertIn("SOUTH_AFRICA", " ".join(definition.blockers))
 
     def test_callboard_official_discovery_application_assets_and_submission_paths(self):
         session = FakeSession([
@@ -176,19 +181,29 @@ class MarketAdapterContractTests(unittest.TestCase):
             "in_review",
         )
 
-    def test_taskbounty_rest_flow_and_crypto_fail_closed_truth(self):
+    def test_taskbounty_rest_flow_and_external_crypto_fail_closed_truth(self):
         session = FakeSession([
             FakeResponse({"tasks": [{"id": "tb-1", "title": "Fix bug", "reward": 40, "language": "Python"}]}),
             FakeResponse({"clone_url": "https://example.test/clone"}),
             FakeResponse({"id": "submission-1"}),
+            FakeResponse({"method": "solana_usdc", "address": "PUBLIC_SOLANA_ADDRESS"}),
         ])
         adapter = TaskBountyAdapter("tb_live_secret", session=session)
         job = adapter.normalize_job(adapter.discover_jobs(limit=1)[0])
         adapter.get_input_assets(job)
         adapter.submit(job, {"external_link": "https://github.com/acme/repo/pull/12"})
+        payout = adapter.set_payout_method("solana_usdc", "PUBLIC_SOLANA_ADDRESS")
         self.assertEqual(job.reward, Decimal("40"))
-        self.assertTrue(adapter.payout_status()["crypto_prohibited"])
+        self.assertFalse(adapter.payout_status()["crypto_prohibited"])
         self.assertFalse(adapter.payout_status()["ready"])
+        self.assertIn("solana_usdc", adapter.payout_status()["supported_external_methods"])
+        self.assertEqual(payout["method"], "solana_usdc")
+        payout_call = session.calls[3]
+        self.assertEqual(payout_call[0], "POST")
+        self.assertTrue(payout_call[1].endswith("/api/v1/solver/payout-method"))
+        self.assertEqual(payout_call[2]["json"], {"method": "solana_usdc", "address": "PUBLIC_SOLANA_ADDRESS"})
+        with self.assertRaises(ValueError):
+            adapter.set_payout_method("bank", "not-supported")
         with self.assertRaises(ValueError):
             adapter.submit(job, {"external_link": "https://evil.test/not-a-pr"})
 
