@@ -7,25 +7,27 @@ from django.db import transaction
 from django.utils import timezone
 
 from control.models import AuditEvent, Marketplace, SystemSetting
+from control.services.market_priority import ACTIVE_MARKETS, priority_for
 from control.services.payment_rails import DEFAULT_PAYMENT_RAILS, payment_rail_snapshot
 from control.settlement_rules import ROUTE_STATES, settlement_route_blockers
 
 
 SETTLEMENT_ROUTE_SETTING_KEY = "treasury.market_settlement_routes.v1"
-SETTLEMENT_ROUTE_VERSION = 1
+SETTLEMENT_ROUTE_VERSION = 2
 
-# These are planning candidates, not readiness claims. Empty means the market's
-# owner payout route remains account-dependent and must be chosen manually.
+# Candidate receipt rails only. A human may perform the final withdrawal after
+# funds arrive. No South African bank account details are stored in AmarktAI.
 MARKET_OWNER_RAIL_CANDIDATES: dict[str, tuple[str, ...]] = {
-    "contra": ("local-bank", "paypal", "payoneer"),
+    "contra": ("paypal", "payoneer", "crypto-wallet"),
     "rapidapi": ("paypal",),
-    "apify-store": (),
-    "lemon-squeezy": ("local-bank",),
-    "nevermined": ("local-bank",),
-    "skyfire": ("local-bank",),
-    "agentgigs": ("local-bank",),
-    "callboard": ("local-bank",),
-    "taskbounty": ("local-bank",),
+    "apify-store": ("paypal", "wise"),
+    "lemon-squeezy": ("paypal",),
+    "nevermined": ("crypto-wallet", "valr"),
+    "skyfire": ("crypto-wallet", "valr"),
+    "agentgigs": (),
+    "callboard": (),
+    "taskbounty": ("crypto-wallet", "valr"),
+    "dealwork": (),
 }
 
 
@@ -81,9 +83,12 @@ def settlement_route_row(market: Marketplace, *, catalog=None, rails_by_slug=Non
         rail=rail,
         candidate_rails=candidates,
     )
+    priority = priority_for(market.slug)
     return {
         "market": market.slug,
         "market_display_name": market.display_name,
+        "priority_rank": priority.rank,
+        "priority_tier": priority.tier,
         "status": status,
         "selected_rail": selected,
         "candidate_rails": list(candidates),
@@ -95,6 +100,9 @@ def settlement_route_row(market: Marketplace, *, catalog=None, rails_by_slug=Non
         "market_payout_ready": bool(market.payout_ready),
         "market_south_africa_verified": bool(market.south_africa_verified),
         "owner_rail": rail,
+        "human_withdrawal_required": bool(rail and rail.get("human_withdrawal_required")),
+        "receipt_ready": bool(rail and rail.get("ready") and rail.get("payout_receive_enabled")),
+        "final_withdrawal_managed_outside_amarktai": bool(rail and rail.get("human_withdrawal_required")),
     }
 
 
@@ -102,10 +110,9 @@ def settlement_routes_snapshot() -> dict[str, Any]:
     catalog = load_settlement_route_catalog()
     rails = payment_rail_snapshot()["rows"]
     rails_by_slug = {row["slug"]: row for row in rails}
-    rows = [
-        settlement_route_row(market, catalog=catalog, rails_by_slug=rails_by_slug)
-        for market in Marketplace.objects.order_by("slug")
-    ]
+    markets = list(Marketplace.objects.filter(slug__in=ACTIVE_MARKETS))
+    markets.sort(key=lambda market: priority_for(market.slug).rank)
+    rows = [settlement_route_row(market, catalog=catalog, rails_by_slug=rails_by_slug) for market in markets]
     return {
         "section": "settlement-routes",
         "rows": rows,
@@ -113,7 +120,11 @@ def settlement_routes_snapshot() -> dict[str, Any]:
             "catalog_version": SETTLEMENT_ROUTE_VERSION,
             "ready_routes": sum(1 for row in rows if row["ready"]),
             "blocked_routes": sum(1 for row in rows if not row["ready"]),
-            "truth": "Marketplace payout readiness and owner payment-rail readiness are independent. A route is ready only when both sides and the explicit mapping are verified.",
+            "human_withdrawal_routes": sum(1 for row in rows if row["human_withdrawal_required"]),
+            "truth": (
+                "A marketplace route is ready when autonomous earning can deliver funds into a verified owner receipt rail. "
+                "A later human withdrawal to a personal or business bank account is allowed and is intentionally outside AmarktAI."
+            ),
         },
     }
 
@@ -129,6 +140,8 @@ def update_market_settlement_route(
     actor: str = "owner",
 ) -> dict[str, Any]:
     market = Marketplace.objects.select_for_update().get(slug=market_slug)
+    if market.slug not in ACTIVE_MARKETS:
+        raise ValueError("market_not_active_earning_candidate")
     status = str(status or "").upper()
     if status not in ROUTE_STATES:
         raise ValueError("invalid_settlement_route_status")
@@ -169,6 +182,7 @@ def update_market_settlement_route(
             "status": row["status"],
             "selected_rail": row["selected_rail"],
             "ready": row["ready"],
+            "human_withdrawal_required": row["human_withdrawal_required"],
             "proof_reference_present": bool(row["proof_reference"]),
             "blockers": row["blockers"],
         },

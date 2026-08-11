@@ -11,7 +11,7 @@ from control.models import AuditEvent, SystemSetting
 
 
 PAYMENT_RAIL_SETTING_KEY = "treasury.payment_rails.v1"
-PAYMENT_RAIL_VERSION = 1
+PAYMENT_RAIL_VERSION = 2
 
 RAIL_STATES = (
     "NOT_CONFIGURED",
@@ -22,39 +22,98 @@ RAIL_STATES = (
     "PAUSED",
 )
 
-
+# Earn stores proof/status only. Bank-account numbers, FNB details, wallet private
+# keys and exchange withdrawal secrets remain in the external provider account.
 DEFAULT_PAYMENT_RAILS: dict[str, dict[str, Any]] = {
     "paystack": {
         "display_name": "Paystack",
-        "category": "PAYMENT_PROCESSOR",
-        "candidate_capabilities": ["DIRECT_CHECKOUT", "PAYMENT_LINK", "SUBSCRIPTION", "BANK_SETTLEMENT"],
+        "category": "OWNED_REVENUE_PROCESSOR",
+        "candidate_capabilities": ["DIRECT_CHECKOUT", "PAYMENT_LINK", "SUBSCRIPTION", "AUTOMATIC_EXTERNAL_PAYOUT"],
+        "receipt_mode": "AUTOMATIC",
+        "withdrawal_mode": "PROVIDER_MANAGED",
+        "human_withdrawal_required": False,
+        "external_configuration_note": "Configure the real payout bank account inside Paystack only. AmarktAI stores no bank details.",
     },
     "paypal": {
         "display_name": "PayPal",
-        "category": "PAYMENT_AND_PAYOUT_RAIL",
-        "candidate_capabilities": ["DIRECT_CHECKOUT", "MARKETPLACE_PAYOUT_RECEIPT"],
+        "category": "MARKETPLACE_PAYOUT_RECEIPT",
+        "candidate_capabilities": ["MARKETPLACE_PAYOUT_RECEIPT", "DIRECT_CHECKOUT"],
+        "receipt_mode": "AUTOMATIC",
+        "withdrawal_mode": "HUMAN_WITHDRAWAL",
+        "human_withdrawal_required": True,
+        "external_configuration_note": "Marketplace payouts may arrive automatically. A human handles any later withdrawal outside AmarktAI.",
+    },
+    "crypto-wallet": {
+        "display_name": "Crypto / Stablecoin Wallet",
+        "category": "EXTERNAL_CRYPTO_RECEIPT",
+        "candidate_capabilities": ["STABLECOIN_RECEIPT", "CRYPTO_PAYOUT_RECEIPT", "OFFHOST_SETTLEMENT"],
+        "receipt_mode": "AUTOMATIC",
+        "withdrawal_mode": "HUMAN_OR_OFFHOST_BRIDGE",
+        "human_withdrawal_required": True,
+        "external_configuration_note": "Only public receiving addresses and non-secret proof may be recorded here. Private keys and signing stay off Webdock.",
+    },
+    "valr": {
+        "display_name": "VALR",
+        "category": "EXTERNAL_CRYPTO_CASP",
+        "candidate_capabilities": ["CRYPTO_RECEIPT", "ASSET_CONVERSION", "ZAR_WITHDRAWAL"],
+        "receipt_mode": "AUTOMATIC",
+        "withdrawal_mode": "HUMAN_NOW_AUTOMATION_LATER_OFFHOST",
+        "human_withdrawal_required": True,
+        "external_configuration_note": "VALR custody, bank linking, trading and withdrawal credentials stay outside Webdock. Earn records non-secret settlement evidence only.",
     },
     "wise": {
         "display_name": "Wise",
-        "category": "TREASURY_RAIL",
-        "candidate_capabilities": ["PAYOUT_RECEIPT", "BANK_TRANSFER", "FX"],
-    },
-    "local-bank": {
-        "display_name": "South African Bank",
-        "category": "FINAL_TREASURY_DESTINATION",
-        "candidate_capabilities": ["FINAL_SETTLEMENT"],
+        "category": "SECONDARY_PAYOUT_RAIL",
+        "candidate_capabilities": ["MARKETPLACE_PAYOUT_RECEIPT", "FX"],
+        "receipt_mode": "AUTOMATIC_WHEN_SUPPORTED",
+        "withdrawal_mode": "HUMAN_WITHDRAWAL",
+        "human_withdrawal_required": True,
+        "external_configuration_note": "Optional secondary payout rail. Account and destination details remain in Wise.",
     },
     "payoneer": {
         "display_name": "Payoneer",
-        "category": "PAYOUT_RAIL",
+        "category": "SECONDARY_PAYOUT_RAIL",
         "candidate_capabilities": ["MARKETPLACE_PAYOUT_RECEIPT"],
-    },
-    "yoco": {
-        "display_name": "Yoco",
-        "category": "PAYMENT_PROCESSOR",
-        "candidate_capabilities": ["DIRECT_CHECKOUT", "PAYMENT_LINK", "BANK_SETTLEMENT"],
+        "receipt_mode": "AUTOMATIC_WHEN_SUPPORTED",
+        "withdrawal_mode": "HUMAN_WITHDRAWAL",
+        "human_withdrawal_required": True,
+        "external_configuration_note": "Optional secondary payout rail. Account and destination details remain in Payoneer.",
     },
 }
+
+ACCOUNT_SETUP_PLAN = {
+    "open_now": (
+        ("paystack", "Paystack", "Owned checkout and automatic provider settlement"),
+        ("paypal", "PayPal", "RapidAPI, Lemon Squeezy, Apify and Contra payout receipt"),
+        ("lemon-squeezy", "Lemon Squeezy", "Digital products, subscriptions and direct commerce"),
+        ("rapidapi", "RapidAPI Provider", "Recurring API subscriptions and usage revenue"),
+        ("apify-store", "Apify", "Paid Actors and data/automation products"),
+        ("taskbounty", "TaskBounty Solver", "API-native coding bounties with crypto payout"),
+        ("contra", "Contra", "Projects, services and payment links"),
+        ("valr", "VALR", "South African crypto/CASP receipt and conversion path"),
+    ),
+    "open_next": (
+        ("dealwork", "Dealwork", "Autonomous posted work after KYA and payout proof"),
+        ("algora", "Algora", "Coding bounty upside"),
+        ("opire", "Opire", "Coding bounty upside"),
+        ("nevermined", "Nevermined", "Agent/API monetisation after settlement proof"),
+        ("skyfire", "Skyfire", "Machine-commerce seller route after approval proof"),
+    ),
+    "optional": (
+        ("wise", "Wise", "Secondary payout rail where a marketplace supports it"),
+        ("payoneer", "Payoneer", "Secondary payout rail, especially for Contra"),
+    ),
+}
+
+
+def account_setup_snapshot() -> dict[str, list[dict[str, str]]]:
+    return {
+        group: [
+            {"slug": slug, "display_name": name, "purpose": purpose}
+            for slug, name, purpose in rows
+        ]
+        for group, rows in ACCOUNT_SETUP_PLAN.items()
+    }
 
 
 def _default_record(slug: str) -> dict[str, Any]:
@@ -64,6 +123,10 @@ def _default_record(slug: str) -> dict[str, Any]:
         "display_name": definition["display_name"],
         "category": definition["category"],
         "candidate_capabilities": list(definition["candidate_capabilities"]),
+        "receipt_mode": definition["receipt_mode"],
+        "withdrawal_mode": definition["withdrawal_mode"],
+        "human_withdrawal_required": bool(definition["human_withdrawal_required"]),
+        "external_configuration_note": definition["external_configuration_note"],
         "status": "NOT_CONFIGURED",
         "south_africa_verified": False,
         "checkout_enabled": False,
@@ -71,7 +134,7 @@ def _default_record(slug: str) -> dict[str, Any]:
         "final_settlement_enabled": False,
         "proof_reference": "",
         "verified_at": None,
-        "owner_action": "Verify the owner account, South Africa eligibility, and the real settlement path before enabling this rail.",
+        "owner_action": "Verify the external account, South Africa eligibility, and its real receipt path before enabling this rail.",
         "notes": "",
     }
 
@@ -147,6 +210,10 @@ def public_payment_rail_row(record: dict[str, Any]) -> dict[str, Any]:
         "display_name": record["display_name"],
         "category": record["category"],
         "candidate_capabilities": list(record["candidate_capabilities"]),
+        "receipt_mode": record["receipt_mode"],
+        "withdrawal_mode": record["withdrawal_mode"],
+        "human_withdrawal_required": bool(record["human_withdrawal_required"]),
+        "external_configuration_note": record["external_configuration_note"],
         "status": record["status"],
         "south_africa_verified": bool(record["south_africa_verified"]),
         "checkout_enabled": bool(record["checkout_enabled"]),
@@ -157,23 +224,34 @@ def public_payment_rail_row(record: dict[str, Any]) -> dict[str, Any]:
         "verified_at": record["verified_at"],
         "owner_action": record["owner_action"],
         "notes": record["notes"],
+        "stores_bank_details": False,
+        "stores_private_keys": False,
     }
 
 
 def payment_rail_snapshot() -> dict[str, Any]:
     catalog = load_payment_rail_catalog()
     rows = [public_payment_rail_row(catalog["rails"][slug]) for slug in DEFAULT_PAYMENT_RAILS]
+    accounts = account_setup_snapshot()
     return {
-        "section": "banking",
+        "section": "treasury",
         "rows": rows,
+        "account_setup": accounts,
         "meta": {
             "catalog_version": PAYMENT_RAIL_VERSION,
             "ready_rails": sum(1 for row in rows if row["ready"]),
             "action_required": sum(1 for row in rows if not row["ready"]),
             "checkout_ready": sum(1 for row in rows if row["ready"] and row["checkout_enabled"]),
             "payout_receive_ready": sum(1 for row in rows if row["ready"] and row["payout_receive_enabled"]),
-            "final_settlement_ready": sum(1 for row in rows if row["ready"] and row["final_settlement_enabled"]),
-            "truth": "Candidate capability labels are planning metadata only. A payment rail becomes ready only after owner-account proof, South Africa verification, an explicit live capability, and a non-secret proof reference are all recorded.",
+            "human_withdrawal_rails": sum(1 for row in rows if row["human_withdrawal_required"]),
+            "accounts_open_now": len(accounts["open_now"]),
+            "accounts_open_next": len(accounts["open_next"]),
+            "optional_accounts": len(accounts["optional"]),
+            "truth": (
+                "AmarktAI tracks payment receipt and non-secret settlement evidence only. "
+                "South African bank details, FNB withdrawal details, wallet private keys and exchange withdrawal secrets stay outside the dashboard. "
+                "Human withdrawals are allowed and do not block autonomous earning or automatic marketplace payout receipt."
+            ),
         },
     }
 
@@ -256,6 +334,7 @@ def update_payment_rail_proof(
             "payout_receive_enabled": public["payout_receive_enabled"],
             "final_settlement_enabled": public["final_settlement_enabled"],
             "ready": public["ready"],
+            "human_withdrawal_required": public["human_withdrawal_required"],
             "proof_reference_present": bool(public["proof_reference"]),
         },
     )

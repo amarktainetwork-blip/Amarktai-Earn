@@ -27,21 +27,36 @@ class BankingIntegrationTests(TestCase):
         api = self.client.get("/api/banking/rails")
         self.assertEqual(api.status_code, 401)
 
-    def test_authenticated_banking_page_exposes_fail_closed_candidate_rails(self):
+    def test_authenticated_treasury_page_exposes_fail_closed_receipt_rails(self):
         self.authenticate()
         page = self.client.get("/ops/banking/")
         self.assertEqual(page.status_code, 200)
-        self.assertContains(page, "Owner payment rails")
+        self.assertContains(page, "Treasury &amp; Settlement")
+        self.assertContains(page, "Automatic payout receipt, human withdrawals")
         self.assertContains(page, "control/banking.js")
 
         response = self.client.get("/api/banking/rails")
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["section"], "banking")
+        self.assertEqual(body["section"], "treasury")
         self.assertEqual(body["meta"]["ready_rails"], 0)
         self.assertEqual(body["meta"]["action_required"], 6)
-        self.assertEqual({row["slug"] for row in body["rows"]}, {"paystack", "paypal", "wise", "local-bank", "payoneer", "yoco"})
+        self.assertEqual(body["meta"]["accounts_open_now"], 8)
+        self.assertEqual(body["meta"]["accounts_open_next"], 5)
+        self.assertEqual(body["meta"]["optional_accounts"], 2)
+        self.assertEqual(
+            {row["slug"] for row in body["rows"]},
+            {"paystack", "paypal", "crypto-wallet", "valr", "wise", "payoneer"},
+        )
         self.assertTrue(all(row["ready"] is False for row in body["rows"]))
+        self.assertTrue(all(row["stores_bank_details"] is False for row in body["rows"]))
+        self.assertTrue(all(row["stores_private_keys"] is False for row in body["rows"]))
+        self.assertTrue(next(row for row in body["rows"] if row["slug"] == "paypal")["human_withdrawal_required"])
+        self.assertFalse(next(row for row in body["rows"] if row["slug"] == "paystack")["human_withdrawal_required"])
+        self.assertEqual(
+            [row["slug"] for row in body["account_setup"]["open_now"]],
+            ["paystack", "paypal", "lemon-squeezy", "rapidapi", "apify-store", "taskbounty", "contra", "valr"],
+        )
 
     @patch("control.banking_views.verify_reauthentication", return_value=True)
     def test_verified_state_requires_sa_proof_reference_and_live_capability(self, _verify):
@@ -83,7 +98,7 @@ class BankingIntegrationTests(TestCase):
                 "south_africa_verified": True,
                 "payout_receive_enabled": True,
                 "proof_reference": "paypal-owner-proof",
-                "owner_action": "No owner action required",
+                "owner_action": "Human withdrawal can happen later outside AmarktAI",
                 "password": "correct",
                 "code": "123456",
             },
@@ -94,6 +109,9 @@ class BankingIntegrationTests(TestCase):
         self.assertTrue(row["ready"])
         self.assertTrue(row["south_africa_verified"])
         self.assertTrue(row["payout_receive_enabled"])
+        self.assertTrue(row["human_withdrawal_required"])
+        self.assertFalse(row["stores_bank_details"])
+        self.assertFalse(row["stores_private_keys"])
         self.assertEqual(row["proof_reference"], "paypal-owner-proof")
 
         setting = SystemSetting.objects.get(key=PAYMENT_RAIL_SETTING_KEY)
@@ -104,6 +122,7 @@ class BankingIntegrationTests(TestCase):
         audit = AuditEvent.objects.filter(event_type="treasury.payment_rail_proof_updated").latest("created_at")
         self.assertEqual(audit.metadata["rail"], "paypal")
         self.assertTrue(audit.metadata["ready"])
+        self.assertTrue(audit.metadata["human_withdrawal_required"])
         self.assertNotIn("password", repr(audit.metadata).lower())
         self.assertNotIn("123456", repr(audit.metadata))
 
