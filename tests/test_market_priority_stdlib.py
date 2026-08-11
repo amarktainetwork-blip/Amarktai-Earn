@@ -27,12 +27,12 @@ class MarketPriorityStdlibTests(unittest.TestCase):
             ACTIVE_MARKETS,
             {
                 "lemon-squeezy", "taskbounty", "rapidapi", "apify-store",
-                "contra", "dealwork", "nevermined", "algora",
+                "contra", "dealwork", "algora",
             },
         )
-        self.assertEqual(len(ACTIVE_MARKETS), 8)
+        self.assertEqual(len(ACTIVE_MARKETS), 7)
         self.assertEqual(ARCHIVED_MARKETS, {"agentmarket", "chowdr"})
-        self.assertEqual(len(INACTIVE_MARKETS), 17)
+        self.assertEqual(len(INACTIVE_MARKETS), 18)
         self.assertFalse(ACTIVE_MARKETS & ARCHIVED_MARKETS)
         self.assertFalse(ACTIVE_MARKETS & INACTIVE_MARKETS)
         self.assertFalse(ARCHIVED_MARKETS & INACTIVE_MARKETS)
@@ -48,7 +48,7 @@ class MarketPriorityStdlibTests(unittest.TestCase):
         self.assertTrue(all(priority.tier == "ACTIVATE_FIRST" for _slug, priority in ordered[:5]))
         self.assertEqual([priority.rank for _slug, priority in ordered], list(range(1, 28)))
 
-    def test_unusable_owner_payout_routes_are_not_active(self):
+    def test_unusable_or_unimplemented_owner_payout_routes_are_not_active(self):
         for slug in ("agentgigs", "callboard", "opire"):
             self.assertNotIn(slug, ACTIVE_MARKETS)
             self.assertIn(slug, INACTIVE_MARKETS)
@@ -56,6 +56,11 @@ class MarketPriorityStdlibTests(unittest.TestCase):
             self.assertEqual(priority.payout_autonomy_score, 0)
             self.assertEqual(priority.south_africa_setup_score, 0)
             self.assertIn("Stripe", priority.payout_path)
+
+        self.assertNotIn("nevermined", ACTIVE_MARKETS)
+        self.assertIn("nevermined", INACTIVE_MARKETS)
+        self.assertIn("not implemented yet", PRIORITIES["nevermined"].payout_path)
+        self.assertEqual(PRIORITIES["nevermined"].action, "IMPLEMENT_AND_PROVE_STABLECOIN_SETTLEMENT")
 
     def test_test_credit_candidates_are_archived_not_presented_as_revenue(self):
         self.assertEqual(PRIORITIES["agentmarket"].tier, "ARCHIVE")
