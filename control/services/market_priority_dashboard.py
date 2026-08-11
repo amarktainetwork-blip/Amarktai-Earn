@@ -6,6 +6,7 @@ from control.services.market_priority import (
     ACTIVE_MARKETS,
     ARCHIVED_MARKETS,
     CANONICAL_EARNING_MARKETS,
+    INACTIVE_MARKETS,
     PRIORITIES,
 )
 
@@ -28,10 +29,10 @@ def _priority_payload(market_slug: str) -> dict:
 def market_controls_snapshot() -> dict:
     """Owner-facing market control plane ordered by commercial priority.
 
-    Only canonical real-money earning candidates are shown. Historical rows that
-    are no longer in a canonical earning catalog remain in the database for
-    audit/history but are not presented as markets. Explicit ARCHIVE candidates
-    remain catalogued for evidence but are removed from the active control plane.
+    Only currently payable/provable owner routes are shown as active earning
+    candidates. Historical, credit-only, Stripe-only and research-stage rows stay
+    in the database/catalog for evidence without being presented as day-one
+    earning capability.
     """
     markets = list(
         Marketplace.objects.filter(slug__in=ACTIVE_MARKETS).select_related("integration_profile", "health_snapshot")
@@ -46,6 +47,7 @@ def market_controls_snapshot() -> dict:
 
     stale_non_earning_rows = Marketplace.objects.exclude(slug__in=CANONICAL_EARNING_MARKETS).count()
     archived_rows = Marketplace.objects.filter(slug__in=ARCHIVED_MARKETS).count()
+    inactive_rows = Marketplace.objects.filter(slug__in=INACTIVE_MARKETS).count()
     tier_counts: dict[str, int] = {}
     for row in rows:
         tier = row["priority_tier"]
@@ -57,6 +59,7 @@ def market_controls_snapshot() -> dict:
         "meta": {
             "canonical_earning_markets": len(CANONICAL_EARNING_MARKETS),
             "active_market_candidates": len(rows),
+            "inactive_market_candidates": inactive_rows,
             "archived_market_candidates": archived_rows,
             "retired_non_earning_rows_hidden": stale_non_earning_rows,
             "tier_counts": tier_counts,
@@ -65,12 +68,12 @@ def market_controls_snapshot() -> dict:
             "cash_ready": sum(1 for row in rows if row["cash_ready"]),
             "autonomy_ready": sum(1 for row in rows if row["autonomy_ready"]),
             "priority_truth": (
-                "Priority order: automatic payout receipt first, South African owner setup second, autonomous earning ceiling third. "
-                "A later human withdrawal is allowed and does not reduce earning autonomy. Unusable owner payout rails remain a hard priority penalty."
+                "Only owner-payable/provable routes are active. Priority order: automatic payout receipt first, "
+                "South African owner setup second, autonomous earning ceiling third. A later human withdrawal is allowed."
             ),
             "truth": (
                 "Work readiness, live proving, payout receipt, settled cash and autonomous mutation remain independent gates. "
-                "Platform-wallet or PayPal receipt never automatically means final bank-settled cash."
+                "Platform-wallet, PayPal or crypto receipt never automatically means final bank-settled cash."
             ),
         },
     }
