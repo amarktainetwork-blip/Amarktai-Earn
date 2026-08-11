@@ -29,10 +29,9 @@ def market_controls_snapshot() -> dict:
     """Owner-facing market control plane ordered by commercial priority.
 
     Only canonical real-money earning candidates are shown. Historical rows that
-    are no longer in a canonical earning catalog (for example the old internal
-    GenX proof row) remain in the database for audit/history but are not presented
-    as markets. Explicit ARCHIVE candidates remain catalogued for evidence but are
-    also removed from the active owner control plane.
+    are no longer in a canonical earning catalog remain in the database for
+    audit/history but are not presented as markets. Explicit ARCHIVE candidates
+    remain catalogued for evidence but are removed from the active control plane.
     """
     markets = list(
         Marketplace.objects.filter(slug__in=ACTIVE_MARKETS).select_related("integration_profile", "health_snapshot")
@@ -66,12 +65,12 @@ def market_controls_snapshot() -> dict:
             "cash_ready": sum(1 for row in rows if row["cash_ready"]),
             "autonomy_ready": sum(1 for row in rows if row["autonomy_ready"]),
             "priority_truth": (
-                "Priority order: autonomous payout first, South African setup second, autonomous earning ceiling third. "
-                "Real-money and payout evidence remain hard maturity gates; scores are planning inputs, not earnings promises."
+                "Priority order: automatic payout receipt first, South African owner setup second, autonomous earning ceiling third. "
+                "A later human withdrawal is allowed and does not reduce earning autonomy. Unusable owner payout rails remain a hard priority penalty."
             ),
             "truth": (
-                "Work readiness, live proving, cash settlement and autonomous mutation are independent gates. "
-                "Platform-wallet proving never counts as settled cash."
+                "Work readiness, live proving, payout receipt, settled cash and autonomous mutation remain independent gates. "
+                "Platform-wallet or PayPal receipt never automatically means final bank-settled cash."
             ),
         },
     }
