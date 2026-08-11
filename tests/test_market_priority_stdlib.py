@@ -35,10 +35,11 @@ class MarketPriorityStdlibTests(unittest.TestCase):
         self.assertTrue(all(priority.tier == "ACTIVATE_FIRST" for _slug, priority in ordered[:5]))
         self.assertEqual([priority.rank for _slug, priority in ordered], list(range(1, 28)))
 
-    def test_stripe_only_owner_routes_are_practically_blocked(self):
+    def test_stripe_only_owner_routes_are_practically_blocked_but_stay_visible(self):
         for slug in ("agentgigs", "callboard"):
             priority = PRIORITIES[slug]
-            self.assertEqual(priority.tier, "BLOCKED_OWNER_RAIL")
+            self.assertEqual(priority.tier, "BACKLOG")
+            self.assertEqual(priority.action, "PAUSE_UNTIL_NON_STRIPE_PAYOUT_EXISTS")
             self.assertEqual(priority.payout_autonomy_score, 0)
             self.assertEqual(priority.south_africa_setup_score, 0)
             self.assertIn("Stripe Connect", priority.payout_path)
