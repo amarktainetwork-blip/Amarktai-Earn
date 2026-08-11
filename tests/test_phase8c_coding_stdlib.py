@@ -54,7 +54,7 @@ class Phase8CCodingContractTests(unittest.TestCase):
         self.assertNotIn("/var/run/docker.sock", text)
         broker = (ROOT / "sandbox_broker" / "server.py").read_text(encoding="utf-8")
         seed = broker.split('seed = [', 1)[1].split('        ]', 1)[0]
-        self.assertIn('"--cap-add", "DAC_READ_SEARCH"', seed)
+        self.assertIn('"--cap-add", "DAC_OVERRIDE"', seed)
         self.assertIn('"--cap-add", "CHOWN"', seed)
         self.assertIn("git tag amarktai-baseline", broker)
         self.assertIn("git add -N -- .", broker)
