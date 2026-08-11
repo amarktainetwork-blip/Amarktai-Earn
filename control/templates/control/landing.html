@@ -8,6 +8,7 @@
   <meta name="description" content="AmarktAI Earn is an owner-controlled AI earning system that finds opportunities, chooses the work worth doing, executes it, checks quality and tracks payout truth.">
   <title>AmarktAI Earn — The system runs the earning loop</title>
   <link rel="stylesheet" href="{% static 'control/landing.css' %}">
+  <link rel="stylesheet" href="{% static 'control/landing-shell.css' %}">
 </head>
 <body>
   <div class="page-noise" aria-hidden="true"></div>
@@ -21,9 +22,8 @@
       <a href="#what">What it does</a>
       <a href="#earn">Ways to earn</a>
       <a href="#loop">How it works</a>
-      <a href="#owner">Your control</a>
     </nav>
-    <a class="login-link" href="/login/">Owner dashboard <span>→</span></a>
+    <a class="login-link" href="{% url 'login' %}">Owner dashboard <span>→</span></a>
   </header>
 
   <main>
@@ -34,7 +34,7 @@
         <p class="hero-lede">Amarkt<span class="brand-ai">AI</span> Earn is an owner-controlled AI earning system. Once approved accounts and channels are connected, it watches for paid opportunities, filters them by profit and risk, uses the right workers to complete the work, checks quality, delivers and follows payout through to settlement. <strong>You set the rules. The system runs the loop.</strong></p>
         <div class="hero-actions">
           <a class="btn btn-primary" href="#loop">See how the system works <span>↓</span></a>
-          <a class="btn btn-ghost" href="/login/">Open owner dashboard</a>
+          <a class="btn btn-ghost" href="{% url 'login' %}">Open owner dashboard</a>
         </div>
         <div class="plain-proof" aria-label="AmarktAI Earn highlights">
           <span><b>Finds opportunities</b><small>Across approved markets and sales channels</small></span>
@@ -243,7 +243,7 @@
           <h2>The system handles the repetitive work.<br><em>You set the rules.</em></h2>
           <p>The private owner dashboard is where approved channels, work, workers, costs, payouts, security and automation controls live. Connecting an account never makes it automatically ready: work and payout routes still have to be proven first.</p>
           <div class="owner-actions">
-            <a class="btn btn-primary owner-dashboard-cta" href="/login/">Open owner dashboard <span>→</span></a>
+            <a class="btn btn-primary owner-dashboard-cta" href="{% url 'login' %}">Open owner dashboard <span>→</span></a>
             <span>Protected owner access with two-factor authentication.</span>
           </div>
         </div>
@@ -266,7 +266,7 @@
       <span class="final-kicker">AMARKT<span class="brand-ai">AI</span> EARN</span>
       <h2>Run the earning loop.<br><em>Keep the good work.</em><br>Learn from every result.</h2>
       <p>Amarkt<span class="brand-ai">AI</span> Earn brings AI capabilities, approved marketplaces, sales channels, quality control and payout tracking into one owner-controlled earning operation.</p>
-      <a class="btn btn-primary final-btn owner-dashboard-cta" href="/login/">Owner dashboard <span>→</span></a>
+      <a class="btn btn-primary final-btn owner-dashboard-cta" href="{% url 'login' %}">Owner dashboard <span>→</span></a>
       <div class="final-scribble" aria-hidden="true">↗</div>
     </section>
   </main>
@@ -276,8 +276,8 @@
       <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i></span>
       <span class="brand-copy"><strong>AMARKT<span class="brand-ai">AI</span> <span class="brand-earn">EARN</span></strong></span>
     </a>
-    <p>AI-powered earning infrastructure by <strong>AMARKT<span class="brand-ai">AI</span> NETWORK</strong>. Earnings are not guaranteed. <a href="/terms/">Terms</a></p>
-    <span>© 2026 <strong>AMARKT<span class="brand-ai">AI</span> NETWORK</strong> · AMARKT<span class="brand-ai">AI</span> EARN</span>
+    <p class="footer-copyright">© 2026 Amarkt<span class="brand-ai">AI</span> Earn. All rights reserved.</p>
+    <p class="footer-network">Part of the Amarkt<span class="brand-ai">AI</span> Network · <a href="/terms/">Terms</a></p>
   </footer>
 </body>
 </html>
