@@ -7,5 +7,9 @@ earn.amarktai.co.za {
         Referrer-Policy "same-origin"
         -Server
     }
+
+    @html_pages path / /login/ /terms/
+    header @html_pages Content-Disposition "inline"
+
     reverse_proxy web:8000
 }
