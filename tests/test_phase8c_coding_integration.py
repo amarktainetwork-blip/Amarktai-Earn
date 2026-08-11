@@ -61,6 +61,7 @@ class Phase8CCodingAgentIntegrationTests(TestCase):
             "SANDBOX_CODING_ENABLED": "1",
             "SANDBOX_TOKEN_SECRET": "t" * 64,
             "SANDBOX_BROKER_SECRET": "b" * 64,
+            "GENX_API_KEY": "",
         }, clear=False)
         self.env.start()
         GenXModelCatalog.objects.create(

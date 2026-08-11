@@ -75,7 +75,16 @@ class GenXGateway:
     """Controller-owned GenX gateway with catalog sync, routing, reservation, and persisted usage."""
 
     def __init__(self, client: GenXClient | None = None):
-        self.client = client or configured_client()
+        # Catalog-backed economic selection is local and must not require a
+        # transport credential. Resolve the client only when an API operation
+        # actually needs it.
+        self._client = client
+
+    @property
+    def client(self) -> GenXClient:
+        if self._client is None:
+            self._client = configured_client()
+        return self._client
 
     def sync_catalog(self, category: str | None = None) -> dict[str, Any]:
         # Never hold a database transaction open while waiting on a third-party API.
