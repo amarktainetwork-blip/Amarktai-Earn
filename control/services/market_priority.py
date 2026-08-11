@@ -131,12 +131,12 @@ PRIORITIES: dict[str, MarketPriority] = {
         "Do not spend core implementation time until demand and the external bridge are proven.",
     ),
     "agentgigs": MarketPriority(
-        22, "BLOCKED_OWNER_RAIL", "PAUSE_UNTIL_NON_STRIPE_PAYOUT_EXISTS", 0, 0, 4, "HIGH",
+        22, "BACKLOG", "PAUSE_UNTIL_NON_STRIPE_PAYOUT_EXISTS", 0, 0, 4, "HIGH",
         "Current owner payout contract requires Stripe Connect, which is unavailable to this owner",
         "The work API is attractive, but an unusable owner payout rail makes implementation pointless until the platform offers another route.",
     ),
     "callboard": MarketPriority(
-        23, "BLOCKED_OWNER_RAIL", "PAUSE_UNTIL_NON_STRIPE_PAYOUT_EXISTS", 0, 0, 4, "HIGH",
+        23, "BACKLOG", "PAUSE_UNTIL_NON_STRIPE_PAYOUT_EXISTS", 0, 0, 4, "HIGH",
         "Current owner payout contract requires Stripe Connect, which is unavailable to this owner",
         "Automation is strong but the owner cannot use the current payout rail, so this must not consume near-term implementation time.",
     ),
