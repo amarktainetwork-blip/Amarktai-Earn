@@ -41,8 +41,8 @@ class BankingIntegrationTests(TestCase):
         self.assertEqual(body["section"], "treasury")
         self.assertEqual(body["meta"]["ready_rails"], 0)
         self.assertEqual(body["meta"]["action_required"], 6)
-        self.assertEqual(body["meta"]["accounts_open_now"], 8)
-        self.assertEqual(body["meta"]["accounts_open_next"], 5)
+        self.assertEqual(body["meta"]["accounts_open_now"], 18)
+        self.assertEqual(body["meta"]["accounts_open_next"], 0)
         self.assertEqual(body["meta"]["optional_accounts"], 2)
         self.assertEqual(
             {row["slug"] for row in body["rows"]},
@@ -55,8 +55,20 @@ class BankingIntegrationTests(TestCase):
         self.assertFalse(next(row for row in body["rows"] if row["slug"] == "paystack")["human_withdrawal_required"])
         self.assertEqual(
             [row["slug"] for row in body["account_setup"]["open_now"]],
-            ["paystack", "paypal", "lemon-squeezy", "rapidapi", "apify-store", "taskbounty", "contra", "valr"],
+            [
+                "paystack", "paypal", "valr", "lemon-squeezy", "payhip", "ko-fi", "gumroad", "patreon",
+                "rapidapi", "apify-store", "taskbounty", "contra", "freelancer", "dealwork", "algora",
+                "nevermined", "impact", "partnerstack",
+            ],
         )
+        self.assertEqual(body["account_setup"]["open_next"], [])
+        self.assertEqual(
+            [row["slug"] for row in body["account_setup"]["optional"]],
+            ["wise", "payoneer"],
+        )
+        self.assertNotIn("opire", {row["slug"] for row in body["account_setup"]["open_now"]})
+        self.assertNotIn("agentgigs", {row["slug"] for row in body["account_setup"]["open_now"]})
+        self.assertNotIn("callboard", {row["slug"] for row in body["account_setup"]["open_now"]})
 
     @patch("control.banking_views.verify_reauthentication", return_value=True)
     def test_verified_state_requires_sa_proof_reference_and_live_capability(self, _verify):

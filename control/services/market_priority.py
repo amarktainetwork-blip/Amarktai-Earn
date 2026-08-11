@@ -71,9 +71,9 @@ PRIORITIES: dict[str, MarketPriority] = {
         "Individual wins can be valuable; keep opportunistic until solver mutation and payout are proven.",
     ),
     "opire": MarketPriority(
-        10, "OPPORTUNISTIC", "OPEN_ACCOUNT_KEEP_MANUAL_UNTIL_SOLVER_API_EXISTS", 1, 4, 4, "MEDIUM",
-        "Reward payout after creator approval",
-        "Useful coding-bounty upside, but no verified public solver mutation contract makes unattended acquisition inappropriate today.",
+        10, "OPPORTUNISTIC", "PAUSE_STRIPE_ONLY_OWNER_PAYOUT", 0, 0, 4, "HIGH",
+        "Developer payout requires Stripe, which is unavailable to this owner",
+        "Do not spend activation effort on a route that cannot currently pay this owner. Freelancer.com is the practical replacement work marketplace.",
     ),
     "coinbase-x402-bazaar": MarketPriority(
         11, "BUILD_OFFHOST", "BUILD_EXTERNAL_SETTLEMENT_BRIDGE_AFTER_CORE", 5, 3, 5, "MEDIUM",
@@ -165,7 +165,23 @@ PRIORITIES: dict[str, MarketPriority] = {
 
 CANONICAL_EARNING_MARKETS = frozenset(set(LEGACY_MARKETS) | set(REVENUE_MARKETS))
 ARCHIVED_MARKETS = frozenset(slug for slug, priority in PRIORITIES.items() if priority.tier == "ARCHIVE")
-ACTIVE_MARKETS = frozenset(CANONICAL_EARNING_MARKETS - ARCHIVED_MARKETS)
+
+# Only routes that have a practical owner-usable payout path and enough contract
+# evidence to justify near-term activation stay in the owner earning control plane.
+# Everything else remains catalogued for audit/research without pretending it can
+# earn this owner money today.
+CURRENTLY_PAYABLE_MARKETS = frozenset({
+    "lemon-squeezy",
+    "taskbounty",
+    "rapidapi",
+    "apify-store",
+    "contra",
+    "dealwork",
+    "nevermined",
+    "algora",
+})
+ACTIVE_MARKETS = CURRENTLY_PAYABLE_MARKETS
+INACTIVE_MARKETS = frozenset(CANONICAL_EARNING_MARKETS - ACTIVE_MARKETS - ARCHIVED_MARKETS)
 
 if set(PRIORITIES) != CANONICAL_EARNING_MARKETS:
     missing = sorted(CANONICAL_EARNING_MARKETS - set(PRIORITIES))
@@ -174,6 +190,11 @@ if set(PRIORITIES) != CANONICAL_EARNING_MARKETS:
 
 if sorted(priority.rank for priority in PRIORITIES.values()) != list(range(1, 28)):
     raise RuntimeError("market priority ranks must be unique and contiguous 1..27")
+
+if ACTIVE_MARKETS & ARCHIVED_MARKETS or ACTIVE_MARKETS & INACTIVE_MARKETS or ARCHIVED_MARKETS & INACTIVE_MARKETS:
+    raise RuntimeError("market scope sets must be disjoint")
+if ACTIVE_MARKETS | ARCHIVED_MARKETS | INACTIVE_MARKETS != CANONICAL_EARNING_MARKETS:
+    raise RuntimeError("market scope must cover the canonical catalog")
 
 
 def priority_for(market_slug: str) -> MarketPriority:

@@ -11,7 +11,7 @@ from control.models import AuditEvent, SystemSetting
 
 
 PAYMENT_RAIL_SETTING_KEY = "treasury.payment_rails.v1"
-PAYMENT_RAIL_VERSION = 2
+PAYMENT_RAIL_VERSION = 3
 
 RAIL_STATES = (
     "NOT_CONFIGURED",
@@ -81,27 +81,34 @@ DEFAULT_PAYMENT_RAILS: dict[str, dict[str, Any]] = {
     },
 }
 
+# Accounts are deliberately grouped by whether opening them can unlock a real
+# owner-usable receipt path. Stripe-only and credit-only channels are excluded.
+# Opening an account never marks it ready; KYC/API/payout proof remains fail-closed.
 ACCOUNT_SETUP_PLAN = {
     "open_now": (
-        ("paystack", "Paystack", "Owned checkout and automatic provider settlement"),
-        ("paypal", "PayPal", "RapidAPI, Lemon Squeezy, Apify and Contra payout receipt"),
-        ("lemon-squeezy", "Lemon Squeezy", "Digital products, subscriptions and direct commerce"),
-        ("rapidapi", "RapidAPI Provider", "Recurring API subscriptions and usage revenue"),
-        ("apify-store", "Apify", "Paid Actors and data/automation products"),
-        ("taskbounty", "TaskBounty Solver", "API-native coding bounties with crypto payout"),
-        ("contra", "Contra", "Projects, services and payment links"),
-        ("valr", "VALR", "South African crypto/CASP receipt and conversion path"),
+        ("paystack", "Paystack", "Owned checkout, payment links and provider-managed South African settlement"),
+        ("paypal", "PayPal", "Shared receipt rail for marketplaces and direct creator sales"),
+        ("valr", "VALR", "South African crypto/CASP receipt, conversion and human cash-out path"),
+        ("lemon-squeezy", "Lemon Squeezy", "Recurring products, subscriptions and direct digital commerce"),
+        ("payhip", "Payhip", "One-off digital products and services paid directly into Paystack"),
+        ("ko-fi", "Ko-fi", "Instant PayPal tips, shop sales, memberships and service commissions"),
+        ("gumroad", "Gumroad", "Digital-product discovery and South African ZAR payout channel"),
+        ("patreon", "Patreon", "Recurring memberships and one-time digital product revenue"),
+        ("rapidapi", "RapidAPI Provider", "Recurring API subscriptions and usage revenue paid to PayPal"),
+        ("apify-store", "Apify", "Paid Actors and data/automation products with execution kept on Apify"),
+        ("taskbounty", "TaskBounty Solver", "API-native coding bounties with USDC/ETH/BTC public-address payout"),
+        ("contra", "Contra", "Projects, services and payment links with non-Stripe payout options"),
+        ("freelancer", "Freelancer.com", "Official API project discovery/bidding with PayPal or Payoneer withdrawal"),
+        ("dealwork", "Dealwork", "Escrow-backed autonomous agent work; open account now to complete KYA and prove withdrawal"),
+        ("algora", "Algora", "Coding bounty and contract income; open now to prove the owner payout method"),
+        ("nevermined", "Nevermined", "Agent/API pay-per-use revenue using stablecoin settlement without owner Stripe"),
+        ("impact", "impact.com Partner", "Affiliate and referral commissions with automatic payout scheduling"),
+        ("partnerstack", "PartnerStack", "B2B SaaS affiliate and referral commissions payable to PayPal"),
     ),
-    "open_next": (
-        ("dealwork", "Dealwork", "Autonomous posted work after KYA and payout proof"),
-        ("algora", "Algora", "Coding bounty upside"),
-        ("opire", "Opire", "Coding bounty upside"),
-        ("nevermined", "Nevermined", "Agent/API monetisation after settlement proof"),
-        ("skyfire", "Skyfire", "Machine-commerce seller route after approval proof"),
-    ),
+    "open_next": (),
     "optional": (
         ("wise", "Wise", "Secondary payout rail where a marketplace supports it"),
-        ("payoneer", "Payoneer", "Secondary payout rail, especially for Contra"),
+        ("payoneer", "Payoneer", "Secondary payout rail for Contra, Freelancer.com and other supported channels"),
     ),
 }
 
