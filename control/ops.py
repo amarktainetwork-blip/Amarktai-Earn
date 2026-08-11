@@ -25,6 +25,7 @@ from .models import (
     Execution,
     GenXAccountSnapshot,
     GenXCall,
+    GenXCreditValuation,
     GrowthEvaluation,
     GrowthTarget,
     InboundOrder,
@@ -531,6 +532,11 @@ def treasury_snapshot(limit: int = 100) -> dict:
 
 def genx_snapshot(limit: int = 100) -> dict:
     latest = GenXAccountSnapshot.objects.order_by("-created_at").first()
+    valuation = GenXCreditValuation.objects.filter(
+        verified=True,
+        active=True,
+        effective_at__lte=timezone.now(),
+    ).order_by("-effective_at", "-created_at").first()
     rows = [{
         "created": _dt(row.created_at),
         "job": str(row.job_id) if row.job_id else None,
@@ -543,7 +549,18 @@ def genx_snapshot(limit: int = 100) -> dict:
         "latency_ms": row.latency_ms,
         "error": row.error_code,
     } for row in GenXCall.objects.order_by("-created_at")[:limit]]
-    return {"section": "genx", "rows": rows, "meta": {"available_credits": _dec(latest.available_credits) if latest else None, "snapshot_at": _dt(latest.created_at) if latest else None}}
+    return {
+        "section": "genx",
+        "rows": rows,
+        "meta": {
+            "available_credits": _dec(latest.available_credits) if latest else None,
+            "snapshot_at": _dt(latest.created_at) if latest else None,
+            "valuation_status": "VERIFIED" if valuation else "OWNER_ACTION_REQUIRED",
+            "valuation_currency": valuation.currency if valuation else None,
+            "monetary_cost_per_credit": _dec(valuation.monetary_cost_per_credit) if valuation else None,
+            "owner_action": None if valuation else "Provide a GenX/DashNex top-up receipt or account transaction showing both the monetary amount paid and credits acquired.",
+        },
+    }
 
 
 def nodes_snapshot() -> dict:

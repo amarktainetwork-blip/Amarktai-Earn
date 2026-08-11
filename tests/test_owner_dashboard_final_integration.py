@@ -143,6 +143,12 @@ class FinalOwnerDashboardAcceptanceTests(TestCase):
         row = integration_accounts_snapshot()["rows"][0]
         self.assertTrue(row["owner_action_required"])
         self.assertIn(row["owner_action_required"], str(integration_accounts_snapshot()))
+        genx = snapshot("genx")["meta"]
+        self.assertEqual(genx["valuation_status"], "OWNER_ACTION_REQUIRED")
+        self.assertEqual(
+            genx["owner_action"],
+            "Provide a GenX/DashNex top-up receipt or account transaction showing both the monetary amount paid and credits acquired.",
+        )
 
     def test_q_drawers_have_bounded_viewport_sizing_and_overflow(self):
         styles = Path(finders.find("control/app.css")).read_text(encoding="utf-8")
