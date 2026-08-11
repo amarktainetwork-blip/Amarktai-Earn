@@ -23,13 +23,16 @@ class OwnerUIIntegrationTests(TestCase):
     def test_public_root_is_plain_language_landing_page_without_owner_runtime_payload(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Find work.")
-        self.assertContains(response, "Do it well.")
-        self.assertContains(response, "Get paid.")
-        self.assertContains(response, 'Amarkt<span class="brand-ai">AI</span> Earn is an AI-powered business system')
+        self.assertContains(response, "It finds the work.")
+        self.assertContains(response, "Runs the job.")
+        self.assertContains(response, "Tracks the money.")
+        self.assertContains(response, "You set the rules. The system runs the loop.")
+        self.assertContains(response, "owner-controlled AI earning system")
+        self.assertContains(response, "Payout is not cash until it is proven")
         self.assertContains(response, "One system")
         self.assertContains(response, "Lots of ways to Earn")
         self.assertNotContains(response, "Lots of ways to make money")
+        self.assertNotContains(response, "Find work.<br>Do it well.<br><em>Get paid.</em>")
         self.assertContains(response, 'href="/login/"')
         self.assertContains(response, 'href="/terms/"')
         self.assertContains(response, "Earnings are not guaranteed")
@@ -61,7 +64,10 @@ class OwnerUIIntegrationTests(TestCase):
         response = self.client.get("/login/")
         self.assertEqual(response.status_code, 200)
         html = response.content.decode()
-        self.assertContains(response, "Autonomous income.")
+        self.assertContains(response, "Your earning operation.")
+        self.assertContains(response, "One control centre.")
+        self.assertContains(response, "what money has actually settled")
+        self.assertNotContains(response, "Autonomous income.")
         self.assertContains(response, 'id="accountForm"')
         self.assertContains(response, 'id="verificationStep"')
         self.assertContains(response, "Two-factor authentication")
@@ -90,7 +96,7 @@ class OwnerUIIntegrationTests(TestCase):
         self.assertNotIn("sessionStorage", script)
 
     def test_unauthenticated_owner_pages_redirect_to_login(self):
-        for path in ("/ops/overview/", "/ops/jobs/", "/ops/agents/", "/ops/money/", "/ops/markets/", "/ops/alerts/", "/ops/system/"):
+        for path in ("/ops/overview/", "/ops/jobs/", "/ops/agents/", "/ops/money/", "/ops/banking/", "/ops/markets/", "/ops/alerts/", "/ops/system/"):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 302)
@@ -99,19 +105,31 @@ class OwnerUIIntegrationTests(TestCase):
     def test_normal_and_advanced_owner_pages_render_for_authenticated_owner(self):
         self.authenticate()
         sections = (
-            "jobs", "agents", "money", "markets", "alerts", "system", "genx", "nodes",
+            "jobs", "agents", "money", "alerts", "system", "genx", "nodes",
             "storage", "performance", "logs", "security", "settings", "live-work", "earnings", "treasury",
         )
         overview = self.client.get("/ops/overview/")
         self.assertEqual(overview.status_code, 200)
         self.assertContains(overview, 'data-section="overview"')
         self.assertContains(overview, "System &amp; Settings")
+        self.assertContains(overview, "EARNING OPERATIONS")
+        self.assertContains(overview, ">Work<")
+        self.assertContains(overview, ">Earnings<")
+        self.assertContains(overview, "Treasury &amp; Settlement")
         self.assertContains(overview, 'href="/ops/overview/"')
         for section in sections:
             with self.subTest(section=section):
                 response = self.client.get(f"/ops/{section}/")
                 self.assertEqual(response.status_code, 200)
                 self.assertContains(response, f'data-section="{section}"')
+
+        markets = self.client.get("/ops/markets/")
+        self.assertEqual(markets.status_code, 200)
+        self.assertContains(markets, "Only owner-usable earning routes belong here")
+
+        treasury = self.client.get("/ops/banking/")
+        self.assertEqual(treasury.status_code, 200)
+        self.assertContains(treasury, "Open accounts, prove payout routes")
 
     def test_ui_assets_are_discoverable_and_preserve_settled_cash_language(self):
         self.assertIsNotNone(finders.find("control/app.css"))
