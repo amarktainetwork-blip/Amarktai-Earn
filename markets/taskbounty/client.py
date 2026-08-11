@@ -12,6 +12,8 @@ class TaskBountyAdapter(MarketAdapter):
         payout=True, rate_limit=True, policy_verified=True, payout_ready=False,
     )
 
+    PAYOUT_METHODS = frozenset({"solana_usdc", "eth", "btc"})
+
     def __init__(self, api_key: str, base_url: str = "https://www.task-bounty.com/api/v1", timeout: int = 20, session=None, mcp_client=None):
         if not api_key:
             raise ValueError("TaskBounty API key is required")
@@ -32,9 +34,29 @@ class TaskBountyAdapter(MarketAdapter):
     def payout_status(self):
         return {
             "ready": False,
-            "crypto_prohibited": True,
-            "reason": "USD bank transfer is documented, but South African account eligibility is not yet proved.",
+            "crypto_prohibited": False,
+            "supported_external_methods": sorted(self.PAYOUT_METHODS),
+            "reason": (
+                "TaskBounty supports public-address crypto payout registration. "
+                "AmarktAI treats the route as ready only after the owner records non-secret proof of the configured external address."
+            ),
         }
+
+    def set_payout_method(self, method: str, address: str):
+        method = str(method or "").strip().lower()
+        address = str(address or "").strip()
+        if method not in self.PAYOUT_METHODS:
+            raise ValueError("Unsupported TaskBounty payout method")
+        if not address:
+            raise ValueError("TaskBounty payout address is required")
+        # TaskBounty's solver API accepts public payout addresses only. This
+        # adapter must never accept or transmit private keys, seed phrases or
+        # signing credentials.
+        return self.http.request(
+            "POST",
+            "/solver/payout-method",
+            json={"method": method, "address": address},
+        )
 
     def discover_jobs(self, **filters):
         params = {"state": filters.get("state", "open"), "limit": max(1, min(int(filters.get("limit", 50)), 100))}
@@ -73,4 +95,8 @@ class TaskBountyAdapter(MarketAdapter):
         return self.mcp_client.call_tool("check_submission_status", {"submission_id": submission_id})
 
     def get_payout(self, job):
-        return {"ready": False, "settled": False, "reason": "External bank payout reconciliation required"}
+        return {
+            "ready": False,
+            "settled": False,
+            "reason": "External payout receipt must be reconciled from TaskBounty and the configured public-address receipt evidence.",
+        }
