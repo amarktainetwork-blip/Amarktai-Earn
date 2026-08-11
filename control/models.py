@@ -95,6 +95,9 @@ class MarketplaceCredential(Timestamped):
     key_id = models.CharField(max_length=64, blank=True)
     active = models.BooleanField(default=True)
     rotated_at = models.DateTimeField(null=True, blank=True)
+    fingerprint = models.CharField(max_length=32, blank=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    last_test_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -184,6 +187,25 @@ class MarketIntegrationProfile(Timestamped):
     api_contract_state = models.CharField(max_length=80, default="UNVERIFIED")
     payout_proof_state = models.CharField(max_length=80, default="UNVERIFIED")
     manual_onboarding_required = models.BooleanField(default=True)
+    category = models.CharField(max_length=80, default="EARNING_CHANNEL")
+    classification = models.CharField(max_length=40, default="INACTIVE")
+    setup_state = models.CharField(max_length=80, default="NOT_STARTED")
+    credential_state = models.CharField(max_length=40, default="NOT_CONFIGURED")
+    kyc_state = models.CharField(max_length=40, default="UNKNOWN")
+    api_connection_state = models.CharField(max_length=40, default="UNVERIFIED")
+    webhook_state = models.CharField(max_length=40, default="NOT_APPLICABLE")
+    payout_configuration_state = models.CharField(max_length=40, default="UNVERIFIED")
+    payout_receipt_proof_state = models.CharField(max_length=40, default="UNVERIFIED")
+    work_capability_state = models.CharField(max_length=40, default="UNVERIFIED")
+    live_proving_state = models.CharField(max_length=40, default="BLOCKED")
+    last_connection_status = models.CharField(max_length=40, blank=True)
+    last_connection_test_at = models.DateTimeField(null=True, blank=True)
+    last_connection_success_at = models.DateTimeField(null=True, blank=True)
+    last_error_category = models.CharField(max_length=80, blank=True)
+    last_safe_error = models.CharField(max_length=300, blank=True)
+    last_reconciled_at = models.DateTimeField(null=True, blank=True)
+    owner_action_required = models.CharField(max_length=500, blank=True)
+    off_host_requirements = models.JSONField(default=list)
 
     class Meta:
         constraints = [
@@ -352,6 +374,101 @@ class InboundSettlementEvent(Timestamped):
             models.CheckConstraint(condition=models.Q(gross__gte=0), name="inbound_settlement_gross_nonnegative"),
             models.CheckConstraint(condition=models.Q(fee__gte=0) & models.Q(fee__lte=models.F("gross")), name="inbound_settlement_fee_valid"),
             models.CheckConstraint(condition=models.Q(net__gte=0), name="inbound_settlement_net_nonnegative"),
+        ]
+
+
+class FeePolicy(Timestamped):
+    marketplace = models.ForeignKey(Marketplace, on_delete=models.PROTECT, related_name="fee_policies")
+    policy_type = models.CharField(max_length=40, default="PAYMENT")
+    currency = models.CharField(max_length=3, default="USD")
+    percentage_rate = models.DecimalField(max_digits=8, decimal_places=6)
+    fixed_fee = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    tax_rate = models.DecimalField(max_digits=8, decimal_places=6, default=0)
+    source_url = models.URLField()
+    source_version = models.CharField(max_length=80)
+    effective_at = models.DateTimeField()
+    verified = models.BooleanField(default=False)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["marketplace", "policy_type", "currency", "source_version"], name="uniq_market_fee_policy_version"),
+            models.CheckConstraint(condition=models.Q(percentage_rate__gte=0) & models.Q(percentage_rate__lt=1), name="fee_policy_rate_valid"),
+            models.CheckConstraint(condition=models.Q(fixed_fee__gte=0), name="fee_policy_fixed_nonnegative"),
+            models.CheckConstraint(condition=models.Q(tax_rate__gte=0) & models.Q(tax_rate__lt=1), name="fee_policy_tax_valid"),
+        ]
+
+
+class CommercePayment(Timestamped):
+    """Provider-neutral direct-commerce payment intent and authoritative result."""
+
+    class State(models.TextChoices):
+        CREATED = "CREATED"
+        INITIALIZED = "INITIALIZED"
+        PAID = "PAID"
+        FAILED = "FAILED"
+        REFUNDED = "REFUNDED"
+        REVERSED = "REVERSED"
+        UNKNOWN = "UNKNOWN"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    marketplace = models.ForeignKey(Marketplace, on_delete=models.PROTECT, related_name="commerce_payments")
+    offering = models.ForeignKey(ServiceOffering, on_delete=models.PROTECT, related_name="commerce_payments")
+    order = models.OneToOneField(InboundOrder, null=True, blank=True, on_delete=models.PROTECT, related_name="commerce_payment")
+    provider = models.CharField(max_length=80)
+    external_reference = models.CharField(max_length=255)
+    idempotency_key = models.CharField(max_length=255)
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default="ZAR")
+    customer_reference_hash = models.CharField(max_length=64)
+    state = models.CharField(max_length=24, choices=State.choices, default=State.CREATED)
+    checkout_reference = models.CharField(max_length=700, blank=True)
+    provider_fee = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    authoritative = models.BooleanField(default=False)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    evidence = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["provider", "external_reference"], name="uniq_commerce_provider_reference"),
+            models.UniqueConstraint(fields=["provider", "idempotency_key"], name="uniq_commerce_provider_idempotency"),
+            models.CheckConstraint(condition=models.Q(amount__gt=0), name="commerce_payment_amount_positive"),
+            models.CheckConstraint(condition=models.Q(provider_fee__gte=0) & models.Q(provider_fee__lte=models.F("amount")), name="commerce_payment_fee_valid"),
+        ]
+
+
+class OwnerReceipt(Timestamped):
+    """Authoritative owner-controlled receipt, distinct from bank settlement."""
+
+    class State(models.TextChoices):
+        PLATFORM_WALLET = "PLATFORM_WALLET"
+        PAYOUT_PENDING = "PAYOUT_PENDING"
+        PAYSTACK_BALANCE = "PAYSTACK_BALANCE"
+        PAYPAL_BALANCE = "PAYPAL_BALANCE"
+        STABLECOIN_RECEIVED = "STABLECOIN_RECEIVED"
+        CRYPTO_RECEIVED = "CRYPTO_RECEIVED"
+        CONVERSION_PENDING = "CONVERSION_PENDING"
+        FIAT_SETTLED = "FIAT_SETTLED"
+        REVERSED = "REVERSED"
+
+    marketplace = models.ForeignKey(Marketplace, on_delete=models.PROTECT, related_name="owner_receipts")
+    payout = models.ForeignKey("Payout", null=True, blank=True, on_delete=models.PROTECT, related_name="owner_receipts")
+    commerce_payment = models.ForeignKey(CommercePayment, null=True, blank=True, on_delete=models.PROTECT, related_name="owner_receipts")
+    external_reference = models.CharField(max_length=255)
+    rail = models.CharField(max_length=80)
+    state = models.CharField(max_length=40, choices=State.choices)
+    amount = models.DecimalField(max_digits=16, decimal_places=2)
+    currency = models.CharField(max_length=12, default="USD")
+    authoritative = models.BooleanField(default=False)
+    human_withdrawal_required = models.BooleanField(default=True)
+    evidence = models.JSONField(default=dict)
+    observed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["marketplace", "external_reference", "state"], name="uniq_owner_receipt_state"),
+            models.CheckConstraint(condition=models.Q(amount__gte=0), name="owner_receipt_amount_nonnegative"),
         ]
 
 
@@ -582,6 +699,17 @@ class ModelStat(Timestamped):
     cost_equivalent = models.DecimalField(max_digits=16, decimal_places=4, default=0)
     profit = models.DecimalField(max_digits=16, decimal_places=2, default=0)
     total_latency_ms = models.PositiveBigIntegerField(default=0)
+    successful_executions = models.PositiveBigIntegerField(default=0)
+    qa_accepted = models.PositiveBigIntegerField(default=0)
+    qa_rejected = models.PositiveBigIntegerField(default=0)
+    repair_required = models.PositiveBigIntegerField(default=0)
+    failures = models.PositiveBigIntegerField(default=0)
+    provider_failures = models.PositiveBigIntegerField(default=0)
+    retry_count = models.PositiveBigIntegerField(default=0)
+    deliverable_accepted = models.PositiveBigIntegerField(default=0)
+    total_repair_cost = models.DecimalField(max_digits=16, decimal_places=4, default=0)
+    gross_profit = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    net_profit = models.DecimalField(max_digits=16, decimal_places=2, default=0)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["model", "task_class"], name="uniq_model_task_stat")]
@@ -1087,6 +1215,180 @@ class WebhookEvent(Timestamped):
     last_attempt_at = models.DateTimeField(null=True, blank=True)
     processed_at = models.DateTimeField(null=True, blank=True)
     error_code = models.CharField(max_length=120, blank=True)
+    external_event_id = models.CharField(max_length=255, blank=True, db_index=True)
+    signature_valid = models.BooleanField(null=True, blank=True)
+    raw_body_hash = models.CharField(max_length=64, blank=True)
+    retryable = models.BooleanField(default=False)
+    unknown_external_state = models.BooleanField(default=False)
+    inbound_order = models.ForeignKey(InboundOrder, null=True, blank=True, on_delete=models.PROTECT, related_name="external_events")
+    commerce_payment = models.ForeignKey(CommercePayment, null=True, blank=True, on_delete=models.PROTECT, related_name="external_events")
+
+
+class IntegrationProofRun(Timestamped):
+    """Append-only stage evidence for bounded live proving; never enables autonomy."""
+
+    class State(models.TextChoices):
+        PENDING = "PENDING"
+        PASSED = "PASSED"
+        FAILED = "FAILED"
+        BLOCKED = "BLOCKED"
+
+    marketplace = models.ForeignKey(Marketplace, on_delete=models.PROTECT, related_name="proof_runs")
+    stage = models.CharField(max_length=80)
+    state = models.CharField(max_length=20, choices=State.choices, default=State.PENDING)
+    authoritative = models.BooleanField(default=False)
+    evidence_reference = models.CharField(max_length=255, blank=True)
+    safe_detail = models.CharField(max_length=500, blank=True)
+    performed_by = models.CharField(max_length=120, blank=True)
+
+
+class AffiliateProgram(Timestamped):
+    marketplace = models.ForeignKey(Marketplace, on_delete=models.PROTECT, related_name="affiliate_programs")
+    external_program_id = models.CharField(max_length=255)
+    display_name = models.CharField(max_length=200)
+    destination = models.URLField(blank=True)
+    disclosure_required = models.BooleanField(default=True)
+    status = models.CharField(max_length=40, default="MANUAL_PUBLICATION")
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["marketplace", "external_program_id"], name="uniq_affiliate_program")]
+
+
+class AffiliateCommission(Timestamped):
+    class State(models.TextChoices):
+        PENDING = "PENDING"
+        APPROVED = "APPROVED"
+        PAYABLE = "PAYABLE"
+        PAID = "PAID"
+        REVERSED = "REVERSED"
+
+    program = models.ForeignKey(AffiliateProgram, on_delete=models.PROTECT, related_name="commissions")
+    external_conversion_id = models.CharField(max_length=255)
+    state = models.CharField(max_length=20, choices=State.choices)
+    gross = models.DecimalField(max_digits=14, decimal_places=2)
+    fee = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    attributable_cost = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    currency = models.CharField(max_length=3, default="USD")
+    authoritative = models.BooleanField(default=False)
+    evidence = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["program", "external_conversion_id"], name="uniq_affiliate_conversion"),
+            models.CheckConstraint(condition=models.Q(gross__gte=0), name="affiliate_gross_nonnegative"),
+        ]
+
+
+class ProductCandidate(Timestamped):
+    class State(models.TextChoices):
+        PRODUCT_CANDIDATE = "PRODUCT_CANDIDATE"
+        ECONOMICS_APPROVED = "ECONOMICS_APPROVED"
+        ASSET_BUILT = "ASSET_BUILT"
+        QA_PASSED = "QA_PASSED"
+        READY_TO_PUBLISH = "READY_TO_PUBLISH"
+        PUBLISHED = "PUBLISHED"
+        PAUSED = "PAUSED"
+        RETIRED = "RETIRED"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    slug = models.SlugField(unique=True)
+    product_class = models.CharField(max_length=60)
+    title = models.CharField(max_length=200)
+    target_buyer = models.CharField(max_length=300)
+    currency = models.CharField(max_length=3, default="USD")
+    offering = models.ForeignKey(ServiceOffering, null=True, blank=True, on_delete=models.PROTECT, related_name="product_candidates")
+    job = models.OneToOneField(Job, null=True, blank=True, on_delete=models.PROTECT, related_name="product_candidate")
+    state = models.CharField(max_length=32, choices=State.choices, default=State.PRODUCT_CANDIDATE)
+    intended_channels = models.JSONField(default=list)
+    suggested_price = models.DecimalField(max_digits=14, decimal_places=2)
+    expected_sales = models.PositiveIntegerField(default=1)
+    expected_gross = models.DecimalField(max_digits=16, decimal_places=2)
+    expected_cost = models.DecimalField(max_digits=16, decimal_places=4)
+    expected_net = models.DecimalField(max_digits=16, decimal_places=2)
+    expected_margin = models.DecimalField(max_digits=8, decimal_places=6)
+    confidence = models.DecimalField(max_digits=7, decimal_places=6)
+    max_genx_credits = models.DecimalField(max_digits=16, decimal_places=4)
+    max_inventory_quantity = models.PositiveIntegerField(default=1)
+    inventory_quantity = models.PositiveIntegerField(default=0)
+    commercial_copy = models.JSONField(default=dict)
+    rights_evidence = models.JSONField(default=dict)
+    qa_evidence = models.JSONField(default=dict)
+    cost_basis = models.DecimalField(max_digits=16, decimal_places=4, default=0)
+    publication_cost = models.DecimalField(max_digits=16, decimal_places=4, default=0)
+    promotion_cost = models.DecimalField(max_digits=16, decimal_places=4, default=0)
+    impressions = models.PositiveBigIntegerField(default=0)
+    clicks = models.PositiveBigIntegerField(default=0)
+    sales = models.PositiveIntegerField(default=0)
+    refunds = models.PositiveIntegerField(default=0)
+    gross_revenue = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    payout_received = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    net_profit = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    return_on_production_cost = models.DecimalField(max_digits=12, decimal_places=6, null=True, blank=True)
+    published_at = models.DateTimeField(null=True, blank=True)
+    first_sale_at = models.DateTimeField(null=True, blank=True)
+    break_even_at = models.DateTimeField(null=True, blank=True)
+    commercial_evidence = models.JSONField(default=dict)
+    review_at = models.DateTimeField(null=True, blank=True)
+    paused_reason = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(suggested_price__gt=0), name="product_price_positive"),
+            models.CheckConstraint(condition=models.Q(expected_cost__gte=0), name="product_expected_cost_nonnegative"),
+            models.CheckConstraint(condition=models.Q(max_genx_credits__gte=0), name="product_genx_budget_nonnegative"),
+        ]
+
+
+class InternalOpportunity(Timestamped):
+    class State(models.TextChoices):
+        CANDIDATE = "CANDIDATE"
+        ECONOMICS_APPROVED = "ECONOMICS_APPROVED"
+        QUEUED = "QUEUED"
+        EXECUTING = "EXECUTING"
+        COMPLETED = "COMPLETED"
+        BLOCKED = "BLOCKED"
+
+    product = models.ForeignKey(ProductCandidate, on_delete=models.CASCADE, related_name="opportunities")
+    job = models.OneToOneField(Job, null=True, blank=True, on_delete=models.PROTECT, related_name="internal_opportunity")
+    opportunity_type = models.CharField(max_length=60)
+    priority = models.PositiveSmallIntegerField(default=80)
+    expected_value = models.DecimalField(max_digits=16, decimal_places=2)
+    state = models.CharField(max_length=24, choices=State.choices, default=State.CANDIDATE)
+    reason_codes = models.JSONField(default=list)
+    deduplication_key = models.CharField(max_length=160, unique=True)
+
+
+class CapabilityMonetization(Timestamped):
+    worker_class = models.CharField(max_length=80)
+    operation = models.CharField(max_length=80)
+    genx_task_class = models.CharField(max_length=100, blank=True)
+    commercial_deliverable = models.CharField(max_length=200)
+    offering = models.ForeignKey(ServiceOffering, null=True, blank=True, on_delete=models.PROTECT, related_name="capability_mappings")
+    channels = models.JSONField(default=list)
+    expected_price = models.DecimalField(max_digits=14, decimal_places=2)
+    estimated_cost = models.DecimalField(max_digits=14, decimal_places=4)
+    expected_margin = models.DecimalField(max_digits=8, decimal_places=6)
+    readiness = models.CharField(max_length=40, default="CANDIDATE")
+    input_schema = models.JSONField(default=dict)
+    output_schema = models.JSONField(default=dict)
+    qa_profile = models.CharField(max_length=80)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["worker_class", "operation", "commercial_deliverable"], name="uniq_capability_monetization")]
+
+
+class DistributionCampaign(Timestamped):
+    product = models.ForeignKey(ProductCandidate, on_delete=models.PROTECT, related_name="campaigns")
+    channel = models.CharField(max_length=80)
+    disclosure = models.TextField(blank=True)
+    tracking_reference = models.CharField(max_length=160, blank=True)
+    status = models.CharField(max_length=40, default="OWNER_REVIEW")
+    cost = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    attributed_revenue = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    impressions = models.PositiveBigIntegerField(default=0)
+    clicks = models.PositiveBigIntegerField(default=0)
+    conversions = models.PositiveIntegerField(default=0)
+    content_assets = models.JSONField(default=list)
 
 
 class AuditEvent(models.Model):

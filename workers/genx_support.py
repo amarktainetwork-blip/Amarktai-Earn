@@ -103,6 +103,7 @@ def _terminal_text(gateway: GenXGateway, call) -> str:
 def generate_text(request, *, prompt: str, task_class: str, capability_keywords: tuple[str, ...] = ()) -> tuple[str, Any]:
     gateway = GenXGateway()
     estimated, call_limit = credit_envelope(request.job_id, request.inputs)
+    job = Job.objects.get(pk=request.job_id)
     selected = select_specialist(*capability_keywords, fallback_category="text") if capability_keywords else None
     call = gateway.run(
         job_id=request.job_id,
@@ -115,6 +116,10 @@ def generate_text(request, *, prompt: str, task_class: str, capability_keywords:
         request_key=_request_key(request, task_class, hashlib.sha256(prompt.encode()).hexdigest()[:12]),
         preferred_model=selected.model_id if selected else None,
         wait_timeout_seconds=int(os.getenv("GENX_WORKER_TIMEOUT_SECONDS", "240")),
+        required_quality=Decimal(str(request.inputs.get("minimum_quality", "0.80"))),
+        allow_exploration=bool(request.inputs.get("allow_model_exploration", False)),
+        economically_fragile=bool(request.inputs.get("economically_fragile", False)),
+        expected_revenue=job.reward,
     )
     return _terminal_text(gateway, call), call
 
@@ -171,6 +176,11 @@ def _parameter_names(payload: Any) -> set[str]:
         for value in payload:
             names.update(_parameter_names(value))
     return names
+
+
+def model_parameter_names(payload: Any) -> set[str]:
+    """Return normalized schema names exposed by a live catalogue model."""
+    return _parameter_names(payload)
 
 
 def transcribe_media(request, source: Path) -> tuple[str, Any]:

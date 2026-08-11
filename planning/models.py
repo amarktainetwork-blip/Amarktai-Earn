@@ -87,6 +87,9 @@ class WorkPlan(Timestamped):
     submitted_at = models.DateTimeField(null=True, blank=True)
     is_composite = models.BooleanField(default=False)
     max_steps = models.PositiveSmallIntegerField(default=1)
+    minimum_quality = models.DecimalField(max_digits=6, decimal_places=5, default=0.80)
+    max_repair_cost = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    escalation_policy = models.JSONField(default=dict)
 
 
 class WorkPlanStep(Timestamped):
@@ -117,6 +120,8 @@ class WorkPlanStep(Timestamped):
     actual_cost = models.DecimalField(max_digits=14, decimal_places=4, default=0)
     repair_history = models.JSONField(default=list)
     reason_codes = models.JSONField(default=list)
+    minimum_quality = models.DecimalField(max_digits=6, decimal_places=5, default=0.80)
+    max_repair_cost = models.DecimalField(max_digits=14, decimal_places=4, default=0)
 
     class Meta:
         ordering = ["sequence", "id"]

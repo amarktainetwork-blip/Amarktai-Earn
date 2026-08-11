@@ -253,6 +253,16 @@ _SPECS: tuple[WorkerSpec, ...] = (
         input_suffixes=(),
         requires_genx=False,
     ),
+    WorkerSpec(
+        worker_class="image_product",
+        version="1.0.0",
+        factory="workers.image_product.worker.ImageProductWorker",
+        operations=("image_generate_product_asset", "image_edit_product_asset"),
+        qa_profile="media",
+        description="Original rights-safe commercial image asset generation/editing using task-specific live GenX routing",
+        input_suffixes=(".jpg", ".jpeg", ".png", ".webp"),
+        requires_genx=True,
+    ),
 )
 
 _BY_CLASS = {spec.worker_class: spec for spec in _SPECS}

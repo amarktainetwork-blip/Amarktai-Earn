@@ -11,7 +11,7 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 
-from control.models import AuditEvent, GenXCall, Job, QAResult, Submission
+from control.models import AuditEvent, Execution, GenXCall, Job, QAResult, Submission
 from planning.asset_policy import AssetPolicyError, inspect_asset, safe_asset_name, validate_role
 from planning.models import JobAsset, JobAssetManifest, RepositorySnapshot, WorkPlan, WorkPlanStep, WorkPlanStepDependency
 from workers.registry import WorkerRegistryError, operation_spec
@@ -783,6 +783,23 @@ def execute_work_plan(plan_id: int) -> WorkPlan:
             plan.reason_codes = [*plan.reason_codes, "MAX_REPAIR_ATTEMPTS_REACHED"]
             plan.save(update_fields=["status", "reason_codes", "updated_at"])
             return plan
+        if repair and plan.max_repair_cost > 0:
+            prior_repairs = Execution.objects.filter(job=plan.job, attempt__gt=1)
+            repair_cost = Decimal("0")
+            for prior in prior_repairs:
+                if prior.started_at is None:
+                    continue
+                repair_cost += GenXCall.objects.filter(
+                    job=plan.job,
+                    created_at__gte=prior.started_at,
+                    created_at__lte=prior.ended_at or timezone.now(),
+                ).aggregate(total=Sum("cost_equivalent"))["total"] or Decimal("0")
+            estimated_next = getattr(getattr(plan.job, "jobscore", None), "expected_genx_cost", Decimal("0"))
+            if repair_cost + estimated_next > plan.max_repair_cost:
+                plan.status = WorkPlan.Status.BLOCKED
+                plan.reason_codes = [*plan.reason_codes, "REPAIR_ECONOMIC_BUDGET_EXCEEDED"]
+                plan.save(update_fields=["status", "reason_codes", "updated_at"])
+                return plan
         plan.execution_attempts += 1
         if repair:
             plan.repair_attempts += 1
@@ -791,6 +808,9 @@ def execute_work_plan(plan_id: int) -> WorkPlan:
         plan.save(update_fields=["execution_attempts", "repair_attempts", "status", "last_error_code", "updated_at"])
         job_id = plan.job_id
         inputs = dict(plan.input_spec)
+        if repair:
+            inputs["repair_attempt"] = plan.repair_attempts
+            inputs["max_repair_cost"] = str(plan.max_repair_cost)
         worker_id = f"{plan.worker_class}-{str(job_id)[:8]}"
         worker_class = plan.worker_class
 

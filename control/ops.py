@@ -257,6 +257,7 @@ def agents_snapshot() -> dict:
         "technical_documentation": ((), "text"),
         "content_copy": ((), "text"),
         "customer_support": ((), "text"),
+        "image_product": (("image", "image generation", "text to image"), "image"),
     }
     rows = []
     for spec in manifest:

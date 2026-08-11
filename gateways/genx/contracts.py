@@ -150,6 +150,15 @@ class ModelCandidate:
     accepted: int = 0
     profit: Decimal = ZERO
     credits: Decimal = ZERO
+    successful_executions: int = 0
+    qa_accepted: int = 0
+    qa_rejected: int = 0
+    repair_required: int = 0
+    failures: int = 0
+    provider_failures: int = 0
+    retry_count: int = 0
+    total_repair_cost: Decimal = ZERO
+    net_profit: Decimal = ZERO
 
     @property
     def acceptance_rate(self) -> Decimal:
@@ -158,6 +167,84 @@ class ModelCandidate:
     @property
     def profit_per_credit(self) -> Decimal | None:
         return None if self.credits <= ZERO else self.profit / self.credits
+
+    @property
+    def qa_acceptance_probability(self) -> Decimal:
+        observed = self.qa_accepted + self.qa_rejected
+        # Conservative Beta(1,1) smoothing avoids treating one lucky pass as certainty.
+        return Decimal(self.qa_accepted + 1) / Decimal(observed + 2)
+
+    @property
+    def repair_probability(self) -> Decimal:
+        return Decimal(self.repair_required + 1) / Decimal(max(self.attempts, 0) + 2)
+
+    @property
+    def failure_probability(self) -> Decimal:
+        return Decimal(self.failures + self.provider_failures + 1) / Decimal(max(self.attempts, 0) + 2)
+
+    @property
+    def average_credits(self) -> Decimal:
+        return ZERO if self.attempts <= 0 else self.credits / Decimal(self.attempts)
+
+    @property
+    def average_repair_cost(self) -> Decimal:
+        return ZERO if self.repair_required <= 0 else self.total_repair_cost / Decimal(self.repair_required)
+
+
+@dataclass(frozen=True)
+class EconomicRoute:
+    candidate: ModelCandidate
+    expected_net_profit: Decimal
+    expected_total_cost: Decimal
+    quality_probability: Decimal
+    exploration: bool
+
+
+def route_models(
+    candidates: list[ModelCandidate],
+    *,
+    expected_revenue: Decimal,
+    non_genx_cost: Decimal = ZERO,
+    required_quality: Decimal = Decimal("0.80"),
+    max_genx_cost: Decimal | None = None,
+    allow_exploration: bool = False,
+    exploration_fraction: Decimal = Decimal("0.05"),
+) -> list[EconomicRoute]:
+    """Rank task-scoped models by quality-constrained expected net profit."""
+    routes: list[EconomicRoute] = []
+    for candidate in candidates:
+        unproven = candidate.attempts == 0
+        if unproven and not allow_exploration:
+            continue
+        quality = candidate.qa_acceptance_probability
+        if not unproven and quality < required_quality:
+            continue
+        expected_genx = candidate.average_credits
+        if expected_genx <= ZERO:
+            expected_genx = candidate.price_hint or ZERO
+        expected_repair = candidate.repair_probability * (
+            candidate.average_repair_cost or expected_genx
+        )
+        expected_retry = candidate.failure_probability * expected_genx
+        total_cost = expected_genx + expected_repair + expected_retry + non_genx_cost
+        if max_genx_cost is not None and expected_genx + expected_repair + expected_retry > max_genx_cost:
+            continue
+        expected_net = (expected_revenue * quality) - total_cost
+        exploration = unproven
+        if exploration and expected_genx > expected_revenue * exploration_fraction:
+            continue
+        if expected_net <= ZERO:
+            continue
+        routes.append(EconomicRoute(candidate, expected_net, total_cost, quality, exploration))
+    return sorted(
+        routes,
+        key=lambda route: (
+            -route.expected_net_profit,
+            -route.quality_probability,
+            route.expected_total_cost,
+            route.candidate.model_id,
+        ),
+    )
 
 
 def rank_models(candidates: list[ModelCandidate]) -> list[ModelCandidate]:

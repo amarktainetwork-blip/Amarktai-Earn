@@ -160,6 +160,12 @@ def record_payout_state(
         )
 
     treasury = _recompute_treasury(job, currency)
+    if target_state in {Payout.State.SETTLED, Payout.State.REVERSED}:
+        from control.services.genx_economics import record_settlement_outcome
+        from control.services.product_factory import record_owned_product_payout
+
+        record_settlement_outcome(payout=payout)
+        record_owned_product_payout(payout=payout)
     AuditEvent.objects.create(
         event_type="payout.state_changed",
         actor="treasury",

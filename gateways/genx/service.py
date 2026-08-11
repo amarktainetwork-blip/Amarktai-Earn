@@ -20,13 +20,8 @@ from control.models import (
     ModelStat,
     Worker,
 )
-from gateways.genx.client import GenXClient, GenXError
 from control.services.admission import AdmissionDenied, require_admission
-from gateways.genx.output import (
-    decode_text_result_url,
-    extract_session_assistant_text,
-    session_assistant_job_ids,
-)
+from gateways.genx.client import GenXClient, GenXError
 from gateways.genx.contracts import (
     ModelCandidate,
     assert_credit_budget,
@@ -38,7 +33,13 @@ from gateways.genx.contracts import (
     rank_models,
     records,
     result_url,
+    route_models,
     usage_credits,
+)
+from gateways.genx.output import (
+    decode_text_result_url,
+    extract_session_assistant_text,
+    session_assistant_job_ids,
 )
 
 
@@ -120,7 +121,19 @@ class GenXGateway:
             )
         return {"models_seen": len(seen), "available_credits": credits}
 
-    def select_model(self, *, task_class: str, category: str, preferred_model: str | None = None) -> GenXModelCatalog:
+    def select_model(
+        self,
+        *,
+        task_class: str,
+        category: str,
+        preferred_model: str | None = None,
+        required_quality: Decimal = Decimal("0.80"),
+        expected_revenue: Decimal = Decimal("0"),
+        non_genx_cost: Decimal = Decimal("0"),
+        max_genx_cost: Decimal | None = None,
+        allow_exploration: bool = False,
+        economically_fragile: bool = False,
+    ) -> GenXModelCatalog:
         catalog = GenXModelCatalog.objects.filter(active=True, category=category)
         if preferred_model:
             selected = catalog.filter(model_id=preferred_model).first()
@@ -144,8 +157,47 @@ class GenXGateway:
                     accepted=stat.accepted if stat else 0,
                     profit=stat.profit if stat else Decimal("0"),
                     credits=stat.credits if stat else Decimal("0"),
+                    successful_executions=stat.successful_executions if stat else 0,
+                    qa_accepted=stat.qa_accepted if stat else 0,
+                    qa_rejected=stat.qa_rejected if stat else 0,
+                    repair_required=stat.repair_required if stat else 0,
+                    failures=stat.failures if stat else 0,
+                    provider_failures=stat.provider_failures if stat else 0,
+                    retry_count=stat.retry_count if stat else 0,
+                    total_repair_cost=stat.total_repair_cost if stat else Decimal("0"),
+                    net_profit=stat.net_profit if stat else Decimal("0"),
                 )
             )
+        if expected_revenue > 0:
+            if not economically_fragile and not any(candidate.attempts for candidate in candidates):
+                allow_exploration = True
+            routed = route_models(
+                candidates,
+                expected_revenue=expected_revenue,
+                non_genx_cost=non_genx_cost,
+                required_quality=required_quality,
+                max_genx_cost=max_genx_cost,
+                allow_exploration=allow_exploration and not economically_fragile,
+                exploration_fraction=Decimal(os.getenv("GENX_EXPLORATION_BUDGET_FRACTION", "0.05")),
+            )
+            if routed and routed[0].expected_net_profit > 0:
+                selected = routed[0]
+                AuditEvent.objects.create(
+                    event_type="genx.economic_model_selected",
+                    actor="genx-router",
+                    metadata={
+                        "task_class": task_class,
+                        "category": category,
+                        "model": selected.candidate.model_id,
+                        "expected_net_profit": str(selected.expected_net_profit),
+                        "expected_total_cost": str(selected.expected_total_cost),
+                        "quality_probability": str(selected.quality_probability),
+                        "required_quality": str(required_quality),
+                        "exploration": selected.exploration,
+                    },
+                )
+                return by_id[selected.candidate.model_id]
+            raise GenXModelUnavailable("no active model satisfies the task quality floor and positive expected-profit constraint")
         return by_id[rank_models(candidates)[0].model_id]
 
     @transaction.atomic
@@ -224,9 +276,24 @@ class GenXGateway:
         request_key: str | None = None,
         preferred_model: str | None = None,
         wait_timeout_seconds: int = 180,
+        required_quality: Decimal = Decimal("0.80"),
+        expected_revenue: Decimal | None = None,
+        non_genx_cost: Decimal = Decimal("0"),
+        allow_exploration: bool = False,
+        economically_fragile: bool = False,
     ) -> GenXCall:
-        selected = self.select_model(task_class=task_class, category=category, preferred_model=preferred_model)
         job = Job.objects.select_related("marketplace").get(pk=job_id)
+        selected = self.select_model(
+            task_class=task_class,
+            category=category,
+            preferred_model=preferred_model,
+            required_quality=required_quality,
+            expected_revenue=expected_revenue if expected_revenue is not None else Decimal("0"),
+            non_genx_cost=non_genx_cost,
+            max_genx_cost=max_allowed_credits,
+            allow_exploration=allow_exploration,
+            economically_fragile=economically_fragile,
+        )
         try:
             require_admission(purpose="GENX", job=job)
         except AdmissionDenied as exc:
@@ -669,10 +736,16 @@ class GenXGateway:
         if not was_terminal:
             stat, _ = ModelStat.objects.select_for_update().get_or_create(model=call.model, task_class=call.task_class)
             stat.attempts += 1
+            if status == "COMPLETED":
+                stat.successful_executions += 1
+            else:
+                stat.failures += 1
+                if call.error_code:
+                    stat.provider_failures += 1
             if usage_value is not None:
                 stat.credits += usage_value
             stat.total_latency_ms += call.latency_ms
-            stat.save(update_fields=["attempts", "credits", "total_latency_ms", "updated_at"])
+            stat.save(update_fields=["attempts", "successful_executions", "failures", "provider_failures", "credits", "total_latency_ms", "updated_at"])
         elif usage_value is not None and previous_billing_truth != "ACTUAL":
             stat, _ = ModelStat.objects.select_for_update().get_or_create(model=call.model, task_class=call.task_class)
             stat.credits += usage_value - previous_credits

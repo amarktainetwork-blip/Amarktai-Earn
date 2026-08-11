@@ -175,6 +175,10 @@ def execute_registered_job(
             worker.last_heartbeat = timezone.now()
             worker.save(update_fields=["version", "status", "current_job", "last_heartbeat", "updated_at"])
             transition_job(job.id, Job.State.EXECUTING, actor=worker_id, metadata={"execution_id": execution.id, "worker_class": spec.worker_class, "operation": operation})
+            if hasattr(job, "internal_opportunity"):
+                from control.services.product_factory import mark_internal_execution_started
+
+                mark_internal_execution_started(job=job)
 
         result = spec.build().execute(WorkRequest(job_id=str(job.id), workspace=Path(execution.workspace), inputs=clean_inputs, worker_id=worker_id, execution_id=execution.id, attempt=execution.attempt))
         lock = renew_job_lock(job.id, node_id=node_id, fencing_token=lock.fencing_token, lease_seconds=lease_seconds)
@@ -219,6 +223,18 @@ def execute_registered_job(
             score=qa.score,
             evidence={"checks": qa.checks, **qa.evidence},
         )
+        from control.services.genx_economics import record_execution_outcome
+
+        execution.ended_at = timezone.now()
+        record_execution_outcome(
+            execution=execution,
+            qa_passed=qa.passed,
+            repair_required=not qa.passed or allow_repair,
+        )
+        if hasattr(job, "internal_opportunity"):
+            from control.services.product_factory import record_internal_execution_outcome
+
+            record_internal_execution_outcome(execution=execution, qa_passed=qa.passed)
         status = "QA_PASSED" if qa.passed else "NEEDS_REPAIR"
         Execution.objects.filter(pk=execution.pk).update(
             status=status,

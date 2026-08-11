@@ -16,6 +16,7 @@ from control.services.auth_security import (
 )
 from control.services.payment_rails import payment_rail_snapshot, update_payment_rail_proof
 from control.services.settlement_routes import settlement_routes_snapshot, update_market_settlement_route
+from control.services.integration_accounts import integration_accounts_snapshot
 
 
 def _json(request):
@@ -80,6 +81,7 @@ def payment_rails_api(request):
     routes = settlement_routes_snapshot()
     payload["settlement_routes"] = routes["rows"]
     payload["settlement_route_meta"] = routes["meta"]
+    payload["integration_accounts"] = integration_accounts_snapshot()
     return JsonResponse(payload)
 
 
