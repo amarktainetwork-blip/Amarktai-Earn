@@ -289,7 +289,7 @@ def run_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
             "-v", f"{repo_volume}:/src:ro", "-v", f"{volume_name}:/workspace:rw",
             "-e", f"SNAPSHOT_REL={snapshot_rel}", image,
             "/bin/bash", "-lc",
-            'cp -a "/src/$SNAPSHOT_REL/." /workspace/ && cd /workspace && git init -q && git config user.name "Amarktai Sandbox" && git config user.email "sandbox@amarktai.invalid" && git add -A && git commit -qm baseline && git tag amarktai-baseline && chown -R 10001:10001 /workspace',
+            'chown 0:0 /workspace && cp -R --no-preserve=ownership,timestamps "/src/$SNAPSHOT_REL/." /workspace/ && cd /workspace && git init -q && git config user.name "Amarktai Sandbox" && git config user.email "sandbox@amarktai.invalid" && git add -A && git commit -qm baseline && git tag amarktai-baseline && chown -R 10001:10001 /workspace',
         ]
         _run(seed, timeout=120)
 

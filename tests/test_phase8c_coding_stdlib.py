@@ -56,6 +56,9 @@ class Phase8CCodingContractTests(unittest.TestCase):
         seed = broker.split('seed = [', 1)[1].split('        ]', 1)[0]
         self.assertIn('"--cap-add", "DAC_OVERRIDE"', seed)
         self.assertIn('"--cap-add", "CHOWN"', seed)
+        self.assertIn("chown 0:0 /workspace", seed)
+        self.assertIn("cp -R --no-preserve=ownership,timestamps", seed)
+        self.assertIn("chown -R 10001:10001 /workspace", seed)
         self.assertIn("git tag amarktai-baseline", broker)
         self.assertIn("git add -N -- .", broker)
         self.assertIn("git diff --binary --no-ext-diff amarktai-baseline", broker)
