@@ -283,7 +283,8 @@ def run_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
         _run(["docker", "volume", "create", volume_name], timeout=30)
         seed = [
             "docker", "run", "--rm", "--network", "none", "--read-only",
-            "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+            "--cap-drop", "ALL", "--cap-add", "DAC_READ_SEARCH", "--cap-add", "CHOWN",
+            "--security-opt", "no-new-privileges:true",
             "--user", "0:0",
             "-v", f"{repo_volume}:/src:ro", "-v", f"{volume_name}:/workspace:rw",
             "-e", f"SNAPSHOT_REL={snapshot_rel}", image,

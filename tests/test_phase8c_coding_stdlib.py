@@ -50,8 +50,12 @@ class Phase8CCodingContractTests(unittest.TestCase):
         self.assertIn("--memory 1024m", text)
         self.assertIn("--cpus 1.5", text)
         self.assertIn("--user 10001:10001", text)
+        self.assertNotIn("--cap-add", args)
         self.assertNotIn("/var/run/docker.sock", text)
         broker = (ROOT / "sandbox_broker" / "server.py").read_text(encoding="utf-8")
+        seed = broker.split('seed = [', 1)[1].split('        ]', 1)[0]
+        self.assertIn('"--cap-add", "DAC_READ_SEARCH"', seed)
+        self.assertIn('"--cap-add", "CHOWN"', seed)
         self.assertIn("git tag amarktai-baseline", broker)
         self.assertIn("git add -N -- .", broker)
         self.assertIn("git diff --binary --no-ext-diff amarktai-baseline", broker)
