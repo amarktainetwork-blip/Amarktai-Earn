@@ -31,9 +31,9 @@ class BankingIntegrationTests(TestCase):
         self.authenticate()
         page = self.client.get("/ops/banking/")
         self.assertEqual(page.status_code, 200)
-        self.assertContains(page, "Treasury &amp; Settlement")
-        self.assertContains(page, "Automatic payout receipt, human withdrawals")
-        self.assertContains(page, "control/banking.js")
+        self.assertContains(page, 'data-section="treasury"')
+        self.assertContains(page, "Balances and the advanced accounting ledger")
+        self.assertContains(page, "control/app.js")
 
         response = self.client.get("/api/banking/rails")
         self.assertEqual(response.status_code, 200)

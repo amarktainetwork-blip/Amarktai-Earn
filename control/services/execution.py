@@ -223,18 +223,7 @@ def execute_registered_job(
             score=qa.score,
             evidence={"checks": qa.checks, **qa.evidence},
         )
-        from control.services.genx_economics import record_execution_outcome
-
         execution.ended_at = timezone.now()
-        record_execution_outcome(
-            execution=execution,
-            qa_passed=qa.passed,
-            repair_required=not qa.passed or allow_repair,
-        )
-        if hasattr(job, "internal_opportunity"):
-            from control.services.product_factory import record_internal_execution_outcome
-
-            record_internal_execution_outcome(execution=execution, qa_passed=qa.passed)
         status = "QA_PASSED" if qa.passed else "NEEDS_REPAIR"
         Execution.objects.filter(pk=execution.pk).update(
             status=status,
@@ -247,9 +236,26 @@ def execute_registered_job(
                 "qa": {"passed": qa.passed, "check_type": qa.check_type, "checks": qa.checks},
             },
         )
+        from planning.acceptance import evaluate_execution_acceptance
+
+        evaluation = evaluate_execution_acceptance(execution.id)
+        acceptance_passed = bool(qa.passed and evaluation.submission_ready)
+        status = "QA_PASSED" if acceptance_passed else "NEEDS_REPAIR"
+        Execution.objects.filter(pk=execution.pk).update(status=status)
+        from control.services.genx_economics import record_execution_outcome
+
+        record_execution_outcome(
+            execution=execution,
+            qa_passed=acceptance_passed,
+            repair_required=not acceptance_passed or allow_repair,
+        )
+        if hasattr(job, "internal_opportunity"):
+            from control.services.product_factory import record_internal_execution_outcome
+
+            record_internal_execution_outcome(execution=execution, qa_passed=acceptance_passed)
         Worker.objects.filter(pk=worker.pk).update(
-            status="READY" if qa.passed else "REPAIRING",
-            current_job=None if qa.passed else job,
+            status="READY" if acceptance_passed else "REPAIRING",
+            current_job=None if acceptance_passed else job,
             last_heartbeat=timezone.now(),
         )
         if operation == "synthetic_dataset_generate":
@@ -259,7 +265,7 @@ def execute_registered_job(
                 job=job, execution=execution, evidence=result.evidence, qa_passed=qa.passed,
             )
         AuditEvent.objects.create(
-            event_type="job.qa_passed" if qa.passed else "job.qa_failed",
+            event_type="job.qa_passed" if acceptance_passed else "job.qa_failed",
             actor="qa-runtime",
             metadata={
                 "job_id": str(job.id),
@@ -268,6 +274,9 @@ def execute_registered_job(
                 "operation": operation,
                 "qa_profile": spec.qa_profile,
                 "checks": qa.checks,
+                "acceptance_contract_id": evaluation.contract_id,
+                "semantic_state": evaluation.semantic_state,
+                "acceptance_reason_codes": evaluation.critical_failures,
             },
         )
         execution.refresh_from_db()

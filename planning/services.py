@@ -12,7 +12,8 @@ from django.utils import timezone
 
 from control.models import AuditEvent, Execution, GenXCall, Job, QAResult, Submission
 from planning.asset_policy import AssetPolicyError, inspect_asset, safe_asset_name, validate_role
-from planning.models import JobAsset, JobAssetManifest, RepositorySnapshot, WorkPlan, WorkPlanStep, WorkPlanStepDependency
+from planning.models import AcceptanceEvaluation, JobAsset, JobAssetManifest, RepositorySnapshot, WorkPlan, WorkPlanStep, WorkPlanStepDependency
+from planning.acceptance import acceptance_execution_payload, compile_acceptance_contract
 from workers.registry import WorkerRegistryError, operation_spec
 from control.services.workload_policy import evaluate_job
 
@@ -525,6 +526,7 @@ def plan_awarded_job(job_id) -> WorkPlan:
     plan.max_repair_attempts = max(0, min(int(os.getenv("MAX_DETERMINISTIC_REPAIR_ATTEMPTS", "1")), 3))
     plan.last_error_code = ""
     plan.save()
+    compile_acceptance_contract(job, plan)
     AuditEvent.objects.create(
         event_type="job.plan_ready" if plan.status == WorkPlan.Status.READY else "job.plan_blocked",
         actor="deterministic-planner",
@@ -697,6 +699,8 @@ def _execute_composite_plan(plan_id: int) -> WorkPlan:
                 plan.save(update_fields=["status", "reason_codes", "updated_at"])
                 return plan
             inputs = _composite_inputs(step)
+            contract = compile_acceptance_contract(plan.job, plan)
+            inputs["acceptance_contract"] = acceptance_execution_payload(contract)
             step.attempt += 1
             if repair:
                 step.repair_attempts += 1
@@ -819,9 +823,18 @@ def execute_work_plan(plan_id: int) -> WorkPlan:
         plan.save(update_fields=["execution_attempts", "repair_attempts", "status", "last_error_code", "updated_at"])
         job_id = plan.job_id
         inputs = dict(plan.input_spec)
+        contract = compile_acceptance_contract(plan.job, plan)
+        inputs["acceptance_contract"] = acceptance_execution_payload(contract)
         if repair:
             inputs["repair_attempt"] = plan.repair_attempts
             inputs["max_repair_cost"] = str(plan.max_repair_cost)
+            latest_evaluation = (
+                AcceptanceEvaluation.objects.filter(execution__job=plan.job)
+                .order_by("-created_at")
+                .first()
+            )
+            if latest_evaluation:
+                inputs["repair_targets"] = latest_evaluation.critical_failures
         worker_id = f"{plan.worker_class}-{str(job_id)[:8]}"
         worker_class = plan.worker_class
 

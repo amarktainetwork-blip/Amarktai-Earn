@@ -29,6 +29,12 @@ from control.services.semantic_acceptance import (
     paystack_settlement_is_provider_proven,
     proof_runner_has_meaningful_stages,
 )
+from planning.acceptance import (
+    compile_acceptance_contract,
+    evaluate_execution_acceptance,
+    require_submission_ready,
+)
+from planning.models import AcceptanceContract, AcceptanceEvaluation
 from workers.registry import operation_spec
 
 
@@ -66,6 +72,8 @@ def criteria() -> list[Criterion]:
         _criterion("Runtime", "GenX actual billing and monetary cost truth", genx_cost_truth_is_fail_closed(), "Actual credits use a versioned verified valuation; missing valuation remains nullable/unresolved and Product Factory fails closed."),
         _criterion("Runtime", "Dimensionally valid task-specific routing", genx_unit_safe_routing() and _field(ModelStat, "qa_accepted"), "Without valuation the router emits only a credit-efficiency score; expected net profit exists only with compatible monetary units."),
         _criterion("Runtime", "Quality and bounded repair economics", _field(ModelStat, "repair_required") and _field(ModelStat, "total_repair_cost") and _has("control.services.genx_economics", "record_execution_outcome"), "Independent QA updates repair probability and attributable commercial outcomes."),
+        _criterion("Quality", "Persisted versioned Acceptance Contract", all(_field(AcceptanceContract, name) for name in ("version", "source_hash", "compiler_version", "compiled_task", "criteria", "is_current")) and callable(compile_acceptance_contract), "Every planned job receives a source-grounded, versioned contract; changed source input makes the prior contract stale."),
+        _criterion("Quality", "Canonical semantic submission gate", all(_field(AcceptanceEvaluation, name) for name in ("deterministic_passed", "semantic_state", "submission_ready", "critical_failures")) and callable(evaluate_execution_acceptance) and callable(require_submission_ready), "Deterministic failure, semantic critical failure, uncertainty, missing evidence, and stale contracts block both submission paths; semantic PASS cannot override deterministic failure."),
         _criterion("Runtime", "All paid paths use economic routing", paid_paths_use_economic_selection(), "Specialist capability filtering yields eligible sets; text, session, coding, transcription and image paths reach economic selection."),
         _criterion("Runtime", "Quality floor and bounded exploration", genx_quality_and_exploration_bounded(), "Low-quality models fail the floor and unproven models require explicit budget-bounded exploration."),
         _criterion("Earning lifecycle", "Canonical lifecycle", all(model is not None for model in (Job, InboundOrder, QAResult, OwnerReceipt)), "Opportunity/order, Job, WorkPlan, QA, delivery, payout and owner receipt remain canonical persisted stages."),

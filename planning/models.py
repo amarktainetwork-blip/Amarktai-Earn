@@ -92,6 +92,61 @@ class WorkPlan(Timestamped):
     escalation_policy = models.JSONField(default=dict)
 
 
+class AcceptanceContract(Timestamped):
+    """Versioned, source-grounded definition of what makes a job deliverable acceptable."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE"
+        STALE = "STALE"
+        BLOCKED = "BLOCKED"
+
+    job = models.ForeignKey("control.Job", on_delete=models.CASCADE, related_name="acceptance_contracts")
+    version = models.PositiveIntegerField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    is_current = models.BooleanField(default=True)
+    source_hash = models.CharField(max_length=64)
+    compiler_version = models.CharField(max_length=40, default="acceptance-compiler-v1")
+    source_requirements = models.JSONField(default=dict)
+    compiled_task = models.JSONField(default=dict)
+    criteria = models.JSONField(default=list)
+    reason_codes = models.JSONField(default=list)
+
+    class Meta:
+        ordering = ["-version", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["job", "version"], name="uniq_acceptance_contract_job_version"),
+            models.UniqueConstraint(
+                fields=["job"],
+                condition=models.Q(is_current=True),
+                name="uniq_current_acceptance_contract_per_job",
+            ),
+        ]
+
+
+class AcceptanceEvaluation(Timestamped):
+    """Canonical submission-gate decision; semantic review cannot override deterministic failure."""
+
+    class SemanticState(models.TextChoices):
+        PASS = "PASS"
+        FAIL = "FAIL"
+        UNCERTAIN = "UNCERTAIN"
+
+    contract = models.ForeignKey(AcceptanceContract, on_delete=models.PROTECT, related_name="evaluations")
+    execution = models.OneToOneField(
+        "control.Execution", on_delete=models.CASCADE, related_name="acceptance_evaluation"
+    )
+    evaluator_version = models.CharField(max_length=40, default="acceptance-evaluator-v1")
+    deterministic_passed = models.BooleanField(default=False)
+    semantic_state = models.CharField(
+        max_length=16, choices=SemanticState.choices, default=SemanticState.UNCERTAIN
+    )
+    submission_ready = models.BooleanField(default=False)
+    criterion_results = models.JSONField(default=list)
+    critical_failures = models.JSONField(default=list)
+    evidence = models.JSONField(default=dict)
+
+
+
 class WorkPlanStep(Timestamped):
     class Status(models.TextChoices):
         BLOCKED = "BLOCKED"

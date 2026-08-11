@@ -9,7 +9,7 @@ from pathlib import Path
 from django.db.models import Count, F, Q, Sum
 from django.utils import timezone
 
-from planning.models import DependencyPreparation, WorkPlan
+from planning.models import AcceptanceContract, AcceptanceEvaluation, DependencyPreparation, WorkPlan
 from workers.registry import registry_manifest
 from workers.genx_support import catalog_supports
 from .models import (
@@ -60,12 +60,16 @@ from .models import (
 from control.services.autonomy import current_mode
 from control.services.profit_brain import settled_profit_truth
 from control.services.seller_services import is_offering_currently_sellable
+from control.services.integration_accounts import integration_accounts_snapshot
+from control.services.product_factory import factory_snapshot
 
 SECTIONS = (
     "overview",
     "live-work",
     "agents",
     "markets",
+    "accounts",
+    "factory",
     "earnings",
     "treasury",
     "genx",
@@ -216,6 +220,13 @@ def live_work_snapshot(limit: int = 100) -> dict:
         latest_qa = QAResult.objects.filter(job=job).order_by("-created_at").first()
         submission = Submission.objects.filter(job=job).order_by("-version", "-created_at").first()
         dependency = DependencyPreparation.objects.filter(job=job).order_by("-updated_at").first()
+        contract = AcceptanceContract.objects.filter(job=job, is_current=True).first()
+        evaluation = (
+            AcceptanceEvaluation.objects.filter(execution__job=job)
+            .select_related("contract")
+            .order_by("-created_at")
+            .first()
+        )
         rows.append({
             "job": str(job.id),
             "market": job.marketplace.slug,
@@ -238,6 +249,14 @@ def live_work_snapshot(limit: int = 100) -> dict:
             "open_revisions": Revision.objects.filter(job=job, status="REQUIRED").count(),
             "dependency_preparation": dependency.status if dependency else None,
             "artifacts": Artifact.objects.filter(job=job).count(),
+            "acceptance_contract": contract.status if contract else "NOT_COMPILED",
+            "acceptance_contract_version": contract.version if contract else None,
+            "acceptance_compiler": contract.compiler_version if contract else None,
+            "acceptance_criteria": contract.criteria if contract else [],
+            "semantic_acceptance": evaluation.semantic_state if evaluation else "NOT_EVALUATED",
+            "submission_ready": evaluation.submission_ready if evaluation else False,
+            "acceptance_failures": evaluation.critical_failures if evaluation else [],
+            "acceptance_results": evaluation.criterion_results if evaluation else [],
             "deadline": _dt(job.deadline),
             "updated": _dt(job.updated_at),
         })
@@ -370,6 +389,25 @@ def markets_snapshot() -> dict:
             category = "JOB SOURCES"
         max_age = max(1, int(os.getenv("MARKET_POLICY_MAX_AGE_DAYS", "30")))
         policy_current = bool(policy and policy.checked_at >= timezone.now() - timedelta(days=max_age))
+        ready_for_verified_work = bool(
+            market.enabled
+            and market.status == Marketplace.Status.LIVE
+            and health
+            and health.auth_ok
+            and (
+                bool(listing_counts.get(MarketServiceListing.Status.PUBLISHED, 0))
+                if profile and ({"SERVICE_LISTING", "PAY_PER_CALL_API"} & set(profile.revenue_channels or []))
+                else bool(profile and profile.source_wired and profile.capabilities.get("discover"))
+            )
+            and market.payout_ready
+            and market.south_africa_verified
+            and policy_current
+            and policy
+            and policy.automation_allowed
+            and profile
+            and profile.policy_verified
+            and not blockers
+        )
         rows.append({
             "market": market.slug,
             "category": category,
@@ -410,6 +448,8 @@ def markets_snapshot() -> dict:
             "autonomy_allowed": bool(policy and policy.automation_allowed and profile and profile.policy_verified),
             "service_listings": listing_counts,
             "blockers": list(dict.fromkeys(blockers)),
+            "ready_for_verified_work": ready_for_verified_work,
+            "next_action_code": "READY_FOR_VERIFIED_WORK" if ready_for_verified_work else (list(dict.fromkeys(blockers))[0] if blockers else "READINESS_EVIDENCE_INCOMPLETE"),
             "api": health.api_ok if health else None,
             "auth": health.auth_ok if health else None,
             "payout": health.payout_ok if health else None,
@@ -443,6 +483,15 @@ def markets_snapshot() -> dict:
             "truth": "A channel is never called ready from catalog presence alone; payout, South Africa, policy, auth, capability, and hosting evidence remain independent gates.",
         },
     }
+
+
+def accounts_snapshot() -> dict:
+    payload = integration_accounts_snapshot()
+    return {"section": "accounts", **payload}
+
+
+def product_factory_snapshot() -> dict:
+    return {"section": "factory", **factory_snapshot()}
 
 
 def earnings_snapshot(limit: int = 100) -> dict:
@@ -734,6 +783,8 @@ def snapshot(section: str, owner=None) -> dict:
     if section == "live-work": return live_work_snapshot()
     if section == "agents": return agents_snapshot()
     if section == "markets": return markets_snapshot()
+    if section == "accounts": return accounts_snapshot()
+    if section == "factory": return product_factory_snapshot()
     if section == "earnings": return earnings_snapshot()
     if section == "treasury": return treasury_snapshot()
     if section == "genx": return genx_snapshot()

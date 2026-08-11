@@ -184,7 +184,7 @@ def _worker_registry(*, ci_proven: bool) -> AcceptanceCriterion:
 
 def _dashboard_contract(*, ci_proven: bool) -> AcceptanceCriterion:
     expected = {
-        "overview", "live-work", "agents", "markets", "earnings", "treasury", "genx",
+        "overview", "live-work", "agents", "markets", "accounts", "factory", "earnings", "treasury", "genx",
         "nodes", "storage", "performance", "logs", "alerts", "settings", "security",
     }
     if set(SECTIONS) != expected:
