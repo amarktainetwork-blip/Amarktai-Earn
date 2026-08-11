@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from control.models import Marketplace
 from control.services.autonomy import current_mode
+from control.services.host_policy import market_runtime_compatible
 
 
 # Explicitly reviewed proving policy. These markets can hold approved earnings
@@ -110,7 +111,12 @@ def market_readiness(market: Marketplace) -> dict:
         work_blockers.append("AUTOMATION_POLICY_NOT_APPROVED")
     if not policy_current:
         work_blockers.append("MARKET_AUTOMATION_POLICY_STALE")
-    if policy and not policy.webdock_compatible:
+    # Provider policy is controller-owned and cannot be bypassed by stale/mutated
+    # database evidence. On-chain candidates remain catalogue-visible but cannot
+    # become executable on a Webdock host.
+    if not market_runtime_compatible(market.slug):
+        work_blockers.append("MARKET_RUNTIME_NOT_COMPATIBLE")
+    elif policy and not policy.webdock_compatible:
         work_blockers.append("MARKET_RUNTIME_NOT_COMPATIBLE")
     if profile:
         relevant = WORK_BLOCKERS_BY_MARKET.get(market.slug, frozenset())
