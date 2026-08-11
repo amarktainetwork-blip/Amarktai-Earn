@@ -7,6 +7,7 @@ from control.models import AuditEvent, Job
 from control.services.github_repos import GitHubRepositoryError, ensure_repository_snapshot, repository_ref
 from control.services.dependencies import inspect_dependency_request
 from planning.models import RepositorySnapshot, WorkPlan
+from planning.acceptance import compile_acceptance_contract
 from workers.registry import WorkerRegistryError, operation_spec
 
 
@@ -96,6 +97,7 @@ def _set_plan(job: Job, *, operation: str = "", input_spec: dict | None = None, 
         plan.max_repair_attempts = max(0, min(int(os.getenv("MAX_DETERMINISTIC_REPAIR_ATTEMPTS", "1")), 3))
         plan.last_error_code = ""
         plan.save()
+        compile_acceptance_contract(locked, plan)
         AuditEvent.objects.create(
             event_type="job.coding_plan_ready" if plan.status == WorkPlan.Status.READY else "job.coding_plan_blocked",
             actor="coding-planner",

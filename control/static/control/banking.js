@@ -107,6 +107,37 @@
     </article>`;
   }
 
+  function integrationCard(row) {
+    const fields = row.credentials || [];
+    const configured = fields.filter((field) => field.configured).length;
+    return `<article class="rail-card integration-card" data-integration="${esc(row.slug)}">
+      <div class="rail-head"><div><small>${esc(human(row.category))} Â· ${esc(human(row.classification))}</small><h2>${esc(row.display_name)}</h2></div>${stateBadge(row.setup_state)}</div>
+      <p class="rail-action">${esc(row.purpose)}</p>
+      <div class="receipt-strip"><small>CONNECTION</small><strong>${esc(human(row.api_connection_state))}</strong><small>PAYOUT PROOF</small><strong>${esc(human(row.payout_receipt_proof_state))}</strong></div>
+      <div class="rail-checks">
+        ${check("Credentials configured", row.credential_state === "CONFIGURED" || row.credential_state === "VERIFIED" || row.credential_state === "NOT_REQUIRED")}
+        ${check("Authoritative connection verified", row.connected)}
+        ${check("Work capability proven", row.work_ready)}
+        ${check("Owner receipt route proven", row.cash_ready)}
+        ${check("Bounded live entry ready", row.live_entry_ready)}
+        ${check("Autonomy ready", row.autonomy_ready)}
+      </div>
+      <div class="rail-proof"><small>CREDENTIAL METADATA</small><strong>${esc(fields.length ? `${configured}/${fields.length} field(s) configured` : "Manual account; no fake API credential")}</strong><small>${esc(fields.filter((field) => field.configured).map((field) => `${field.label} (${field.fingerprint || "configured"})`).join(" Â· ") || "No secret values are returned")}</small></div>
+      ${row.last_safe_error ? `<p class="rail-action blocked-copy">${esc(human(row.last_error_category))}: ${esc(row.last_safe_error)}</p>` : ""}
+      <p class="rail-action"><strong>Next owner action:</strong> ${esc(row.owner_action_required)}</p>
+      <p class="rail-action"><strong>Automation boundary:</strong> ${esc(human(row.order_intake))}${(row.manual_capabilities || []).length ? ` Â· Manual: ${esc(row.manual_capabilities.map(human).join(", "))}` : ""}</p>
+      ${fields.length ? `<details class="proof-editor"><summary>Add or rotate credentials</summary><form class="proof-form" data-credential-form="${esc(row.slug)}">
+        ${fields.map((field) => `<label>${esc(field.label)}${field.required ? " *" : ""}<input type="password" name="credential_${esc(field.name)}" autocomplete="new-password" ${field.required && !field.configured ? "required" : ""} placeholder="${field.configured ? "Leave blank to keep configured value" : "Write-only"}"></label>`).join("")}
+        <label>Password<input type="password" name="password" autocomplete="current-password" required></label><label>TOTP code<input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+        <div class="proof-actions"><button type="submit">Save write-only credentials</button></div></form></details>` : ""}
+      <details class="proof-editor"><summary>Connection and proof controls</summary>
+        ${row.connection_test_mode !== "MANUAL" ? `<form class="proof-form" data-test-form="${esc(row.slug)}"><p class="wide rail-action">Runs the smallest supported authoritative provider check. It does not prove payout receipt.</p><label>Password<input type="password" name="password" required></label><label>TOTP code<input name="code" required></label><div class="proof-actions"><button type="submit">Test connection</button></div></form>` : `<p class="rail-action">No verified read-only API test is enabled. This account stays on a manual/proof-required boundary.</p>`}
+        <form class="proof-form" data-integration-proof-form="${esc(row.slug)}"><label>Proof type<select name="proof_type">${["ACCOUNT", "KYC", "PUBLICATION", "PAYOUT_CONFIGURATION", "PAYOUT_RECEIPT"].map((item) => option(item, "")).join("")}</select></label><label>Non-secret proof reference<input name="proof_reference" maxlength="255" required></label><label>Password<input type="password" name="password" required></label><label>TOTP code<input name="code" required></label><div class="proof-actions"><button type="submit">Submit for verification</button></div></form>
+        ${configured ? `<form class="proof-form" data-revoke-form="${esc(row.slug)}"><p class="wide rail-action blocked-copy">Revocation immediately disarms connection, live readiness, and dependent automation while preserving financial history.</p><label>Password<input type="password" name="password" required></label><label>TOTP code<input name="code" required></label><div class="proof-actions"><button type="submit">Revoke credentials</button></div></form>` : ""}
+      </details>
+    </article>`;
+  }
+
   function routeCard(row, railsBySlug) {
     const statuses = ["UNMAPPED", "PROPOSED", "VERIFIED", "BLOCKED", "PAUSED"];
     const candidateSlugs = row.candidate_rails || [];
@@ -147,6 +178,7 @@
     const accounts = data.account_setup || {};
     const routes = data.settlement_routes || [];
     const routeMeta = data.settlement_route_meta || {};
+    const integrations = data.integration_accounts || {rows: [], meta: {}};
     const railsBySlug = Object.fromEntries(rows.map((row) => [row.slug, row]));
 
     root.innerHTML = `<div class="banking-hero">
@@ -163,6 +195,11 @@
       ${accountList("OPTIONAL", accounts.optional, "optional")}
     </div>
 
+    <section class="section-heading"><div><small>CANONICAL ACCOUNT CONTROL PLANE</small><h2>Credentials, connection tests and proof</h2></div><p>All credentials are write-only and encrypted. A saved credential is never the same as a verified connection, payout route, live proof or autonomy.</p></section>
+    <div class="route-summary"><strong>${esc(integrations.meta.connections_verified || 0)} connections verified</strong><span>${esc(integrations.meta.action_required || 0)} account(s) need action</span><span>Autonomy ${esc(integrations.meta.autonomy_state || "OFF")}</span></div>
+    <div class="rail-grid integration-grid">${(integrations.rows || []).map(integrationCard).join("")}</div>
+    <div class="banking-truth"><strong>Account truth:</strong> ${esc(integrations.meta.truth || "Every readiness gate remains independent and fail-closed.")}</div>
+
     <section class="section-heading"><div><small>OWNER RECEIPT RAILS</small><h2>Where earnings can land</h2></div><p>Sensitive destination setup stays inside each provider. The dashboard records status and non-secret proof only.</p></section>
     <div class="rail-grid">${rows.map(railCard).join("")}</div>
     <div class="banking-truth"><strong>Treasury truth:</strong> ${esc(meta.truth || "Payment and payout evidence remains fail-closed.")}</div>
@@ -177,8 +214,8 @@
     bindForms();
   }
 
-  async function load() {
-    if (loading) return;
+  async function load(force) {
+    if (loading && !force) return;
     loading = true;
     if (refreshButton) refreshButton.disabled = true;
     try {
@@ -211,6 +248,22 @@
   }
 
   function bindForms() {
+    root.querySelectorAll("form[data-credential-form]").forEach((form) => {
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault(); const fields = new FormData(form); const credentials = {};
+        form.querySelectorAll('input[name^="credential_"]').forEach((input) => { if (input.value) credentials[input.name.slice(11)] = input.value; });
+        try { await ensureCsrf(); const response = await fetch(`/api/integrations/${encodeURIComponent(form.dataset.credentialForm)}/credentials`, {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json", "X-CSRFToken": cookie("csrftoken")}, body: JSON.stringify({credentials, password: fields.get("password"), code: fields.get("code")})}); const body = await response.json(); if (!response.ok) throw new Error(human(body.error)); showToast("Credentials stored securely; connection remains unverified until tested"); await load(true); } catch (error) { showToast(error.message || "Credential update failed", "error"); } finally { form.reset(); }
+      });
+    });
+    root.querySelectorAll("form[data-test-form]").forEach((form) => {
+      form.addEventListener("submit", async (event) => { event.preventDefault(); const fields = new FormData(form); try { await ensureCsrf(); const response = await fetch(`/api/integrations/${encodeURIComponent(form.dataset.testForm)}/test`, {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json", "X-CSRFToken": cookie("csrftoken")}, body: JSON.stringify({password: fields.get("password"), code: fields.get("code")})}); const body = await response.json(); if (!response.ok) throw new Error((body.result && body.result.safe_message) || human(body.error)); showToast("Authoritative connection test passed; payout proof remains separate"); await load(true); } catch (error) { showToast(error.message || "Connection test failed", "error"); } finally { form.reset(); } });
+    });
+    root.querySelectorAll("form[data-integration-proof-form]").forEach((form) => {
+      form.addEventListener("submit", async (event) => { event.preventDefault(); const fields = new FormData(form); try { await ensureCsrf(); const response = await fetch(`/api/integrations/${encodeURIComponent(form.dataset.integrationProofForm)}/proof`, {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json", "X-CSRFToken": cookie("csrftoken")}, body: JSON.stringify({proof_type: fields.get("proof_type"), proof_reference: fields.get("proof_reference"), password: fields.get("password"), code: fields.get("code")})}); const body = await response.json(); if (!response.ok) throw new Error(human(body.error)); showToast("Proof submitted; it is not verified or live until authoritative confirmation"); await load(true); } catch (error) { showToast(error.message || "Proof submission failed", "error"); } finally { form.reset(); } });
+    });
+    root.querySelectorAll("form[data-revoke-form]").forEach((form) => {
+      form.addEventListener("submit", async (event) => { event.preventDefault(); const fields = new FormData(form); try { await ensureCsrf(); const response = await fetch(`/api/integrations/${encodeURIComponent(form.dataset.revokeForm)}/credentials`, {method: "DELETE", credentials: "same-origin", headers: {"Content-Type": "application/json", "X-CSRFToken": cookie("csrftoken")}, body: JSON.stringify({password: fields.get("password"), code: fields.get("code")})}); const body = await response.json(); if (!response.ok) throw new Error(human(body.error)); showToast("Credentials revoked and dependent automation disarmed"); await load(true); } catch (error) { showToast(error.message || "Credential revocation failed", "error"); } finally { form.reset(); } });
+    });
     root.querySelectorAll("form[data-proof-form]").forEach((form) => {
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -239,7 +292,7 @@
           const body = await response.json();
           if (!response.ok) throw new Error(human(body.error || "payment_rail_update_failed"));
           showToast("Treasury account proof updated");
-          await load();
+          await load(true);
         } catch (error) {
           showToast(error.message || "Treasury account update failed", "error");
         } finally {
@@ -273,7 +326,7 @@
           const body = await response.json();
           if (!response.ok) throw new Error(human(body.error || "settlement_route_update_failed"));
           showToast("Market receipt route updated");
-          await load();
+          await load(true);
         } catch (error) {
           showToast(error.message || "Market receipt route update failed", "error");
         } finally {

@@ -8,6 +8,7 @@ from control.services.jobs import transition_job
 from control.services.locks import JobLockUnavailable, acquire_job_lock, release_job_lock
 from control.services.workload_policy import require_allowed
 from markets.base import MarketAdapter
+from planning.acceptance import AcceptanceGateError, require_submission_ready
 
 
 class SubmissionError(RuntimeError):
@@ -40,6 +41,10 @@ def submit_qa_passed_job(*, adapter: MarketAdapter, job_id, node_id: str = "VPS1
     execution = Execution.objects.filter(job=job, status="QA_PASSED").order_by("-attempt").first()
     if not execution:
         raise SubmissionError("no QA-passed execution is available")
+    try:
+        require_submission_ready(execution)
+    except AcceptanceGateError as exc:
+        raise SubmissionError(f"acceptance gate blocked submission: {', '.join(exc.reason_codes)}") from exc
     artifact = Artifact.objects.filter(job=job, execution=execution).order_by("created_at").first()
     if not artifact:
         raise SubmissionError("QA-passed execution has no persisted artifact")

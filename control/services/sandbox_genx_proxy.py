@@ -96,7 +96,12 @@ def proxy_chat_completion(token: str, body: dict[str, Any], *, session=None, cac
         estimated_credits=estimated,
         max_allowed_credits=claims.max_credits,
         request_key=request_key,
-        metadata={"transport": "sandbox-openai-proxy", "sandbox_nonce": claims.nonce, "model_requested": claims.model},
+        metadata={
+            "transport": "sandbox-openai-proxy",
+            "sandbox_nonce": claims.nonce,
+            "model_requested": claims.model,
+            "routing_override_reason": "CONTROLLER_SIGNED_ECONOMIC_SELECTION",
+        },
     )
     if not created:
         cached = _cached_response(cache, request_key)

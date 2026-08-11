@@ -103,20 +103,20 @@ class OwnerUIIntegrationTests(TestCase):
                 self.assertEqual(response.status_code, 302)
                 self.assertEqual(response.url, "/login/")
 
-    def test_normal_and_advanced_owner_pages_render_for_authenticated_owner(self):
+    def test_final_owner_ia_renders_and_legacy_system_routes_redirect_to_settings(self):
         self.authenticate()
-        sections = (
-            "jobs", "agents", "money", "alerts", "system", "genx", "nodes",
-            "storage", "performance", "logs", "security", "settings", "live-work", "earnings", "treasury",
-        )
+        sections = ("jobs", "agents", "money", "alerts", "settings", "live-work", "earnings", "treasury")
         overview = self.client.get("/ops/overview/")
         self.assertEqual(overview.status_code, 200)
         self.assertContains(overview, 'data-section="overview"')
-        self.assertContains(overview, "System &amp; Settings")
-        self.assertContains(overview, "EARNING OPERATIONS")
+        self.assertContains(overview, "OWNER CONTROL CENTRE")
         self.assertContains(overview, ">Work<")
+        self.assertContains(overview, "Markets &amp; Accounts")
+        self.assertContains(overview, ">Agents<")
         self.assertContains(overview, ">Earnings<")
-        self.assertContains(overview, "Treasury &amp; Settlement")
+        self.assertContains(overview, ">Treasury<")
+        self.assertContains(overview, ">Alerts<")
+        self.assertContains(overview, ">Settings<")
         self.assertContains(overview, 'href="/ops/overview/"')
         for section in sections:
             with self.subTest(section=section):
@@ -124,13 +124,15 @@ class OwnerUIIntegrationTests(TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertContains(response, f'data-section="{section}"')
 
-        markets = self.client.get("/ops/markets/")
-        self.assertEqual(markets.status_code, 200)
-        self.assertContains(markets, "Only owner-usable earning routes belong here")
+        for section in ("system", "genx", "nodes", "storage", "performance", "logs", "security"):
+            response = self.client.get(f"/ops/{section}/")
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.url, f"/ops/settings/?view={section}")
 
+        markets = self.client.get("/ops/markets/")
+        self.assertContains(markets, 'data-section="markets"')
         treasury = self.client.get("/ops/banking/")
-        self.assertEqual(treasury.status_code, 200)
-        self.assertContains(treasury, "Open accounts, prove payout routes")
+        self.assertContains(treasury, 'data-section="treasury"')
 
     def test_ui_assets_are_discoverable_and_preserve_settled_cash_language(self):
         self.assertIsNotNone(finders.find("control/app.css"))
@@ -148,6 +150,10 @@ class OwnerUIIntegrationTests(TestCase):
         self.assertIn("animation:ticker 12s linear infinite", landing_styles)
         self.assertIn(".login-link", landing_styles)
         self.assertIn("color:#fff", landing_styles)
+        self.assertIn("Final owner-control-centre legibility", app_styles)
+        self.assertIn("max-height:100dvh;overflow-y:auto", app_styles)
+        self.assertIn("function openAccountDrawer", app_script)
+        self.assertIn("Acceptance &amp; submission gate", app_script)
         self.assertIn(".brand-ai{color:var(--blue)}", landing_styles)
         self.assertNotIn("fake", app_script.lower())
 

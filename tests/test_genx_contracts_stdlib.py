@@ -7,6 +7,7 @@ from gateways.genx.contracts import (
     available_credits,
     effective_reserved_credits,
     price_hint,
+    pricing_credit_estimate,
     pricing_index,
     rank_models,
     records,
@@ -37,7 +38,16 @@ class GenXContractTests(unittest.TestCase):
         payload = {"pricing": {"m1": {"input_credits_per_million": "12.5", "output_credits_per_million": "30"}}}
         indexed = pricing_index(payload)
         self.assertIn("m1", indexed)
-        self.assertEqual(price_hint(indexed["m1"]), Decimal("12.5"))
+        self.assertIsNone(price_hint(indexed["m1"]))
+        self.assertEqual(
+            pricing_credit_estimate(
+                indexed["m1"],
+                {"estimated_input_tokens": 1_000_000, "max_output_tokens": 0},
+                historical_average=None,
+                reserved_envelope=Decimal("99"),
+            ),
+            Decimal("12.5"),
+        )
 
     def test_pricing_index_supports_structured_data_rows(self):
         payload = {
@@ -52,7 +62,7 @@ class GenXContractTests(unittest.TestCase):
         }
         indexed = pricing_index(payload)
         self.assertEqual(indexed["text-model-a"], payload["data"][0])
-        self.assertEqual(price_hint(indexed["text-model-a"]), Decimal("1"))
+        self.assertIsNone(price_hint(indexed["text-model-a"]))
 
     def test_credits_and_result_usage_are_extracted_without_inventing_cost(self):
         self.assertEqual(available_credits({"wallet": {"available_credits": "912.25"}}), Decimal("912.25"))

@@ -8,12 +8,12 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from django.db import transaction
-from django.db.models import Sum
 from django.utils import timezone
 
-from control.models import AuditEvent, GenXCall, Job, QAResult, Submission
+from control.models import AuditEvent, Execution, GenXCall, Job, QAResult, Submission
 from planning.asset_policy import AssetPolicyError, inspect_asset, safe_asset_name, validate_role
-from planning.models import JobAsset, JobAssetManifest, RepositorySnapshot, WorkPlan, WorkPlanStep, WorkPlanStepDependency
+from planning.models import AcceptanceEvaluation, JobAsset, JobAssetManifest, RepositorySnapshot, WorkPlan, WorkPlanStep, WorkPlanStepDependency
+from planning.acceptance import acceptance_execution_payload, compile_acceptance_contract
 from workers.registry import WorkerRegistryError, operation_spec
 from control.services.workload_policy import evaluate_job
 
@@ -526,6 +526,7 @@ def plan_awarded_job(job_id) -> WorkPlan:
     plan.max_repair_attempts = max(0, min(int(os.getenv("MAX_DETERMINISTIC_REPAIR_ATTEMPTS", "1")), 3))
     plan.last_error_code = ""
     plan.save()
+    compile_acceptance_contract(job, plan)
     AuditEvent.objects.create(
         event_type="job.plan_ready" if plan.status == WorkPlan.Status.READY else "job.plan_blocked",
         actor="deterministic-planner",
@@ -698,6 +699,8 @@ def _execute_composite_plan(plan_id: int) -> WorkPlan:
                 plan.save(update_fields=["status", "reason_codes", "updated_at"])
                 return plan
             inputs = _composite_inputs(step)
+            contract = compile_acceptance_contract(plan.job, plan)
+            inputs["acceptance_contract"] = acceptance_execution_payload(contract)
             step.attempt += 1
             if repair:
                 step.repair_attempts += 1
@@ -711,7 +714,6 @@ def _execute_composite_plan(plan_id: int) -> WorkPlan:
             plan.save(update_fields=["execution_attempts", "repair_attempts", "status", "updated_at"])
             job_id = plan.job_id
             worker_id = f"{step.worker_class}-{str(job_id)[:8]}-{step.key[:24]}"
-            operation = step.operation
             worker_class = step.worker_class
             step_id = step.id
             allow_repair = repair or plan.job.state == Job.State.EXECUTING
@@ -740,13 +742,20 @@ def _execute_composite_plan(plan_id: int) -> WorkPlan:
         qa = QAResult.objects.filter(execution=execution).order_by("-created_at").first()
         step.execution = execution
         step.qa_result = qa
-        step.actual_cost = GenXCall.objects.filter(
+        step_calls = list(GenXCall.objects.filter(
             job_id=job_id,
             worker_id=execution.worker_id,
             created_at__gte=execution.started_at,
             created_at__lte=execution.ended_at or timezone.now(),
-        ).aggregate(total=Sum("cost_equivalent"))["total"] or Decimal("0")
+        ))
+        step.actual_cost = sum((call.cost_equivalent or Decimal("0") for call in step_calls), Decimal("0"))
         step.output_artifacts.set(execution.artifacts.all())
+        if any(call.cost_equivalent is None for call in step_calls):
+            step.status = WorkPlanStep.Status.BLOCKED
+            step.reason_codes = ["GENX_MONETARY_COST_UNRESOLVED"]
+            step.save(update_fields=["execution", "qa_result", "actual_cost", "status", "reason_codes", "updated_at"])
+            WorkPlan.objects.filter(pk=plan_id).update(status=WorkPlan.Status.BLOCKED, reason_codes=[f"COMPOSITE_STEP_COST_UNRESOLVED:{step.key}"])
+            return WorkPlan.objects.get(pk=plan_id)
         if execution.status == "QA_PASSED" and qa and qa.passed:
             step.status = WorkPlanStep.Status.QA_PASSED
             step.reason_codes = []
@@ -783,6 +792,29 @@ def execute_work_plan(plan_id: int) -> WorkPlan:
             plan.reason_codes = [*plan.reason_codes, "MAX_REPAIR_ATTEMPTS_REACHED"]
             plan.save(update_fields=["status", "reason_codes", "updated_at"])
             return plan
+        if repair and plan.max_repair_cost > 0:
+            prior_repairs = Execution.objects.filter(job=plan.job, attempt__gt=1)
+            repair_cost = Decimal("0")
+            for prior in prior_repairs:
+                if prior.started_at is None:
+                    continue
+                prior_calls = list(GenXCall.objects.filter(
+                    job=plan.job,
+                    created_at__gte=prior.started_at,
+                    created_at__lte=prior.ended_at or timezone.now(),
+                ))
+                if any(call.cost_equivalent is None for call in prior_calls):
+                    plan.status = WorkPlan.Status.BLOCKED
+                    plan.reason_codes = [*plan.reason_codes, "GENX_MONETARY_COST_UNRESOLVED"]
+                    plan.save(update_fields=["status", "reason_codes", "updated_at"])
+                    return plan
+                repair_cost += sum((call.cost_equivalent or Decimal("0") for call in prior_calls), Decimal("0"))
+            estimated_next = getattr(getattr(plan.job, "jobscore", None), "expected_genx_cost", Decimal("0"))
+            if repair_cost + estimated_next > plan.max_repair_cost:
+                plan.status = WorkPlan.Status.BLOCKED
+                plan.reason_codes = [*plan.reason_codes, "REPAIR_ECONOMIC_BUDGET_EXCEEDED"]
+                plan.save(update_fields=["status", "reason_codes", "updated_at"])
+                return plan
         plan.execution_attempts += 1
         if repair:
             plan.repair_attempts += 1
@@ -791,6 +823,18 @@ def execute_work_plan(plan_id: int) -> WorkPlan:
         plan.save(update_fields=["execution_attempts", "repair_attempts", "status", "last_error_code", "updated_at"])
         job_id = plan.job_id
         inputs = dict(plan.input_spec)
+        contract = compile_acceptance_contract(plan.job, plan)
+        inputs["acceptance_contract"] = acceptance_execution_payload(contract)
+        if repair:
+            inputs["repair_attempt"] = plan.repair_attempts
+            inputs["max_repair_cost"] = str(plan.max_repair_cost)
+            latest_evaluation = (
+                AcceptanceEvaluation.objects.filter(execution__job=plan.job)
+                .order_by("-created_at")
+                .first()
+            )
+            if latest_evaluation:
+                inputs["repair_targets"] = latest_evaluation.critical_failures
         worker_id = f"{plan.worker_class}-{str(job_id)[:8]}"
         worker_class = plan.worker_class
 

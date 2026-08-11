@@ -172,6 +172,7 @@ def _worker_registry(*, ci_proven: bool) -> AcceptanceCriterion:
         "advanced_structured_data", "spreadsheet_reporting", "data_analysis", "technical_documentation", "content_copy", "seo_audit",
         "presentations", "document_production", "public_web_data", "web_output", "defensive_code_review", "customer_support",
         "synthetic_data", "ai_safety_research",
+        "image_product",
     }
     specs = all_specs()
     actual = {spec.worker_class for spec in specs}
@@ -183,7 +184,7 @@ def _worker_registry(*, ci_proven: bool) -> AcceptanceCriterion:
 
 def _dashboard_contract(*, ci_proven: bool) -> AcceptanceCriterion:
     expected = {
-        "overview", "live-work", "agents", "markets", "earnings", "treasury", "genx",
+        "overview", "live-work", "agents", "markets", "accounts", "factory", "earnings", "treasury", "genx",
         "nodes", "storage", "performance", "logs", "alerts", "settings", "security",
     }
     if set(SECTIONS) != expected:

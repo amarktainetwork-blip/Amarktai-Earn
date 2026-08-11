@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from control import banking_views, channel_admin_views, channel_views, lemon_views, market_views, public_views, views, webhooks
+from control import banking_views, channel_admin_views, channel_views, integration_views, lemon_views, market_views, paystack_views, public_views, views, webhooks
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -9,12 +9,22 @@ urlpatterns = [
     path("", public_views.landing_page, name="landing"),
     path("terms/", public_views.terms_page, name="terms"),
     path("ops/overview/", views.overview_page, name="overview"),
-    path("ops/banking/", banking_views.banking_page, name="banking"),
-    path("ops/markets/", market_views.markets_page, name="markets"),
+    path("ops/banking/", views.treasury_page, name="banking"),
+    path("ops/treasury/", views.treasury_page, name="treasury"),
+    path("ops/markets/", views.markets_accounts_page, name="markets"),
     path("ops/<slug:section>/", views.ops_page, name="ops_page"),
     path("api/banking/rails", banking_views.payment_rails_api, name="payment_rails_api"),
     path("api/banking/rails/<slug:slug>/proof", banking_views.payment_rail_proof_api, name="payment_rail_proof_api"),
     path("api/banking/routes/<slug:market_slug>/proof", banking_views.market_settlement_route_api, name="market_settlement_route_api"),
+    path("api/integrations/accounts", integration_views.integration_accounts_api, name="integration_accounts_api"),
+    path("api/integrations/<slug:slug>/credentials", integration_views.integration_credentials_api, name="integration_credentials_api"),
+    path("api/integrations/<slug:slug>/test", integration_views.integration_connection_test_api, name="integration_connection_test_api"),
+    path("api/integrations/<slug:slug>/proof", integration_views.integration_proof_submission_api, name="integration_proof_submission_api"),
+    path("api/integrations/<slug:slug>/proof-run", integration_views.integration_proof_run_api, name="integration_proof_run_api"),
+    path("api/product-factory", integration_views.product_factory_api, name="product_factory_api"),
+    path("api/product-factory/policy", integration_views.product_factory_policy_api, name="product_factory_policy_api"),
+    path("api/product-factory/cycle", integration_views.product_factory_cycle_api, name="product_factory_cycle_api"),
+    path("api/product-factory/products/<slug:product_slug>/publication-proof", integration_views.product_factory_publication_api, name="product_factory_publication_api"),
     path("api/markets/controls", market_views.market_controls_api, name="market_controls_api"),
     path("api/markets/<slug:market_slug>/proof", market_views.market_compliance_proof_api, name="market_compliance_proof_api"),
     path("api/markets/<slug:market_slug>/operating-state", market_views.market_operating_state_api, name="market_operating_state_api"),
@@ -38,6 +48,9 @@ urlpatterns = [
     path("api/channels/rapidapi/orders/<uuid:order_id>", channel_views.rapidapi_order_api, name="rapidapi_order_api"),
     path("api/channels/rapidapi/orders/<uuid:order_id>/artifacts/<int:artifact_id>", channel_views.rapidapi_order_artifact_api, name="rapidapi_order_artifact_api"),
     path("webhooks/lemon-squeezy/", lemon_views.lemon_squeezy_webhook_api, name="lemon_squeezy_webhook_api"),
+    path("api/commerce/paystack/<slug:offering_slug>/checkout", paystack_views.paystack_checkout_api, name="paystack_checkout_api"),
+    path("api/commerce/paystack/<slug:offering_slug>/proof-checkout", paystack_views.paystack_checkout_proof_api, name="paystack_checkout_proof_api"),
+    path("webhooks/paystack/", paystack_views.paystack_webhook_api, name="paystack_webhook_api"),
     path("intake/<str:token>/", channel_views.inbound_intake_page, name="inbound_intake_page"),
     path("api/ops/<slug:section>", views.ops_api, name="ops_api"),
     path("api/auth/csrf", views.csrf_cookie, name="csrf"),

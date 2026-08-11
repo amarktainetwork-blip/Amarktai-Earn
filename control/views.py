@@ -36,10 +36,11 @@ PAGE_META = {
     "jobs": ("Jobs", "Live work, delivery progress, and payout state"),
     "live-work": ("Jobs", "Live work, delivery progress, and payout state"),
     "agents": ("Agents", "Your digital workforce and runtime readiness"),
-    "money": ("Money", "Settled cash, pending payouts, costs, and ledger truth"),
+    "money": ("Earnings", "Settled cash, pending payouts, costs, and ledger truth"),
     "earnings": ("Payouts", "Detailed earnings and settlement lifecycle"),
     "treasury": ("Treasury", "Balances and the advanced accounting ledger"),
-    "markets": ("Markets", "Connection, policy, and payout readiness"),
+    "markets": ("Markets & Accounts", "Accounts, connections, work capability, payout proof, and market readiness"),
+    "accounts": ("Markets & Accounts", "Canonical integration-account readiness"),
     "alerts": ("Alerts", "Meaningful owner attention and resolved events"),
     "system": ("System Overview", "Infrastructure, AI runtime, and operating health"),
     "genx": ("AI / GenX", "Model usage, credits, and call reconciliation"),
@@ -48,7 +49,7 @@ PAGE_META = {
     "performance": ("Performance", "Execution quality, utilization, and growth evidence"),
     "logs": ("Audit Logs", "Technical events and correlation evidence"),
     "security": ("Security", "Owner access, sessions, and protected secret state"),
-    "settings": ("Settings", "Persisted operating configuration"),
+    "settings": ("Settings", "Connections, limits, AI, security, system health, and audit evidence"),
 }
 
 
@@ -90,17 +91,28 @@ def overview_page(request):
     return ops_page(request, "overview")
 
 
+def markets_accounts_page(request):
+    return ops_page(request, "markets")
+
+
+def treasury_page(request):
+    return ops_page(request, "treasury")
+
+
 def ops_page(request, section="overview"):
     if not getattr(request, "owner", None):
         return redirect("login")
     if section not in PAGE_SECTIONS:
         return JsonResponse({"error": "unknown_section"}, status=404)
+    consolidated = {"system", "genx", "nodes", "storage", "performance", "logs", "security"}
+    if section in consolidated:
+        return redirect(f"/ops/settings/?view={section}")
     title, description = PAGE_META.get(section, (section.replace("-", " ").title(), "Owner operations"))
     return render(request, "control/operations.html", {
         "section": section,
         "page_title": title,
         "page_description": description,
-        "advanced_section": section in {"system", "genx", "nodes", "storage", "performance", "logs", "security", "settings", "earnings", "treasury"},
+        "advanced_section": False,
     })
 
 
