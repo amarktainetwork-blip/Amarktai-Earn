@@ -42,10 +42,15 @@ services:
     env_file: .env
     command: /app/scripts/start-web.sh
     healthcheck:
-      test: ["CMD", "python", "manage.py", "healthcheck"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1', 8000), 5); s.close()"
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 120s
     volumes:
       - artifacts:/var/lib/amarktai-earn/artifacts
       - job_data:/var/lib/amarktai-earn/jobs
