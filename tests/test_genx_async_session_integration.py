@@ -6,7 +6,7 @@ from django.test import TestCase
 
 from control.models import Alert, AuditEvent, GenXCall, GenXModelCatalog, Job, JobScore, Marketplace, ModelStat, Worker
 from gateways.genx.service import GenXGateway
-from workers.genx_support import research_with_web
+from workers.genx_support import GenXWorkerError, capability_model_ids, research_with_web
 
 
 class FakeAsyncSessionClient:
@@ -79,7 +79,18 @@ class GenXAsyncSessionTruthTests(TestCase):
             max_genx_credits="2",
         )
         Worker.objects.create(id="async-worker", worker_class="research", version="1", status="READY")
-        GenXModelCatalog.objects.create(model_id="gpt-5-nano", category="text", active=True)
+        GenXModelCatalog.objects.create(
+            model_id="gpt-5-nano",
+            category="text",
+            active=True,
+            model_payload={"capabilities": ["web_search", "reasoning"]},
+        )
+        GenXModelCatalog.objects.create(
+            model_id="plain-text",
+            category="text",
+            active=True,
+            model_payload={"capabilities": ["reasoning"]},
+        )
 
     def run_session(self, client, request_key="async-request"):
         return GenXGateway(client=client).run_session(
@@ -244,6 +255,18 @@ class GenXAsyncSessionTruthTests(TestCase):
         self.assertEqual(recovered.requested_metadata["remote_job_id"], "job-1")
         self.assertEqual(client.messages, 0)
 
+    def test_research_capability_filter_uses_provider_truth_and_never_broadens(self):
+        self.assertEqual(capability_model_ids("web_search"), ["gpt-5-nano"])
+        GenXModelCatalog.objects.filter(model_id="gpt-5-nano").update(
+            model_payload={"capabilities": ["reasoning"]}
+        )
+        with self.assertRaisesRegex(GenXWorkerError, "web_search"):
+            capability_model_ids("web_search")
+        self.assertEqual(
+            capability_model_ids("not-a-capability", fallback_category="text"),
+            ["gpt-5-nano", "plain-text"],
+        )
+
     def test_research_worker_consumes_explicit_assistant_text_with_remote_job_identity(self):
         call = SimpleNamespace(
             external_job_id="job-1",
@@ -257,7 +280,13 @@ class GenXAsyncSessionTruthTests(TestCase):
                 "citations": [{"url": "https://example.com/source"}],
             }]},
         }
-        gateway = SimpleNamespace(run_session=lambda **kwargs: (call, response))
+        captured = {}
+
+        def run_session(**kwargs):
+            captured.update(kwargs)
+            return call, response
+
+        gateway = SimpleNamespace(run_session=run_session)
         request = SimpleNamespace(
             job_id=self.job.id,
             worker_id="async-worker",
@@ -269,6 +298,8 @@ class GenXAsyncSessionTruthTests(TestCase):
         self.assertIn("Evidence-backed answer", text)
         self.assertEqual(sources, ["https://example.com/source"])
         self.assertIs(returned_call, call)
+        self.assertEqual(captured["eligible_model_ids"], ["gpt-5-nano"])
+        self.assertEqual(captured["tools"], [{"type": "web_search"}])
 
     def test_ambiguous_historical_session_remains_unresolved(self):
         ambiguous = GenXCall.objects.create(

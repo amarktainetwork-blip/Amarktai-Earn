@@ -39,16 +39,23 @@ def credit_envelope(job_id, inputs: dict[str, Any]) -> tuple[Decimal, Decimal]:
     return min(estimated, budget), min(per_call, budget)
 
 
+def _normalize_catalog_text(value: Any) -> str:
+    """Normalize provider metadata spelling without inventing capabilities."""
+    return " ".join(str(value).casefold().replace("_", " ").replace("-", " ").split())
+
+
 def _searchable_model_text(row: GenXModelCatalog) -> str:
-    return " ".join(
-        [row.model_id, row.category, row.provider, json.dumps(row.model_payload, sort_keys=True, default=str)]
-    ).casefold()
+    return _normalize_catalog_text(
+        " ".join(
+            [row.model_id, row.category, row.provider, json.dumps(row.model_payload, sort_keys=True, default=str)]
+        )
+    )
 
 
 def catalog_supports(*keywords: str, fallback_category: str | None = None) -> bool:
     """Return whether the active catalog can satisfy a worker's actual routing contract."""
     rows = list(GenXModelCatalog.objects.filter(active=True))
-    wanted = tuple(word.casefold() for word in keywords if word)
+    wanted = tuple(_normalize_catalog_text(word) for word in keywords if word)
     if wanted and any(any(word in _searchable_model_text(row) for word in wanted) for row in rows):
         return True
     return bool(
@@ -69,7 +76,7 @@ def select_specialist(*keywords: str, fallback_category: str | None = None) -> G
 def capability_model_ids(*keywords: str, fallback_category: str | None = None) -> list[str]:
     """Filter the live catalogue by capability without making an economic selection."""
     rows = list(GenXModelCatalog.objects.filter(active=True))
-    wanted = tuple(word.casefold() for word in keywords if word)
+    wanted = tuple(_normalize_catalog_text(word) for word in keywords if word)
     matched = [row for row in rows if wanted and any(word in _searchable_model_text(row) for word in wanted)]
     if matched:
         return sorted(row.model_id for row in matched)
@@ -142,7 +149,10 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
     )
     message = f"Research task: {query}\n\nRequirements:\n{requirements or 'Provide the strongest evidence and note uncertainty.'}"
     job = Job.objects.get(pk=request.job_id)
-    eligible = capability_model_ids("web_search", "research", fallback_category="text")
+    # GenX web search is a model capability, not a generic property of every text model.
+    # Select only models whose live provider catalog advertises web_search; do not
+    # silently broaden to every text model or hard-code a particular provider/model.
+    eligible = capability_model_ids("web_search")
     call, response = gateway.run_session(
         job_id=request.job_id,
         worker_id=request.worker_id,
