@@ -180,14 +180,14 @@ _SPECS: tuple[WorkerSpec, ...] = (
     ),
     WorkerSpec(
         worker_class="media",
-        version="1.0.0",
+        version="1.1.0",
         factory="workers.media.worker.MediaWorker",
         operations=(
             "image_resize", "image_center_crop", "image_convert", "image_compress", "image_thumbnail",
-            "media_trim", "media_transcode", "media_extract_audio",
+            "media_trim", "media_transcode", "media_extract_audio", "media_concat",
         ),
         qa_profile="media",
-        description="Bounded deterministic image, audio, and video transformations",
+        description="Bounded deterministic image, audio, and video transformations including multi-clip video assembly",
         input_suffixes=(".jpg", ".jpeg", ".png", ".webp", ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm"),
         requires_genx=False,
         runtime_commands=("ffmpeg", "ffprobe"),
