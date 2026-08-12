@@ -18,11 +18,19 @@ class OwnerPreLiveContracts(unittest.TestCase):
             max_genx_credits=Decimal("100"), monetary_cost_per_credit=Decimal("1"),
         ), [])
 
-    def test_exploration_is_explicit_and_bounded(self):
+    def test_cold_start_is_provider_eligible_and_still_budget_bounded(self):
         model = ModelCandidate("new", price_hint=Decimal("0.01"))
-        self.assertEqual(route_models([model], expected_revenue=Decimal("100"), max_genx_credits=Decimal("1"), allow_exploration=False), [])
-        explored = route_models([model], expected_revenue=Decimal("100"), max_genx_credits=Decimal("1"), allow_exploration=True, exploration_fraction=Decimal("0.05"))
-        self.assertTrue(explored and explored[0].exploration)
+        routed = route_models(
+            [model], expected_revenue=Decimal("100"), max_genx_credits=Decimal("1"),
+            allow_exploration=False,
+        )
+        self.assertTrue(routed and routed[0].exploration)
+
+        oversized = ModelCandidate("oversized", price_hint=Decimal("0.75"))
+        self.assertEqual(route_models(
+            [oversized], expected_revenue=Decimal("100"), max_genx_credits=Decimal("1"),
+            allow_exploration=False,
+        ), [])
 
 
 if __name__ == "__main__":
