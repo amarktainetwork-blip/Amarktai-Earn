@@ -1,12 +1,19 @@
+from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.utils import timezone
 
 from control.models import AuditEvent, GenXCall, GenXModelCatalog, Job, JobScore, Marketplace, Worker
 from gateways.genx.client import GenXError
-from workers.genx_support import GenXWorkerError, research_web_model_ids, research_with_web
+from workers.genx_support import (
+    GenXWorkerError,
+    _record_research_remote_provider_transient,
+    research_web_model_ids,
+    research_with_web,
+)
 
 
 class GenXWebSearchNegotiationTests(TestCase):
@@ -277,6 +284,31 @@ class GenXWebSearchNegotiationTests(TestCase):
                 metadata__http_status=524,
             ).exists()
         )
+        self.assertEqual(research_web_model_ids(), ["b-model"])
+
+    def test_historical_transient_cooldown_starts_when_evidence_is_observed(self):
+        failed_call, failed_response = self._record_remote_failure(
+            model="a-model",
+            request_key="historical-524",
+            http_status=524,
+        )
+        GenXCall.objects.filter(pk=failed_call.pk).update(
+            created_at=timezone.now() - timedelta(hours=2)
+        )
+        failed_call.refresh_from_db()
+
+        self.assertTrue(
+            _record_research_remote_provider_transient(
+                failed_call,
+                failed_response,
+            )
+        )
+
+        event = AuditEvent.objects.get(
+            event_type="genx.session_remote_provider_transient",
+            metadata__call_id=str(failed_call.id),
+        )
+        self.assertGreater(event.created_at, failed_call.created_at + timedelta(hours=1))
         self.assertEqual(research_web_model_ids(), ["b-model"])
 
     def test_terminal_remote_5xx_with_actual_billing_aborts_without_failover(self):
