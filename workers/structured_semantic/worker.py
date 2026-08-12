@@ -62,9 +62,15 @@ class StructuredSemanticWorker(Worker):
                 return WorkResult(ok=False, error="classification output must be a JSON object")
             if operation == "classify_text" and not str(payload.get("label") or "").strip():
                 return WorkResult(ok=False, error="classification output is missing label")
+            envelope = {
+                "valid": True,
+                "errors": [],
+                "operation": operation,
+                "data": payload,
+            }
             request.workspace.mkdir(parents=True, exist_ok=True)
             target = request.workspace / f"{operation.replace('_', '-')}.json"
-            target.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+            target.write_text(json.dumps(envelope, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
             return WorkResult(
                 ok=True,
                 artifacts=[target],
