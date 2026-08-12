@@ -263,6 +263,10 @@ class GenXAsyncSessionTruthTests(TestCase):
         with self.assertRaisesRegex(GenXWorkerError, "web_search"):
             capability_model_ids("web_search")
         self.assertEqual(
+            capability_model_ids("web_search", fallback_category="text"),
+            ["gpt-5-nano", "plain-text"],
+        )
+        self.assertEqual(
             capability_model_ids("not-a-capability", fallback_category="text"),
             ["gpt-5-nano", "plain-text"],
         )
@@ -293,12 +297,15 @@ class GenXAsyncSessionTruthTests(TestCase):
             attempt=1,
             inputs={},
         )
+        GenXModelCatalog.objects.filter(category="text").update(
+            model_payload={"capabilities": ["reasoning"]}
+        )
         with patch("workers.genx_support.GenXGateway", return_value=gateway):
             text, sources, returned_call = research_with_web(request, query="current evidence")
         self.assertIn("Evidence-backed answer", text)
         self.assertEqual(sources, ["https://example.com/source"])
         self.assertIs(returned_call, call)
-        self.assertEqual(captured["eligible_model_ids"], ["gpt-5-nano"])
+        self.assertEqual(captured["eligible_model_ids"], ["gpt-5-nano", "plain-text"])
         self.assertEqual(captured["tools"], [{"type": "web_search"}])
 
     def test_ambiguous_historical_session_remains_unresolved(self):
