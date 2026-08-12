@@ -7,7 +7,7 @@ from django.test import TestCase
 from control.jwt_auth import issue_access
 from control.models import Job, Marketplace
 from control.ops import agents_snapshot, live_work_snapshot, overview_snapshot
-from workers.registry import all_operation_contracts
+from workers.registry import all_operation_contracts, capability_coverage
 
 
 class FrontendOwnerConsoleCompletionTests(TestCase):
@@ -63,9 +63,13 @@ class FrontendOwnerConsoleCompletionTests(TestCase):
     def test_registry_capability_payload_is_dynamic_complete_and_truthful(self):
         payload = agents_snapshot()
         contracts = all_operation_contracts()
+        coverage = capability_coverage()["summary"]
         self.assertEqual(payload["meta"]["TOTAL_REGISTERED_OPERATIONS"], len(contracts))
         self.assertEqual(len(payload["operations"]), len(contracts))
-        self.assertEqual(payload["meta"]["OPERATIONS_BLOCKED_BY_EXTERNAL_OWNER_ACTION"], 12)
+        self.assertEqual(
+            payload["meta"]["OPERATIONS_BLOCKED_BY_EXTERNAL_OWNER_ACTION"],
+            coverage["OPERATIONS_BLOCKED_BY_EXTERNAL_OWNER_ACTION"],
+        )
         self.assertEqual(
             payload["meta"]["OPERATIONS_READY"] + payload["meta"]["OPERATIONS_BLOCKED_BY_EXTERNAL_OWNER_ACTION"],
             len(contracts),
