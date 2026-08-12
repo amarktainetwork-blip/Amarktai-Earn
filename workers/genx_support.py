@@ -128,6 +128,45 @@ def _confirmed_research_tool_rejection(call: GenXCall | None) -> bool:
     return bool(remote_job_id) and str(evidence.get("phase") or "") == "POLL_REMOTE_JOB"
 
 
+def _research_transient_observed_at(call: GenXCall | None):
+    """Return the observation time for authoritative zero-cost provider 5xx evidence."""
+    if call is None or call.task_class != "research_web" or call.status != "FAILED":
+        return None
+    metadata = call.requested_metadata or {}
+    if str(metadata.get("billing_truth") or "") != "NOT_APPLICABLE":
+        return None
+    remote_job_id = str(metadata.get("remote_job_id") or "")
+    if not remote_job_id:
+        return None
+    event = (
+        AuditEvent.objects.filter(
+            event_type="genx.session_remote_provider_transient",
+            metadata__call_id=str(call.id),
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if not event:
+        return None
+    evidence = event.metadata or {}
+    try:
+        http_status = int(evidence.get("http_status") or 0)
+    except (TypeError, ValueError):
+        http_status = 0
+    if not (
+        500 <= http_status <= 599
+        and str(evidence.get("phase") or "") == "POLL_REMOTE_JOB"
+        and str(evidence.get("remote_job_id") or "") == remote_job_id
+    ):
+        return None
+    return event.created_at
+
+
+def _confirmed_research_transient_failure(call: GenXCall | None) -> bool:
+    """Return true only for authoritative, zero-cost terminal provider 5xx evidence."""
+    return _research_transient_observed_at(call) is not None
+
+
 def _remote_failure_http_status(response: dict[str, Any]) -> tuple[int, str, str]:
     remote = response.get("remote_job") if isinstance(response, dict) else None
     if not isinstance(remote, dict) or str(remote.get("status") or "").casefold() != "failed":
@@ -145,29 +184,52 @@ def _remote_failure_http_status(response: dict[str, Any]) -> tuple[int, str, str
     return status, error, remote_job_id
 
 
-def _record_research_remote_tool_rejection(call: GenXCall | None, response: dict[str, Any]) -> bool:
-    """Persist a terminal failed GenX job as zero-cost compatibility evidence only when unambiguous."""
+def _record_research_remote_failure(
+    call: GenXCall | None,
+    response: dict[str, Any],
+    *,
+    allowed_statuses: set[int] | None = None,
+    transient_5xx: bool = False,
+) -> tuple[bool, int, str, str]:
     if call is None or call.task_class != "research_web" or call.status != "FAILED":
-        return False
+        return False, 0, "", ""
     http_status, provider_error, payload_job_id = _remote_failure_http_status(response)
-    if http_status not in {400, 422}:
-        return False
+    allowed = (
+        500 <= http_status <= 599
+        if transient_5xx
+        else http_status in (allowed_statuses or set())
+    )
+    if not allowed:
+        return False, http_status, provider_error, payload_job_id
     metadata = dict(call.requested_metadata or {})
     remote_job_id = str(metadata.get("remote_job_id") or call.external_job_id or "")
     if not remote_job_id or (payload_job_id and payload_job_id != remote_job_id):
-        return False
+        return False, http_status, provider_error, payload_job_id
     if Decimal(call.credits or 0) != Decimal("0"):
-        return False
+        return False, http_status, provider_error, payload_job_id
     if call.cost_equivalent not in (None, Decimal("0")):
-        return False
+        return False, http_status, provider_error, payload_job_id
     if str(metadata.get("billing_truth") or "") == "ACTUAL":
-        return False
+        return False, http_status, provider_error, payload_job_id
+    return True, http_status, provider_error, remote_job_id
 
+
+def _record_research_remote_tool_rejection(call: GenXCall | None, response: dict[str, Any]) -> bool:
+    """Persist a terminal failed GenX job as zero-cost compatibility evidence only when unambiguous."""
+    accepted, http_status, provider_error, remote_job_id = _record_research_remote_failure(
+        call,
+        response,
+        allowed_statuses={400, 422},
+    )
+    if not accepted or call is None:
+        return False
+    metadata = dict(call.requested_metadata or {})
     metadata.update({
         "billing_truth": "NOT_APPLICABLE",
         "cost_equivalent_truth": "NOT_APPLICABLE",
         "provider_http_status": http_status,
         "provider_error": provider_error,
+        "provider_failure_class": "COMPATIBILITY",
         "remote_job_id": remote_job_id,
     })
     GenXCall.objects.filter(pk=call.pk).update(
@@ -198,6 +260,52 @@ def _record_research_remote_tool_rejection(call: GenXCall | None, response: dict
     return True
 
 
+def _record_research_remote_provider_transient(call: GenXCall | None, response: dict[str, Any]) -> bool:
+    """Persist authoritative zero-cost provider 5xx evidence for bounded failover and short cooldown."""
+    accepted, http_status, provider_error, remote_job_id = _record_research_remote_failure(
+        call,
+        response,
+        transient_5xx=True,
+    )
+    if not accepted or call is None:
+        return False
+    metadata = dict(call.requested_metadata or {})
+    metadata.update({
+        "billing_truth": "NOT_APPLICABLE",
+        "cost_equivalent_truth": "NOT_APPLICABLE",
+        "provider_http_status": http_status,
+        "provider_error": provider_error,
+        "provider_failure_class": "TRANSIENT",
+        "remote_job_id": remote_job_id,
+    })
+    GenXCall.objects.filter(pk=call.pk).update(
+        credits=Decimal("0"),
+        cost_equivalent=Decimal("0"),
+        error_code=f"PROVIDER_HTTP_{http_status}",
+        requested_metadata=metadata,
+    )
+    call.credits = Decimal("0")
+    call.cost_equivalent = Decimal("0")
+    call.error_code = f"PROVIDER_HTTP_{http_status}"
+    call.requested_metadata = metadata
+    AuditEvent.objects.create(
+        severity="WARNING",
+        event_type="genx.session_remote_provider_transient",
+        actor="genx-gateway",
+        metadata={
+            "call_id": str(call.id),
+            "job_id": str(call.job_id or ""),
+            "model": call.model,
+            "phase": "POLL_REMOTE_JOB",
+            "http_status": http_status,
+            "remote_job_id": remote_job_id,
+            "provider_error": provider_error,
+            "billing_truth": "NOT_APPLICABLE",
+        },
+    )
+    return True
+
+
 def research_web_model_ids(*, excluded_model_ids: set[str] | None = None) -> list[str]:
     """Resolve Web Search candidates from provider metadata plus recent live session evidence."""
     excluded = {str(value) for value in (excluded_model_ids or set()) if value}
@@ -210,10 +318,15 @@ def research_web_model_ids(*, excluded_model_ids: set[str] | None = None) -> lis
     try:
         supported_hours = max(1, int(os.getenv("GENX_TOOL_SUPPORT_TTL_HOURS", "168")))
         rejected_hours = max(1, int(os.getenv("GENX_TOOL_REJECTION_TTL_HOURS", "24")))
+        transient_minutes = max(1, int(os.getenv("GENX_PROVIDER_TRANSIENT_COOLDOWN_MINUTES", "30")))
     except ValueError as exc:
-        raise GenXWorkerError("invalid GenX tool capability evidence TTL") from exc
+        raise GenXWorkerError("invalid GenX capability evidence TTL or transient cooldown") from exc
 
-    oldest_cutoff = timezone.now() - timedelta(hours=max(supported_hours, rejected_hours))
+    now = timezone.now()
+    oldest_cutoff = min(
+        now - timedelta(hours=max(supported_hours, rejected_hours)),
+        now - timedelta(minutes=transient_minutes),
+    )
     latest_observation: dict[str, tuple[str, Any]] = {}
     evidence_calls = (
         GenXCall.objects.filter(
@@ -230,9 +343,14 @@ def research_web_model_ids(*, excluded_model_ids: set[str] | None = None) -> lis
             latest_observation[call.model] = ("SUPPORTED", call.created_at)
         elif _confirmed_research_tool_rejection(call):
             latest_observation[call.model] = ("REJECTED", call.created_at)
+        else:
+            transient_observed_at = _research_transient_observed_at(call)
+            if transient_observed_at is not None:
+                latest_observation[call.model] = ("TRANSIENT", transient_observed_at)
 
-    supported_cutoff = timezone.now() - timedelta(hours=supported_hours)
-    rejected_cutoff = timezone.now() - timedelta(hours=rejected_hours)
+    supported_cutoff = now - timedelta(hours=supported_hours)
+    rejected_cutoff = now - timedelta(hours=rejected_hours)
+    transient_cutoff = now - timedelta(minutes=transient_minutes)
     known_supported = {
         model
         for model, (state, observed_at) in latest_observation.items()
@@ -243,23 +361,28 @@ def research_web_model_ids(*, excluded_model_ids: set[str] | None = None) -> lis
         for model, (state, observed_at) in latest_observation.items()
         if state == "REJECTED" and observed_at >= rejected_cutoff
     }
+    known_transient = {
+        model
+        for model, (state, observed_at) in latest_observation.items()
+        if state == "TRANSIENT" and observed_at >= transient_cutoff
+    }
 
-    proven = sorted((known_supported & set(active_text)) - excluded)
+    unavailable = excluded | known_rejected | known_transient
+    proven = sorted((known_supported & set(active_text)) - unavailable)
     if proven:
         return proven
-
     preferred = explicit or active_text
-    candidates = [model for model in preferred if model not in known_rejected and model not in excluded]
+    candidates = [model for model in preferred if model not in unavailable]
     if candidates:
         return sorted(candidates)
 
-    # Live rejection evidence overrides stale/incorrect catalogue capability text.
+    # Live failure evidence overrides stale/incorrect catalogue capability text.
     if explicit:
-        fallback = [model for model in active_text if model not in known_rejected and model not in excluded]
+        fallback = [model for model in active_text if model not in unavailable]
         if fallback:
             return sorted(fallback)
 
-    raise GenXWorkerError("no active GenX text model remains eligible for web_search after live tool rejection evidence")
+    raise GenXWorkerError("no active GenX text model remains eligible for web_search after live failure evidence")
 
 
 def _terminal_text(gateway: GenXGateway, call) -> str:
@@ -329,7 +452,7 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
     excluded: set[str] = set()
     call = None
     response: dict[str, Any] = {}
-    last_rejection: Exception | None = None
+    last_safe_failure: Exception | None = None
 
     for negotiation_attempt in range(1, max_negotiation_models + 1):
         eligible = research_web_model_ids(excluded_model_ids=excluded)
@@ -359,13 +482,19 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
             if call_status == "FAILED":
                 if _record_research_remote_tool_rejection(call, response):
                     excluded.add(call.model)
-                    last_rejection = GenXWorkerError(
+                    last_safe_failure = GenXWorkerError(
                         f"GenX remote Web Search compatibility rejection for {call.model}"
+                    )
+                    continue
+                if _record_research_remote_provider_transient(call, response):
+                    excluded.add(call.model)
+                    last_safe_failure = GenXWorkerError(
+                        f"GenX transient provider failure for {call.model}"
                     )
                     continue
                 remote = response.get("remote_job", {}) if isinstance(response, dict) else {}
                 provider_error = str(remote.get("error") or remote.get("message") or call.error_code or "UNKNOWN") if isinstance(remote, dict) else str(call.error_code or "UNKNOWN")
-                raise GenXWorkerError(f"GenX research remote job failed without safe compatibility evidence: {provider_error}")
+                raise GenXWorkerError(f"GenX research remote job failed without safe failover evidence: {provider_error}")
             if call_status and call_status != "COMPLETED":
                 raise GenXWorkerError(f"GenX research session ended in unexpected state: {call_status}")
             break
@@ -374,12 +503,12 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
             if not _confirmed_research_tool_rejection(rejected_call):
                 raise
             excluded.add(rejected_call.model)
-            last_rejection = exc
+            last_safe_failure = exc
             continue
     else:
         raise GenXWorkerError(
-            "GenX web_search tool negotiation exhausted provider-confirmed model rejections"
-        ) from last_rejection
+            "GenX web_search negotiation exhausted provider-confirmed zero-cost model failures"
+        ) from last_safe_failure
 
     if call is None:
         raise GenXWorkerError("GenX research session did not produce a call record")

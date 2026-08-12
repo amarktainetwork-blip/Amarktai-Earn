@@ -1,11 +1,19 @@
+from datetime import timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.utils import timezone
 
 from control.models import AuditEvent, GenXCall, GenXModelCatalog, Job, JobScore, Marketplace, Worker
 from gateways.genx.client import GenXError
-from workers.genx_support import GenXWorkerError, research_web_model_ids, research_with_web
+from workers.genx_support import (
+    GenXWorkerError,
+    _record_research_remote_provider_transient,
+    research_web_model_ids,
+    research_with_web,
+)
 
 
 class GenXWebSearchNegotiationTests(TestCase):
@@ -210,6 +218,7 @@ class GenXWebSearchNegotiationTests(TestCase):
         failed_call.refresh_from_db()
         self.assertEqual(failed_call.requested_metadata["billing_truth"], "NOT_APPLICABLE")
         self.assertEqual(failed_call.requested_metadata["cost_equivalent_truth"], "NOT_APPLICABLE")
+        self.assertEqual(failed_call.requested_metadata["provider_failure_class"], "COMPATIBILITY")
         self.assertEqual(failed_call.requested_metadata["provider_http_status"], 400)
         self.assertEqual(failed_call.cost_equivalent, 0)
         self.assertEqual(failed_call.credits, 0)
@@ -223,37 +232,123 @@ class GenXWebSearchNegotiationTests(TestCase):
         )
         self.assertEqual(research_web_model_ids(), ["b-model"])
 
-    def test_terminal_remote_500_aborts_without_negotiating_another_model(self):
+    def test_terminal_remote_524_is_zero_cost_transient_and_negotiates_next_model(self):
+        captured = []
+        successful_call, successful_response = self._success()
+        failed_call = None
+
+        class FakeGateway:
+            def run_session(inner_self, **kwargs):
+                nonlocal failed_call
+                captured.append(kwargs)
+                selected = kwargs["eligible_model_ids"][0]
+                if len(captured) == 1:
+                    failed_call, failed_response = self._record_remote_failure(
+                        model=selected,
+                        request_key=kwargs["request_key"],
+                        http_status=524,
+                    )
+                    return failed_call, failed_response
+                return successful_call, successful_response
+
+        request = SimpleNamespace(
+            job_id=self.job.id,
+            worker_id="research-worker",
+            attempt=4,
+            inputs={},
+        )
+
+        with patch("workers.genx_support.GenXGateway", return_value=FakeGateway()):
+            text, sources, call = research_with_web(request, query="current evidence")
+
+        self.assertEqual(len(captured), 2)
+        self.assertEqual(captured[0]["eligible_model_ids"], ["a-model", "b-model"])
+        self.assertEqual(captured[1]["eligible_model_ids"], ["b-model"])
+        self.assertNotEqual(captured[0]["request_key"], captured[1]["request_key"])
+        self.assertIn("Evidence-backed answer", text)
+        self.assertEqual(sources, ["https://example.com/source"])
+        self.assertIs(call, successful_call)
+
+        failed_call.refresh_from_db()
+        self.assertEqual(failed_call.requested_metadata["billing_truth"], "NOT_APPLICABLE")
+        self.assertEqual(failed_call.requested_metadata["cost_equivalent_truth"], "NOT_APPLICABLE")
+        self.assertEqual(failed_call.requested_metadata["provider_failure_class"], "TRANSIENT")
+        self.assertEqual(failed_call.requested_metadata["provider_http_status"], 524)
+        self.assertEqual(failed_call.cost_equivalent, 0)
+        self.assertEqual(failed_call.credits, 0)
+        self.assertEqual(failed_call.error_code, "PROVIDER_HTTP_524")
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="genx.session_remote_provider_transient",
+                metadata__call_id=str(failed_call.id),
+                metadata__http_status=524,
+            ).exists()
+        )
+        self.assertEqual(research_web_model_ids(), ["b-model"])
+
+    def test_historical_transient_cooldown_starts_when_evidence_is_observed(self):
+        failed_call, failed_response = self._record_remote_failure(
+            model="a-model",
+            request_key="historical-524",
+            http_status=524,
+        )
+        GenXCall.objects.filter(pk=failed_call.pk).update(
+            created_at=timezone.now() - timedelta(hours=2)
+        )
+        failed_call.refresh_from_db()
+
+        self.assertTrue(
+            _record_research_remote_provider_transient(
+                failed_call,
+                failed_response,
+            )
+        )
+
+        event = AuditEvent.objects.get(
+            event_type="genx.session_remote_provider_transient",
+            metadata__call_id=str(failed_call.id),
+        )
+        self.assertGreater(event.created_at, failed_call.created_at + timedelta(hours=1))
+        self.assertEqual(research_web_model_ids(), ["b-model"])
+
+    def test_terminal_remote_5xx_with_actual_billing_aborts_without_failover(self):
         captured = []
 
         class FakeGateway:
             def run_session(inner_self, **kwargs):
                 captured.append(kwargs)
                 selected = kwargs["eligible_model_ids"][0]
-                return self._record_remote_failure(
+                call, response = self._record_remote_failure(
                     model=selected,
                     request_key=kwargs["request_key"],
-                    http_status=500,
+                    http_status=524,
                 )
+                metadata = dict(call.requested_metadata)
+                metadata["billing_truth"] = "ACTUAL"
+                call.credits = Decimal("0.1")
+                call.cost_equivalent = Decimal("0.001")
+                call.requested_metadata = metadata
+                call.save(update_fields=["credits", "cost_equivalent", "requested_metadata", "updated_at"])
+                return call, response
 
         request = SimpleNamespace(
             job_id=self.job.id,
             worker_id="research-worker",
-            attempt=3,
+            attempt=4,
             inputs={},
         )
 
         with patch("workers.genx_support.GenXGateway", return_value=FakeGateway()):
-            with self.assertRaisesRegex(GenXWorkerError, "without safe compatibility evidence"):
+            with self.assertRaisesRegex(GenXWorkerError, "without safe failover evidence"):
                 research_with_web(request, query="current evidence")
 
         self.assertEqual(len(captured), 1)
         call = GenXCall.objects.get(request_key=captured[0]["request_key"])
-        self.assertEqual(call.requested_metadata["billing_truth"], "UNRESOLVED")
-        self.assertIsNone(call.cost_equivalent)
+        self.assertEqual(call.requested_metadata["billing_truth"], "ACTUAL")
+        self.assertEqual(call.credits, Decimal("0.1"))
         self.assertFalse(
             AuditEvent.objects.filter(
-                event_type="genx.session_remote_tool_rejected",
+                event_type="genx.session_remote_provider_transient",
                 metadata__call_id=str(call.id),
             ).exists()
         )
