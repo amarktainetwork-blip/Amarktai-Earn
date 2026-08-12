@@ -7,6 +7,59 @@ from typing import Any, Iterable
 ZERO = Decimal("0")
 
 
+def _parameter_names(payload: Any) -> set[str]:
+    names: set[str] = set()
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            names.add(str(key).casefold())
+            if str(key).casefold() in {"name", "key", "field", "parameter"} and isinstance(value, str):
+                names.add(value.casefold())
+            names.update(_parameter_names(value))
+    elif isinstance(payload, list):
+        for value in payload:
+            names.update(_parameter_names(value))
+    return names
+
+
+def model_parameter_names(payload: Any) -> set[str]:
+    """Return normalized parameter names exposed by a provider catalogue row."""
+    return _parameter_names(payload)
+
+
+_MODEL_PARAMETER_ALIASES: dict[str, tuple[str, ...]] = {
+    "prompt": ("prompt", "input_text", "text_prompt", "instruction"),
+    "width": ("width", "image_width", "output_width"),
+    "height": ("height", "image_height", "output_height"),
+    "duration_seconds": ("duration_seconds", "duration", "seconds"),
+    "voice": ("voice", "voice_id", "speaker", "speaker_id"),
+    "language": ("language", "language_code", "target_language", "locale"),
+}
+
+
+def build_model_params(
+    model_payload: Any,
+    canonical_params: dict[str, Any],
+    *,
+    required: tuple[str, ...] = (),
+) -> dict[str, Any] | None:
+    """Map canonical inputs to a published schema without encoding model IDs."""
+    names = model_parameter_names(model_payload)
+    schema_published = bool(names & {
+        "parameters", "params", "input_schema", "request_schema", "json_schema", "properties",
+    })
+    mapped: dict[str, Any] = {}
+    for canonical_name, value in canonical_params.items():
+        aliases = _MODEL_PARAMETER_ALIASES.get(canonical_name, (canonical_name,))
+        selected_name = next((name for name in aliases if name in names), None)
+        if selected_name:
+            mapped[selected_name] = value
+        elif not schema_published:
+            mapped[canonical_name] = value
+        elif canonical_name in required:
+            return None
+    return mapped
+
+
 def _decimal(value: Any) -> Decimal | None:
     if isinstance(value, bool) or value is None:
         return None

@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from control.models import AuditEvent, GenXCall, GenXModelCatalog, Job
 from gateways.genx.client import GenXError
+from gateways.genx.contracts import build_model_params, model_parameter_names
 from gateways.genx.output import extract_session_assistant_text, extract_session_sources, extract_text
 from gateways.genx.service import GenXGateway
 
@@ -230,6 +231,7 @@ def generate_text(request, *, prompt: str, task_class: str, capability_keywords:
         allow_exploration=bool(request.inputs.get("allow_model_exploration", False)),
         economically_fragile=bool(request.inputs.get("economically_fragile", False)),
         expected_revenue=job.reward,
+        required_params=("prompt",),
     )
     return _terminal_text(gateway, call), call
 
@@ -314,23 +316,20 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
     return text, sources, call
 
 
-def _parameter_names(payload: Any) -> set[str]:
-    names: set[str] = set()
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            names.add(str(key).casefold())
-            if str(key).casefold() in {"name", "key", "field", "parameter"} and isinstance(value, str):
-                names.add(value.casefold())
-            names.update(_parameter_names(value))
-    elif isinstance(payload, list):
-        for value in payload:
-            names.update(_parameter_names(value))
-    return names
-
-
-def model_parameter_names(payload: Any) -> set[str]:
-    """Return normalized schema names exposed by a live catalogue model."""
-    return _parameter_names(payload)
+def parameter_compatible_model_ids(
+    model_ids: list[str] | tuple[str, ...],
+    canonical_params: dict[str, Any],
+    *,
+    required: tuple[str, ...] = (),
+) -> list[str]:
+    """Filter live catalogue candidates by their published parameter contract."""
+    rows = GenXModelCatalog.objects.filter(active=True, model_id__in=model_ids)
+    compatible = [
+        row.model_id
+        for row in rows
+        if build_model_params(row.model_payload, canonical_params, required=required) is not None
+    ]
+    return sorted(compatible)
 
 
 def transcribe_media(request, source: Path) -> tuple[str, Any]:
@@ -356,7 +355,7 @@ def transcribe_media(request, source: Path) -> tuple[str, Any]:
     uploaded = gateway.client.upload_file(source)
     file_id = str(uploaded.get("file_id") or uploaded.get("id") or "")
     file_url = str(uploaded.get("url") or uploaded.get("download_url") or "")
-    names = _parameter_names(selected.model_payload)
+    names = model_parameter_names(selected.model_payload)
     params: dict[str, Any] = {}
     for candidate in ("audio_file_id", "input_file_id", "file_id", "asset_id"):
         if candidate in names and file_id:

@@ -8,6 +8,8 @@ class AiderCodingWorker(Worker):
     worker_class = "code_small"
 
     def execute(self, request: WorkRequest) -> WorkResult:
+        if request.inputs.get("operation") != "code_change_small":
+            return WorkResult(ok=False, error="unsupported small-coding operation")
         try:
             result = run_ai_coding_sandbox(request, agent="aider")
             patch = request.workspace / "changes.patch.txt"

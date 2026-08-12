@@ -13,6 +13,14 @@ from workers.qa.deterministic import verify_csv
 from PIL import Image
 
 
+SUPPORTED_QA_PROFILES = frozenset({
+    "csv", "document", "research", "translation", "transcript", "code_patch", "ci", "media",
+    "tabular", "spreadsheet", "analysis", "professional_text", "seo_audit", "presentation",
+    "produced_document", "public_web", "static_html", "defensive_review", "synthetic_dataset",
+    "ai_safety_research",
+})
+
+
 @dataclass(frozen=True)
 class QAOutcome:
     passed: bool
