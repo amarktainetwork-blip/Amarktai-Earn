@@ -842,7 +842,15 @@ class GenXGateway:
         usage_value = usage_credits(payload)
         if usage_value is not None and usage_value < 0:
             usage_value = None
-        if usage_value is None and previous_billing_truth == "ACTUAL":
+        failed_without_usage = (
+            status == "FAILED"
+            and usage_value is None
+            and previous_billing_truth != "ACTUAL"
+        )
+        if failed_without_usage:
+            billing_truth = "NOT_APPLICABLE"
+            call.credits = ZERO
+        elif usage_value is None and previous_billing_truth == "ACTUAL":
             billing_truth = "ACTUAL"
         elif usage_value is None:
             billing_truth = "UNRESOLVED"
@@ -856,7 +864,11 @@ class GenXGateway:
         })
         accounting_currency = call.job.currency if call.job_id else str(metadata.get("accounting_currency") or "USD")
         metadata["accounting_currency"] = accounting_currency
-        if usage_value is not None:
+        if failed_without_usage:
+            call.cost_equivalent = ZERO
+            metadata["cost_equivalent_truth"] = "NOT_APPLICABLE"
+            metadata["estimated_cost_equivalent"] = None
+        elif usage_value is not None:
             resolved_cost = monetary_cost_for_credits(
                 credits=usage_value,
                 currency=accounting_currency,
@@ -903,7 +915,7 @@ class GenXGateway:
             call.result_url = remote_result_url
         call.latency_ms = max(0, elapsed_ms)
         call.completed_at = call.completed_at or timezone.now()
-        call.error_code = str(payload.get("error_code") or "")[:120]
+        call.error_code = str(payload.get("error_code") or payload.get("error") or "")[:120]
         call.requested_metadata = metadata
         call.save(
             update_fields=[
@@ -911,6 +923,21 @@ class GenXGateway:
                 "latency_ms", "completed_at", "error_code", "updated_at",
             ]
         )
+
+        if failed_without_usage and previous_billing_truth != "NOT_APPLICABLE":
+            AuditEvent.objects.create(
+                event_type="genx.failed_job_nonbillable",
+                actor="genx-gateway",
+                metadata={
+                    "call_id": str(call.id),
+                    "remote_job_id": metadata.get("remote_job_id"),
+                    "model": call.model,
+                    "status": status,
+                    "usage_source": source,
+                    "billing_truth": billing_truth,
+                    "error_code": call.error_code,
+                },
+            )
 
         if not was_terminal:
             stat, _ = ModelStat.objects.select_for_update().get_or_create(model=call.model, task_class=call.task_class)
