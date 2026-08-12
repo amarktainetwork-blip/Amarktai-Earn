@@ -128,16 +128,16 @@ def _confirmed_research_tool_rejection(call: GenXCall | None) -> bool:
     return bool(remote_job_id) and str(evidence.get("phase") or "") == "POLL_REMOTE_JOB"
 
 
-def _confirmed_research_transient_failure(call: GenXCall | None) -> bool:
-    """Return true only for a terminal, zero-cost provider 5xx with authoritative remote identity."""
+def _research_transient_observed_at(call: GenXCall | None):
+    """Return the observation time for authoritative zero-cost provider 5xx evidence."""
     if call is None or call.task_class != "research_web" or call.status != "FAILED":
-        return False
+        return None
     metadata = call.requested_metadata or {}
     if str(metadata.get("billing_truth") or "") != "NOT_APPLICABLE":
-        return False
+        return None
     remote_job_id = str(metadata.get("remote_job_id") or "")
     if not remote_job_id:
-        return False
+        return None
     event = (
         AuditEvent.objects.filter(
             event_type="genx.session_remote_provider_transient",
@@ -147,17 +147,24 @@ def _confirmed_research_transient_failure(call: GenXCall | None) -> bool:
         .first()
     )
     if not event:
-        return False
+        return None
     evidence = event.metadata or {}
     try:
         http_status = int(evidence.get("http_status") or 0)
     except (TypeError, ValueError):
         http_status = 0
-    return (
+    if not (
         500 <= http_status <= 599
         and str(evidence.get("phase") or "") == "POLL_REMOTE_JOB"
         and str(evidence.get("remote_job_id") or "") == remote_job_id
-    )
+    ):
+        return None
+    return event.created_at
+
+
+def _confirmed_research_transient_failure(call: GenXCall | None) -> bool:
+    """Return true only for authoritative, zero-cost terminal provider 5xx evidence."""
+    return _research_transient_observed_at(call) is not None
 
 
 def _remote_failure_http_status(response: dict[str, Any]) -> tuple[int, str, str]:
@@ -336,8 +343,10 @@ def research_web_model_ids(*, excluded_model_ids: set[str] | None = None) -> lis
             latest_observation[call.model] = ("SUPPORTED", call.created_at)
         elif _confirmed_research_tool_rejection(call):
             latest_observation[call.model] = ("REJECTED", call.created_at)
-        elif _confirmed_research_transient_failure(call):
-            latest_observation[call.model] = ("TRANSIENT", call.created_at)
+        else:
+            transient_observed_at = _research_transient_observed_at(call)
+            if transient_observed_at is not None:
+                latest_observation[call.model] = ("TRANSIENT", transient_observed_at)
 
     supported_cutoff = now - timedelta(hours=supported_hours)
     rejected_cutoff = now - timedelta(hours=rejected_hours)
