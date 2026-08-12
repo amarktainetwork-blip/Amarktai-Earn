@@ -632,15 +632,18 @@ def admit_next_internal_opportunity() -> InternalOpportunity | None:
 
 def _queue_internal_opportunity(opportunity: InternalOpportunity) -> bool:
     """Queue approved owned-product work behind all paid/customer work."""
-    from control.queueing import queue
+    from control.queueing import queue, rq_failure_metadata, rq_job_id
     from control.tasks import execute_work_plan_task
 
     plan = WorkPlan.objects.get(job=opportunity.job)
+    rq_id = rq_job_id("product-factory", "execute", plan.id, plan.execution_attempts + 1)
+    target_queue = None
     try:
-        queue("p7").enqueue(
+        target_queue = queue("p7")
+        target_queue.enqueue(
             execute_work_plan_task,
             plan.id,
-            job_id=f"product-factory:execute:{plan.id}:{plan.execution_attempts + 1}",
+            job_id=rq_id,
             result_ttl=86400,
             failure_ttl=604800,
         )
@@ -652,7 +655,8 @@ def _queue_internal_opportunity(opportunity: InternalOpportunity) -> bool:
             metadata={
                 "product": opportunity.product.slug,
                 "job_id": str(opportunity.job_id),
-                "error_code": exc.__class__.__name__,
+                "plan_id": plan.id,
+                **rq_failure_metadata(exc, queue_name=getattr(target_queue, "name", "p7_background"), job_id=rq_id),
             },
         )
         return False
