@@ -149,10 +149,11 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
     )
     message = f"Research task: {query}\n\nRequirements:\n{requirements or 'Provide the strongest evidence and note uncertainty.'}"
     job = Job.objects.get(pk=request.job_id)
-    # GenX web search is a model capability, not a generic property of every text model.
-    # Select only models whose live provider catalog advertises web_search; do not
-    # silently broaden to every text model or hard-code a particular provider/model.
-    eligible = capability_model_ids("web_search")
+    # GenX exposes web search through the session tool contract, while its model
+    # catalogue endpoints do not promise per-model tool metadata. Honor explicit
+    # provider capability metadata when present, otherwise keep routing dynamic
+    # across the active text catalogue and let the session API enforce the tool.
+    eligible = capability_model_ids("web_search", fallback_category="text")
     call, response = gateway.run_session(
         job_id=request.job_id,
         worker_id=request.worker_id,
