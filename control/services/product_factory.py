@@ -412,7 +412,9 @@ def record_owned_product_publication(
     *, product_slug: str, channel: str, remote_listing_id: str, remote_reference: str, actor: str,
 ) -> ProductCandidate:
     """Reconcile an owner-performed external publication; never perform the mutation."""
-    product = ProductCandidate.objects.select_for_update().select_related("offering").get(slug=product_slug)
+    # Lock only the product row. ``offering`` is nullable, and PostgreSQL
+    # rejects FOR UPDATE when the nullable side is introduced by an outer join.
+    product = ProductCandidate.objects.select_for_update().get(slug=product_slug)
     if product.state not in {ProductCandidate.State.READY_TO_PUBLISH, ProductCandidate.State.PUBLISHED}:
         raise ValueError("PRODUCT_NOT_READY_TO_PUBLISH")
     if channel not in set(product.intended_channels or []):
