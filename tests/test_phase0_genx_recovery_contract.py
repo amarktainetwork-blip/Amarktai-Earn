@@ -45,8 +45,8 @@ class Phase0TimeoutHierarchyTests(SimpleTestCase):
         ):
             assigned = queueing.queue("p3")
             background = queueing.queue("p7")
-        self.assertEqual(assigned.default_timeout, 1320)
-        self.assertEqual(background.default_timeout, 1320)
+        self.assertEqual(assigned._default_timeout, 1320)
+        self.assertEqual(background._default_timeout, 1320)
 
     def test_unsafe_outer_timeout_is_rejected_instead_of_killing_valid_failover(self):
         unsafe = {**TIMEOUT_ENV, "WORKPLAN_RQ_TIMEOUT_SECONDS": "1200"}
