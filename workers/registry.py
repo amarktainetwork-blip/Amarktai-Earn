@@ -399,6 +399,18 @@ _SPECS: tuple[WorkerSpec, ...] = (
         semantic_qa=True,
     ),
     WorkerSpec(
+        worker_class="ocr",
+        version="1.0.0",
+        factory="workers.ocr.worker.OCRWorker",
+        operations=("ocr_document",),
+        qa_profile="transcript",
+        description="Bounded local OCR for scanned PDFs and common image formats using Tesseract and Poppler",
+        input_suffixes=(".pdf", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"),
+        runtime_commands=("tesseract", "pdftoppm"),
+        runtime_capability="local_scanned_document_ocr",
+        tool_requirements=("tesseract", "pdftoppm"),
+    ),
+    WorkerSpec(
         worker_class="intelligence",
         version="1.0.0",
         factory="workers.intelligence.worker.IntelligenceWorker",
