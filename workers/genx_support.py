@@ -3,11 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from control.models import GenXModelCatalog, Job
+from django.utils import timezone
+
+from control.models import AuditEvent, GenXCall, GenXModelCatalog, Job
+from gateways.genx.client import GenXError
 from gateways.genx.output import extract_session_assistant_text, extract_session_sources, extract_text
 from gateways.genx.service import GenXGateway
 
@@ -92,6 +96,97 @@ def _request_key(request, task_class: str, extra: str = "") -> str:
     return f"worker:{hashlib.sha256(material.encode()).hexdigest()[:48]}"
 
 
+def _confirmed_research_tool_rejection(call: GenXCall | None) -> bool:
+    """Return true only for provider-confirmed, zero-cost session-message validation rejection."""
+    if call is None or call.task_class != "research_web" or call.status != "FAILED":
+        return False
+    metadata = call.requested_metadata or {}
+    if str(metadata.get("billing_truth") or "") != "NOT_APPLICABLE":
+        return False
+    if str(metadata.get("remote_job_id") or ""):
+        return False
+    event = (
+        AuditEvent.objects.filter(
+            event_type="genx.session_failed",
+            metadata__call_id=str(call.id),
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if not event:
+        return False
+    evidence = event.metadata or {}
+    try:
+        http_status = int(evidence.get("http_status") or 0)
+    except (TypeError, ValueError):
+        http_status = 0
+    return str(evidence.get("phase") or "") == "SEND_MESSAGE" and http_status in {400, 422}
+
+
+def research_web_model_ids(*, excluded_model_ids: set[str] | None = None) -> list[str]:
+    """Resolve Web Search candidates from provider metadata plus recent live session evidence."""
+    excluded = {str(value) for value in (excluded_model_ids or set()) if value}
+    active_text = capability_model_ids(fallback_category="text")
+    try:
+        explicit = capability_model_ids("web_search")
+    except GenXWorkerError:
+        explicit = []
+
+    try:
+        supported_hours = max(1, int(os.getenv("GENX_TOOL_SUPPORT_TTL_HOURS", "168")))
+        rejected_hours = max(1, int(os.getenv("GENX_TOOL_REJECTION_TTL_HOURS", "24")))
+    except ValueError as exc:
+        raise GenXWorkerError("invalid GenX tool capability evidence TTL") from exc
+
+    oldest_cutoff = timezone.now() - timedelta(hours=max(supported_hours, rejected_hours))
+    latest_observation: dict[str, tuple[str, Any]] = {}
+    evidence_calls = (
+        GenXCall.objects.filter(
+            task_class="research_web",
+            model__in=active_text,
+            created_at__gte=oldest_cutoff,
+        )
+        .order_by("-created_at")
+    )
+    for call in evidence_calls:
+        if call.model in latest_observation:
+            continue
+        if call.status == "COMPLETED":
+            latest_observation[call.model] = ("SUPPORTED", call.created_at)
+        elif _confirmed_research_tool_rejection(call):
+            latest_observation[call.model] = ("REJECTED", call.created_at)
+
+    supported_cutoff = timezone.now() - timedelta(hours=supported_hours)
+    rejected_cutoff = timezone.now() - timedelta(hours=rejected_hours)
+    known_supported = {
+        model
+        for model, (state, observed_at) in latest_observation.items()
+        if state == "SUPPORTED" and observed_at >= supported_cutoff
+    }
+    known_rejected = {
+        model
+        for model, (state, observed_at) in latest_observation.items()
+        if state == "REJECTED" and observed_at >= rejected_cutoff
+    }
+
+    proven = sorted((known_supported & set(active_text)) - excluded)
+    if proven:
+        return proven
+
+    preferred = explicit or active_text
+    candidates = [model for model in preferred if model not in known_rejected and model not in excluded]
+    if candidates:
+        return sorted(candidates)
+
+    # Live rejection evidence overrides stale/incorrect catalogue capability text.
+    if explicit:
+        fallback = [model for model in active_text if model not in known_rejected and model not in excluded]
+        if fallback:
+            return sorted(fallback)
+
+    raise GenXWorkerError("no active GenX text model remains eligible for web_search after live tool rejection evidence")
+
+
 def _terminal_text(gateway: GenXGateway, call) -> str:
     if call.status != "COMPLETED":
         raise GenXWorkerError(f"GenX call did not complete: {call.status}")
@@ -149,27 +244,56 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
     )
     message = f"Research task: {query}\n\nRequirements:\n{requirements or 'Provide the strongest evidence and note uncertainty.'}"
     job = Job.objects.get(pk=request.job_id)
-    # GenX exposes web search through the session tool contract, while its model
-    # catalogue endpoints do not promise per-model tool metadata. Honor explicit
-    # provider capability metadata when present, otherwise keep routing dynamic
-    # across the active text catalogue and let the session API enforce the tool.
-    eligible = capability_model_ids("web_search", fallback_category="text")
-    call, response = gateway.run_session(
-        job_id=request.job_id,
-        worker_id=request.worker_id,
-        task_class="research_web",
-        system_prompt=system_prompt,
-        message=message,
-        estimated_credits=estimated,
-        max_allowed_credits=call_limit,
-        request_key=_request_key(request, "research_web", hashlib.sha256(message.encode()).hexdigest()[:12]),
-        tools=[{"type": "web_search"}],
-        eligible_model_ids=eligible,
-        required_quality=Decimal(str(request.inputs.get("minimum_quality", "0.80"))),
-        expected_revenue=job.reward,
-        allow_exploration=bool(request.inputs.get("allow_model_exploration", False)),
-        economically_fragile=bool(request.inputs.get("economically_fragile", False)),
-    )
+    message_digest = hashlib.sha256(message.encode()).hexdigest()[:12]
+    try:
+        max_negotiation_models = max(1, int(os.getenv("GENX_RESEARCH_TOOL_NEGOTIATION_MAX_MODELS", "6")))
+    except ValueError as exc:
+        raise GenXWorkerError("invalid GenX research tool negotiation limit") from exc
+
+    excluded: set[str] = set()
+    call = None
+    response: dict[str, Any] = {}
+    last_rejection: Exception | None = None
+
+    for negotiation_attempt in range(1, max_negotiation_models + 1):
+        eligible = research_web_model_ids(excluded_model_ids=excluded)
+        request_key = _request_key(
+            request,
+            "research_web",
+            f"{message_digest}:web-search-negotiation:{negotiation_attempt}",
+        )
+        try:
+            call, response = gateway.run_session(
+                job_id=request.job_id,
+                worker_id=request.worker_id,
+                task_class="research_web",
+                system_prompt=system_prompt,
+                message=message,
+                estimated_credits=estimated,
+                max_allowed_credits=call_limit,
+                request_key=request_key,
+                tools=[{"type": "web_search"}],
+                eligible_model_ids=eligible,
+                required_quality=Decimal(str(request.inputs.get("minimum_quality", "0.80"))),
+                expected_revenue=job.reward,
+                allow_exploration=bool(request.inputs.get("allow_model_exploration", False)),
+                economically_fragile=bool(request.inputs.get("economically_fragile", False)),
+            )
+            break
+        except GenXError as exc:
+            rejected_call = GenXCall.objects.filter(request_key=request_key).first()
+            if not _confirmed_research_tool_rejection(rejected_call):
+                raise
+            excluded.add(rejected_call.model)
+            last_rejection = exc
+            continue
+    else:
+        raise GenXWorkerError(
+            "GenX web_search tool negotiation exhausted provider-confirmed model rejections"
+        ) from last_rejection
+
+    if call is None:
+        raise GenXWorkerError("GenX research session did not produce a call record")
     text = str(response.get("assistant_text") or "") if isinstance(response, dict) else ""
     if not text:
         text = extract_text(response)
