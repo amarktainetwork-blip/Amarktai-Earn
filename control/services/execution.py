@@ -94,6 +94,166 @@ def _validated_inputs(inputs: dict, workspace_root: Path, upload_root: Path, *, 
     return clean
 
 
+def finalize_successful_execution(
+    *,
+    job: Job,
+    execution: Execution,
+    worker: Worker,
+    operation: str,
+    result,
+    allow_repair: bool = False,
+    audit_actor: str = "qa-runtime",
+) -> Execution:
+    """Persist artifacts and run the one canonical QA/acceptance/economics finalizer.
+
+    This boundary is intentionally reusable by normal worker execution and by
+    replay-safe recovery of an already-completed external provider result.  It
+    performs no provider submission and is idempotent for the same execution and
+    artifact paths.
+    """
+    try:
+        spec = operation_spec(operation)
+    except WorkerRegistryError as exc:
+        raise ExecutionError(str(exc)) from exc
+    if worker.worker_class != spec.worker_class:
+        raise ExecutionError(
+            f"worker {worker.id!r} is registered as {worker.worker_class!r}, expected {spec.worker_class!r}"
+        )
+    if not result.ok:
+        raise ExecutionError(result.error or f"{spec.worker_class} worker failed")
+
+    workspace = Path(execution.workspace).resolve()
+    root = Path(os.getenv("AMARKTAI_JOB_ROOT", "/var/lib/amarktai-earn/jobs")).resolve()
+    if not _inside(workspace, root):
+        raise ExecutionError("execution workspace is outside configured job storage")
+
+    artifact_rows: list[Artifact] = []
+    for path in result.artifacts:
+        resolved = path.resolve()
+        if not _inside(resolved, workspace):
+            raise ExecutionError("worker artifact escaped execution workspace")
+        if not resolved.is_file():
+            raise ExecutionError("worker declared a missing artifact")
+        defaults = {
+            "sha256": _sha256(resolved),
+            "size_bytes": resolved.stat().st_size,
+            "mime_type": mimetypes.guess_type(resolved.name)[0] or "application/octet-stream",
+        }
+        artifact = Artifact.objects.filter(
+            job=job,
+            execution=execution,
+            path=str(resolved),
+        ).order_by("id").first()
+        if artifact is None:
+            artifact = Artifact.objects.create(
+                job=job,
+                execution=execution,
+                path=str(resolved),
+                **defaults,
+            )
+        else:
+            for key, value in defaults.items():
+                setattr(artifact, key, value)
+            artifact.save(update_fields=["sha256", "size_bytes", "mime_type", "updated_at"])
+        artifact_rows.append(artifact)
+
+    if not artifact_rows:
+        raise ExecutionError("worker produced no deliverable artifacts")
+
+    qa = run_qa(spec.qa_profile, Path(artifact_rows[0].path), result.evidence)
+    qa_defaults = {
+        "passed": qa.passed,
+        "score": qa.score,
+        "evidence": {"checks": qa.checks, **qa.evidence},
+    }
+    qa_row = QAResult.objects.filter(
+        job=job,
+        execution=execution,
+        check_type=qa.check_type,
+    ).order_by("-id").first()
+    if qa_row is None:
+        qa_row = QAResult.objects.create(
+            job=job,
+            execution=execution,
+            check_type=qa.check_type,
+            **qa_defaults,
+        )
+    else:
+        for key, value in qa_defaults.items():
+            setattr(qa_row, key, value)
+        qa_row.save(update_fields=["passed", "score", "evidence", "updated_at"])
+
+    existing_result = execution.result if isinstance(execution.result, dict) else {}
+    merged_result = {
+        **existing_result,
+        "worker_class": spec.worker_class,
+        "worker_version": spec.version,
+        "operation": operation,
+        "worker_evidence": result.evidence,
+        "qa": {"passed": qa.passed, "check_type": qa.check_type, "checks": qa.checks},
+    }
+    Execution.objects.filter(pk=execution.pk).update(
+        status="QA_PASSED" if qa.passed else "NEEDS_REPAIR",
+        ended_at=timezone.now(),
+        result=merged_result,
+        error_code="",
+        error_detail="",
+    )
+    execution.refresh_from_db()
+
+    from planning.acceptance import evaluate_execution_acceptance
+
+    evaluation = evaluate_execution_acceptance(execution.id)
+    acceptance_passed = bool(qa.passed and evaluation.submission_ready)
+    final_status = "QA_PASSED" if acceptance_passed else "NEEDS_REPAIR"
+    Execution.objects.filter(pk=execution.pk).update(status=final_status)
+    Artifact.objects.filter(pk__in=[row.pk for row in artifact_rows]).update(accepted=acceptance_passed)
+
+    from control.services.genx_economics import record_execution_outcome
+
+    execution.refresh_from_db()
+    record_execution_outcome(
+        execution=execution,
+        qa_passed=acceptance_passed,
+        repair_required=not acceptance_passed or allow_repair,
+    )
+    if hasattr(job, "internal_opportunity"):
+        from control.services.product_factory import record_internal_execution_outcome
+
+        record_internal_execution_outcome(execution=execution, qa_passed=acceptance_passed)
+    Worker.objects.filter(pk=worker.pk).update(
+        status="READY" if acceptance_passed else "REPAIRING",
+        current_job=None if acceptance_passed else job,
+        last_heartbeat=timezone.now(),
+    )
+    if operation == "synthetic_dataset_generate":
+        from control.services.synthetic_data import persist_synthetic_dataset_run
+
+        persist_synthetic_dataset_run(
+            job=job,
+            execution=execution,
+            evidence=result.evidence,
+            qa_passed=qa.passed,
+        )
+    AuditEvent.objects.create(
+        event_type="job.qa_passed" if acceptance_passed else "job.qa_failed",
+        actor=audit_actor[:120],
+        metadata={
+            "job_id": str(job.id),
+            "execution_id": execution.id,
+            "worker_class": spec.worker_class,
+            "operation": operation,
+            "qa_profile": spec.qa_profile,
+            "checks": qa.checks,
+            "acceptance_contract_id": evaluation.contract_id,
+            "semantic_state": evaluation.semantic_state,
+            "acceptance_reason_codes": evaluation.critical_failures,
+        },
+    )
+    execution.refresh_from_db()
+    return execution
+
+
 def execute_registered_job(
     *,
     job_id,
@@ -180,7 +340,16 @@ def execute_registered_job(
 
                 mark_internal_execution_started(job=job)
 
-        result = spec.build().execute(WorkRequest(job_id=str(job.id), workspace=Path(execution.workspace), inputs=clean_inputs, worker_id=worker_id, execution_id=execution.id, attempt=execution.attempt))
+        result = spec.build().execute(
+            WorkRequest(
+                job_id=str(job.id),
+                workspace=Path(execution.workspace),
+                inputs=clean_inputs,
+                worker_id=worker_id,
+                execution_id=execution.id,
+                attempt=execution.attempt,
+            )
+        )
         lock = renew_job_lock(job.id, node_id=node_id, fencing_token=lock.fencing_token, lease_seconds=lease_seconds)
         if not result.ok:
             Execution.objects.filter(pk=execution.pk).update(
@@ -193,94 +362,14 @@ def execute_registered_job(
             transition_job(job.id, Job.State.FAILED, actor=worker_id, metadata={"execution_id": execution.id, "reason": "worker_failed"})
             raise ExecutionError(result.error or f"{spec.worker_class} worker failed")
 
-        artifact_rows: list[Artifact] = []
-        for path in result.artifacts:
-            resolved = path.resolve()
-            workspace = Path(execution.workspace).resolve()
-            if not _inside(resolved, workspace):
-                raise ExecutionError("worker artifact escaped execution workspace")
-            if not resolved.is_file():
-                raise ExecutionError("worker declared a missing artifact")
-            artifact_rows.append(
-                Artifact.objects.create(
-                    job=job,
-                    execution=execution,
-                    path=str(resolved),
-                    sha256=_sha256(resolved),
-                    size_bytes=resolved.stat().st_size,
-                    mime_type=mimetypes.guess_type(resolved.name)[0] or "application/octet-stream",
-                )
-            )
-
-        if not artifact_rows:
-            raise ExecutionError("worker produced no deliverable artifacts")
-        qa = run_qa(spec.qa_profile, Path(artifact_rows[0].path), result.evidence)
-        QAResult.objects.create(
+        return finalize_successful_execution(
             job=job,
             execution=execution,
-            check_type=qa.check_type,
-            passed=qa.passed,
-            score=qa.score,
-            evidence={"checks": qa.checks, **qa.evidence},
+            worker=worker,
+            operation=operation,
+            result=result,
+            allow_repair=allow_repair,
         )
-        execution.ended_at = timezone.now()
-        status = "QA_PASSED" if qa.passed else "NEEDS_REPAIR"
-        Execution.objects.filter(pk=execution.pk).update(
-            status=status,
-            ended_at=timezone.now(),
-            result={
-                "worker_class": spec.worker_class,
-                "worker_version": spec.version,
-                "operation": operation,
-                "worker_evidence": result.evidence,
-                "qa": {"passed": qa.passed, "check_type": qa.check_type, "checks": qa.checks},
-            },
-        )
-        from planning.acceptance import evaluate_execution_acceptance
-
-        evaluation = evaluate_execution_acceptance(execution.id)
-        acceptance_passed = bool(qa.passed and evaluation.submission_ready)
-        status = "QA_PASSED" if acceptance_passed else "NEEDS_REPAIR"
-        Execution.objects.filter(pk=execution.pk).update(status=status)
-        from control.services.genx_economics import record_execution_outcome
-
-        record_execution_outcome(
-            execution=execution,
-            qa_passed=acceptance_passed,
-            repair_required=not acceptance_passed or allow_repair,
-        )
-        if hasattr(job, "internal_opportunity"):
-            from control.services.product_factory import record_internal_execution_outcome
-
-            record_internal_execution_outcome(execution=execution, qa_passed=acceptance_passed)
-        Worker.objects.filter(pk=worker.pk).update(
-            status="READY" if acceptance_passed else "REPAIRING",
-            current_job=None if acceptance_passed else job,
-            last_heartbeat=timezone.now(),
-        )
-        if operation == "synthetic_dataset_generate":
-            from control.services.synthetic_data import persist_synthetic_dataset_run
-
-            persist_synthetic_dataset_run(
-                job=job, execution=execution, evidence=result.evidence, qa_passed=qa.passed,
-            )
-        AuditEvent.objects.create(
-            event_type="job.qa_passed" if acceptance_passed else "job.qa_failed",
-            actor="qa-runtime",
-            metadata={
-                "job_id": str(job.id),
-                "execution_id": execution.id,
-                "worker_class": spec.worker_class,
-                "operation": operation,
-                "qa_profile": spec.qa_profile,
-                "checks": qa.checks,
-                "acceptance_contract_id": evaluation.contract_id,
-                "semantic_state": evaluation.semantic_state,
-                "acceptance_reason_codes": evaluation.critical_failures,
-            },
-        )
-        execution.refresh_from_db()
-        return execution
     except Exception as exc:
         if execution is not None:
             execution.refresh_from_db()
