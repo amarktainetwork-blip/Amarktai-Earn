@@ -27,3 +27,11 @@ class Worker(ABC):
 
     @abstractmethod
     def execute(self, request: WorkRequest) -> WorkResult: ...
+
+    def recover_completed_provider_result(self, request: WorkRequest) -> WorkResult:
+        """Materialize an already-paid provider result without replaying a mutation.
+
+        Provider-backed workers opt in explicitly. The default is fail-closed so
+        recovery can never silently guess a capability-specific output format.
+        """
+        return WorkResult(ok=False, error="completed provider result recovery is not supported by this worker")
