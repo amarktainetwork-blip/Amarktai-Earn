@@ -11,7 +11,6 @@ from django.utils import timezone
 
 from planning.models import AcceptanceContract, AcceptanceEvaluation, DependencyPreparation, WorkPlan
 from workers.registry import registry_manifest
-from workers.genx_support import catalog_supports
 from .models import (
     Alert,
     AdmissionDecision,
@@ -64,6 +63,7 @@ from control.services.profit_brain import settled_profit_truth
 from control.services.seller_services import is_offering_currently_sellable
 from control.services.integration_accounts import integration_accounts_snapshot
 from control.services.product_factory import factory_snapshot
+from control.services.worker_readiness import genx_catalog_supports_worker
 
 SECTIONS = (
     "overview",
@@ -362,18 +362,6 @@ def live_work_snapshot(limit: int = 100) -> dict:
 def agents_snapshot() -> dict:
     runtime = {row.id: row for row in Worker.objects.select_related("current_job").order_by("worker_class", "id")}
     manifest = registry_manifest()
-    genx_requirements = {
-        "documents": ((), "text"),
-        "research": ((), "text"),
-        "localization": (("translation", "translate", "localization"), "text"),
-        "transcription": (("transcription", "transcribe", "speech to text"), None),
-        "code_small": (("code", "coding", "software"), "text"),
-        "code_heavy": (("code", "coding", "software"), "text"),
-        "technical_documentation": ((), "text"),
-        "content_copy": ((), "text"),
-        "customer_support": ((), "text"),
-        "image_product": (("image", "image generation", "text to image"), "image"),
-    }
     rows = []
     for spec in manifest:
         reasons = []
@@ -398,10 +386,8 @@ def agents_snapshot() -> dict:
                     reasons.append("SANDBOX_TOKEN_SECRET_INVALID")
         if spec["requires_genx"] and not os.getenv("GENX_API_KEY", "").strip():
             reasons.append("GENX_NOT_CONFIGURED")
-        elif spec["requires_genx"]:
-            keywords, fallback_category = genx_requirements[spec["worker_class"]]
-            if not catalog_supports(*keywords, fallback_category=fallback_category):
-                reasons.append("GENX_CAPABILITY_UNAVAILABLE")
+        elif spec["requires_genx"] and not genx_catalog_supports_worker(spec):
+            reasons.append("GENX_CAPABILITY_UNAVAILABLE")
         enablement = {"production_enabled": not reasons, "enablement_reason_codes": reasons}
         matching = [worker for worker in runtime.values() if worker.worker_class == spec["worker_class"]]
         if not matching:
