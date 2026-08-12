@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
 from workers.base import WorkRequest
+from workers.media.worker import MediaWorker
 from workers.ocr.worker import OCRWorker
 from workers.qa.runtime import run_qa
 
@@ -51,6 +53,54 @@ class Phase2OCRCapabilityTests(SimpleTestCase):
                 result = OCRWorker().execute(request)
             self.assertFalse(result.ok)
             process.assert_not_called()
+
+
+class Phase2VideoAssemblyTests(SimpleTestCase):
+    def test_media_concat_probes_sources_reencodes_and_verifies_assembled_duration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = root / "first.mp4"
+            second = root / "second.mp4"
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            request = WorkRequest(
+                job_id="fixture-job",
+                workspace=root / "workspace",
+                inputs={"operation": "media_concat", "sources": [str(first), str(second)]},
+                worker_id="fixture-media",
+                execution_id=1,
+                attempt=1,
+            )
+            source_probe = {
+                "duration_seconds": 2.5,
+                "streams": [
+                    {"codec_type": "video", "width": 1280, "height": 720},
+                    {"codec_type": "audio"},
+                ],
+            }
+            output_probe = {
+                "duration_seconds": 5.0,
+                "streams": [
+                    {"codec_type": "video", "width": 1280, "height": 720},
+                    {"codec_type": "audio"},
+                ],
+            }
+
+            def fake_run(args, **kwargs):
+                Path(args[-1]).write_bytes(b"assembled-video")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with patch("workers.media.worker._probe", side_effect=[source_probe, source_probe, output_probe]), patch(
+                "workers.media.worker.subprocess.run", side_effect=fake_run
+            ):
+                result = MediaWorker().execute(request)
+            self.assertTrue(result.ok, result.error)
+            self.assertEqual(result.evidence["operation"], "media_concat")
+            self.assertEqual(result.evidence["source_count"], 2)
+            self.assertEqual(result.evidence["expected_duration_seconds"], 5.0)
+            self.assertTrue(result.evidence["require_video"])
+            self.assertTrue(result.evidence["require_audio"])
+            self.assertTrue(result.artifacts[0].is_file())
 
 
 class Phase2ApifyBrowserContractTests(SimpleTestCase):
