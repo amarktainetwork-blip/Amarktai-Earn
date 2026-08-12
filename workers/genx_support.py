@@ -355,7 +355,8 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
                 allow_exploration=bool(request.inputs.get("allow_model_exploration", False)),
                 economically_fragile=bool(request.inputs.get("economically_fragile", False)),
             )
-            if call.status == "FAILED":
+            call_status = str(getattr(call, "status", "") or "").upper()
+            if call_status == "FAILED":
                 if _record_research_remote_tool_rejection(call, response):
                     excluded.add(call.model)
                     last_rejection = GenXWorkerError(
@@ -365,8 +366,8 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
                 remote = response.get("remote_job", {}) if isinstance(response, dict) else {}
                 provider_error = str(remote.get("error") or remote.get("message") or call.error_code or "UNKNOWN") if isinstance(remote, dict) else str(call.error_code or "UNKNOWN")
                 raise GenXWorkerError(f"GenX research remote job failed without safe compatibility evidence: {provider_error}")
-            if call.status != "COMPLETED":
-                raise GenXWorkerError(f"GenX research session ended in unexpected state: {call.status}")
+            if call_status and call_status != "COMPLETED":
+                raise GenXWorkerError(f"GenX research session ended in unexpected state: {call_status}")
             break
         except GenXError as exc:
             rejected_call = GenXCall.objects.filter(request_key=request_key).first()
