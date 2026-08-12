@@ -536,8 +536,8 @@ def plan_awarded_job(job_id) -> WorkPlan:
 
 
 def _queue_execution(plan: WorkPlan) -> bool:
+    from control.queueing import queue, rq_failure_metadata, rq_job_id
     from control.services.admission import decide_admission
-    from control.queueing import queue
     from control.tasks import execute_work_plan_task
 
     operation = plan.operation
@@ -548,11 +548,14 @@ def _queue_execution(plan: WorkPlan) -> bool:
     if not decision.allowed:
         WorkPlan.objects.filter(pk=plan.pk).update(status=WorkPlan.Status.BLOCKED, reason_codes=decision.reason_codes)
         return False
+    rq_id = rq_job_id("workplan", "execute", plan.id, plan.execution_attempts + 1)
+    target_queue = None
     try:
-        queue("p3").enqueue(
+        target_queue = queue("p3")
+        target_queue.enqueue(
             execute_work_plan_task,
             plan.id,
-            job_id=f"workplan:execute:{plan.id}:{plan.execution_attempts + 1}",
+            job_id=rq_id,
             result_ttl=86400,
             failure_ttl=604800,
         )
@@ -561,7 +564,11 @@ def _queue_execution(plan: WorkPlan) -> bool:
             severity="WARNING",
             event_type="job.plan_queue_failed",
             actor="planner",
-            metadata={"job_id": str(plan.job_id), "plan_id": plan.id, "error_code": exc.__class__.__name__},
+            metadata={
+                "job_id": str(plan.job_id),
+                "plan_id": plan.id,
+                **rq_failure_metadata(exc, queue_name=getattr(target_queue, "name", "p3_assigned"), job_id=rq_id),
+            },
         )
         return False
     WorkPlan.objects.filter(
@@ -871,14 +878,17 @@ def execute_work_plan(plan_id: int) -> WorkPlan:
 
 
 def _queue_submission(plan: WorkPlan) -> bool:
-    from control.queueing import queue
+    from control.queueing import queue, rq_failure_metadata, rq_job_id
     from control.tasks import submit_work_plan_task
 
+    rq_id = rq_job_id("workplan", "submit", plan.id)
+    target_queue = None
     try:
-        queue("p0").enqueue(
+        target_queue = queue("p0")
+        target_queue.enqueue(
             submit_work_plan_task,
             plan.id,
-            job_id=f"workplan:submit:{plan.id}",
+            job_id=rq_id,
             result_ttl=86400,
             failure_ttl=604800,
         )
@@ -889,7 +899,11 @@ def _queue_submission(plan: WorkPlan) -> bool:
             severity="WARNING",
             event_type="job.submission_queue_failed",
             actor="planner",
-            metadata={"job_id": str(plan.job_id), "plan_id": plan.id, "error_code": exc.__class__.__name__},
+            metadata={
+                "job_id": str(plan.job_id),
+                "plan_id": plan.id,
+                **rq_failure_metadata(exc, queue_name=getattr(target_queue, "name", "p0_revenue_protection"), job_id=rq_id),
+            },
         )
         return False
 

@@ -176,9 +176,15 @@ class Phase8CCodingAgentIntegrationTests(TestCase):
         failed = self._job("heavy-2", "Refactor multiple files", "Refactor multiple files and implement feature behavior safely.")
         self._snapshot(failed, "c" * 40)
         failed_plan = prepare_coding_plan(failed.id)
-        with patch("workers.coding.common.configured_broker", return_value=FakeBroker(patch_text=self.PATCH, test_exit=1, test_log="1 failed")):
+        with patch(
+            "workers.coding.common.configured_broker",
+            return_value=FakeBroker(patch_text=self.PATCH, test_exit=1, test_log="1 failed"),
+        ), patch("control.queueing.queue") as queue_factory:
+            queue_factory.return_value.name = "p3_assigned"
             failed_plan = execute_work_plan(failed_plan.id)
-        self.assertEqual(failed_plan.status, WorkPlan.Status.NEEDS_REPAIR)
+        self.assertEqual(failed_plan.status, WorkPlan.Status.QUEUED)
+        queued_id = queue_factory.return_value.enqueue.call_args.kwargs["job_id"]
+        self.assertEqual(queued_id, f"workplan-execute-{failed_plan.id}-{failed_plan.execution_attempts + 1}")
         self.assertTrue(QAResult.objects.filter(job=failed, check_type="sandbox_code_patch", passed=False).exists())
 
     def test_ci_testing_runs_without_genx_token_and_uses_test_qa(self):
