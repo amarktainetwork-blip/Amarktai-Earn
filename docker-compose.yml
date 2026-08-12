@@ -70,7 +70,7 @@ services:
     security_opt:
       - no-new-privileges:true
     env_file: .env
-    command: sh -lc 'python manage.py production_check && exec rq worker --with-scheduler --url "$$REDIS_URL" p0_revenue_protection p1_instant_claim p2_auto_accept p3_assigned p4_high_ev p5_microjobs p6_bounties p7_background'
+    command: sh -lc 'python manage.py production_check && exec python manage.py run_rq_worker'
     volumes:
       - artifacts:/var/lib/amarktai-earn/artifacts
       - job_data:/var/lib/amarktai-earn/jobs
