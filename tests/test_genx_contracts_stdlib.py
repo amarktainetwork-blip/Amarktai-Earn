@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from gateways.genx.contracts import (
     ModelCandidate,
+    build_model_params,
     assert_credit_budget,
     available_credits,
     effective_reserved_credits,
@@ -17,6 +18,37 @@ from gateways.genx.contracts import (
 
 
 class GenXContractTests(unittest.TestCase):
+    def test_parameter_adapter_uses_published_schema_without_model_ids(self):
+        payload = {
+            "input_schema": {
+                "properties": {
+                    "input_text": {"type": "string"},
+                    "image_width": {"type": "integer"},
+                }
+            }
+        }
+        self.assertEqual(
+            build_model_params(
+                payload,
+                {"prompt": "hello", "width": 1024, "height": 1024},
+                required=("prompt",),
+            ),
+            {"input_text": "hello", "image_width": 1024},
+        )
+        self.assertIsNone(
+            build_model_params(payload, {"voice": "owner-voice"}, required=("voice",))
+        )
+
+    def test_parameter_adapter_preserves_canonical_contract_when_schema_is_absent(self):
+        self.assertEqual(
+            build_model_params(
+                {"capabilities": ["text-generation"]},
+                {"prompt": "hello", "language": "en"},
+                required=("prompt",),
+            ),
+            {"prompt": "hello", "language": "en"},
+        )
+
     def test_records_support_common_api_shapes(self):
         self.assertEqual(records([{"id": "root-dict"}, "root-string"]), [{"id": "root-dict"}, {"id": "root-string"}])
         self.assertEqual(records({"models": [{"id": "m1"}]}), [{"id": "m1"}])

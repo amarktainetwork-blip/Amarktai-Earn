@@ -64,6 +64,7 @@ class ImageProductWorker(Worker):
                 accounting_currency=job.currency,
                 allow_exploration=allow_exploration,
                 economically_fragile=economically_fragile,
+                required_params=("prompt",),
             )
             uploaded = gateway.client.upload_file(source)
             uploaded_file_id = str(uploaded.get("file_id") or uploaded.get("id") or "")
@@ -105,6 +106,7 @@ class ImageProductWorker(Worker):
                 expected_revenue=job.reward,
                 allow_exploration=allow_exploration,
                 economically_fragile=economically_fragile,
+                required_params=("prompt",),
             )
         finally:
             if uploaded_file_id and call is not None and call.status in {"COMPLETED", "FAILED", "CANCELLED"}:

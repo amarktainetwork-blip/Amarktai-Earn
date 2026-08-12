@@ -27,6 +27,7 @@ from gateways.genx.contracts import (
     ModelCandidate,
     assert_credit_budget,
     available_credits,
+    build_model_params,
     effective_reserved_credits,
     model_id,
     price_hint,
@@ -155,6 +156,7 @@ class GenXGateway:
         accounting_currency: str = "USD",
         allow_exploration: bool = False,
         economically_fragile: bool = False,
+        required_params: tuple[str, ...] = (),
     ) -> GenXModelCatalog:
         catalog = GenXModelCatalog.objects.filter(active=True, category=category)
         if eligible_model_ids is not None:
@@ -169,6 +171,8 @@ class GenXGateway:
             selected = catalog.filter(model_id=preferred_model).first()
             if not selected:
                 raise GenXModelUnavailable(f"preferred model {preferred_model!r} is not active for category {category!r}")
+            if build_model_params(selected.model_payload, params or {}, required=required_params) is None:
+                raise GenXModelUnavailable("preferred model does not satisfy the required parameter schema")
             AuditEvent.objects.create(
                 event_type="genx.explicit_model_override",
                 actor="genx-router",
@@ -176,9 +180,15 @@ class GenXGateway:
             )
             return selected
 
-        rows = list(catalog)
+        rows = [
+            row
+            for row in catalog
+            if build_model_params(row.model_payload, params or {}, required=required_params) is not None
+        ]
         if not rows:
-            raise GenXModelUnavailable(f"no active GenX models are cached for category {category!r}; sync catalog first")
+            raise GenXModelUnavailable(
+                f"no active GenX model for category {category!r} satisfies the required parameter schema"
+            )
         stats = {item.model: item for item in ModelStat.objects.filter(task_class=task_class, model__in=[row.model_id for row in rows])}
         candidates = []
         by_id = {row.model_id: row for row in rows}
@@ -339,6 +349,7 @@ class GenXGateway:
         non_genx_cost: Decimal = Decimal("0"),
         allow_exploration: bool = False,
         economically_fragile: bool = False,
+        required_params: tuple[str, ...] = (),
     ) -> GenXCall:
         job = Job.objects.select_related("marketplace").get(pk=job_id)
         selected = self.select_model(
@@ -356,7 +367,11 @@ class GenXGateway:
             accounting_currency=job.currency,
             allow_exploration=allow_exploration,
             economically_fragile=economically_fragile,
+            required_params=required_params,
         )
+        provider_params = build_model_params(selected.model_payload, params, required=required_params)
+        if provider_params is None:
+            raise GenXModelUnavailable("selected model parameter schema became incompatible before reservation")
         try:
             require_admission(purpose="GENX", job=job)
         except AdmissionDenied as exc:
@@ -398,7 +413,7 @@ class GenXGateway:
         started = time.monotonic()
         try:
             GenXCall.objects.filter(pk=call.pk).update(status="SUBMITTING")
-            submission = self.client.generate(selected.model_id, params, metadata=metadata)
+            submission = self.client.generate(selected.model_id, provider_params, metadata=metadata)
             external_job_id = str(submission.get("job_id") or submission.get("id") or "")
             if not external_job_id:
                 raise GenXGatewayError("GenX generation response did not contain a job ID")
@@ -433,7 +448,16 @@ class GenXGateway:
                 severity="ERROR" if confirmed_rejection else "WARNING",
                 event_type="genx.call_failed" if confirmed_rejection else "genx.call_unknown_remote_state",
                 actor="genx-gateway",
-                metadata={"call_id": str(call.id), "job_id": str(job.id), "error_code": exc.__class__.__name__},
+                metadata={
+                    "call_id": str(call.id),
+                    "job_id": str(job.id),
+                    "model": selected.model_id,
+                    "phase": "SUBMIT_GENERATION",
+                    "http_status": exc.status_code if isinstance(exc, GenXError) else None,
+                    "remote_job_id": str(call.external_job_id or ""),
+                    "billing_truth": "NOT_APPLICABLE" if confirmed_rejection else "UNRESOLVED",
+                    "error_code": exc.__class__.__name__,
+                },
             )
             raise
 

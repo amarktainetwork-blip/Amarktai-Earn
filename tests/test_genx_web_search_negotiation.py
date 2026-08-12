@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from django.test import TestCase
 
-from control.models import AuditEvent, GenXCall, GenXModelCatalog, Job, JobScore, Marketplace
+from control.models import AuditEvent, GenXCall, GenXModelCatalog, Job, JobScore, Marketplace, Worker
 from gateways.genx.client import GenXError
 from workers.genx_support import research_web_model_ids, research_with_web
 
@@ -27,6 +27,11 @@ class GenXWebSearchNegotiationTests(TestCase):
             expected_profit="9",
             expected_minutes=5,
             max_genx_credits="2",
+        )
+        Worker.objects.create(
+            id="research-worker",
+            worker_class="research",
+            status="READY",
         )
         for model_id in ("a-model", "b-model"):
             GenXModelCatalog.objects.create(

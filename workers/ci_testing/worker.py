@@ -8,6 +8,8 @@ class CITestingWorker(Worker):
     worker_class = "ci_testing"
 
     def execute(self, request: WorkRequest) -> WorkResult:
+        if request.inputs.get("operation") != "run_repository_tests":
+            return WorkResult(ok=False, error="unsupported CI-testing operation")
         try:
             result = run_ci_sandbox(request)
             report = request.workspace / "test-report.txt"

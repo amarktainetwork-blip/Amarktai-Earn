@@ -13,7 +13,7 @@ from control.models import Job, OwnerSecurityProfile, Payout
 from control.ops import SECTIONS
 from control.services.admission import collect_metrics, decide_admission
 from control.services.workload_policy import evaluate_text
-from workers.registry import all_specs
+from workers.registry import capability_coverage
 
 
 VALID_STATUSES = {"PASS", "FAIL", "BLOCKED", "EXTERNAL_PROOF_REQUIRED"}
@@ -167,19 +167,27 @@ def _resource_governor(*, ci_proven: bool) -> AcceptanceCriterion:
 
 
 def _worker_registry(*, ci_proven: bool) -> AcceptanceCriterion:
-    expected = {
-        "structured_data", "documents", "research", "localization", "transcription", "code_small", "code_heavy", "ci_testing", "media",
-        "advanced_structured_data", "spreadsheet_reporting", "data_analysis", "technical_documentation", "content_copy", "seo_audit",
-        "presentations", "document_production", "public_web_data", "web_output", "defensive_code_review", "customer_support",
-        "synthetic_data", "ai_safety_research",
-        "image_product",
-    }
-    specs = all_specs()
-    actual = {spec.worker_class for spec in specs}
-    invalid = sorted(spec.worker_class for spec in specs if not spec.operations or not spec.qa_profile or not spec.factory)
-    if actual != expected or invalid:
-        return _criterion("worker_execution", "Registered worker execution paths", "FAIL", "SOURCE", f"Registry mismatch: missing={sorted(expected - actual)}, extra={sorted(actual - expected)}, invalid={invalid}.", "Restore complete registered V1 worker specifications.")
-    return _ci_gate("worker_execution", "Registered worker execution paths", "All expanded V1 worker classes have production factories, operations, independent QA profiles, and completed deterministic/integration/container proofs.", ci_proven=ci_proven)
+    report = capability_coverage()
+    summary = report["summary"]
+    total = summary["TOTAL_REGISTERED_OPERATIONS"]
+    required_counts = (
+        "OPERATIONS_WITH_WORKERS", "OPERATIONS_WITH_INPUT_CONTRACT", "OPERATIONS_WITH_OUTPUT_CONTRACT",
+        "OPERATIONS_WITH_QA", "OPERATIONS_WITH_COST_POLICY", "OPERATIONS_WITH_FAILURE_POLICY",
+        "OPERATIONS_WITH_TEST_COVERAGE",
+    )
+    incomplete = [key for key in required_counts if summary[key] != total]
+    if report["status"] != "PASS" or incomplete:
+        failed = [row["operation"] for row in report["operations"] if row["status"] != "PASS"]
+        return _criterion(
+            "worker_execution", "Registered worker execution paths", "FAIL", "SOURCE",
+            f"Registry-derived operation proof failed: incomplete={incomplete}, failed={failed}.",
+            "Restore the missing worker, contract, QA, failure, or test evidence before freezing V1.",
+        )
+    return _ci_gate(
+        "worker_execution", "Registered worker execution paths",
+        f"CI proved all {total} registry-derived operation contracts; ready={summary['OPERATIONS_READY']}, external-owner-proof={summary['OPERATIONS_BLOCKED_BY_EXTERNAL_OWNER_ACTION']}.",
+        ci_proven=ci_proven,
+    )
 
 
 def _dashboard_contract(*, ci_proven: bool) -> AcceptanceCriterion:

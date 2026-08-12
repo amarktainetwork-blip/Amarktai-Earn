@@ -8,6 +8,8 @@ class OpenHandsCodingWorker(Worker):
     worker_class = "code_heavy"
 
     def execute(self, request: WorkRequest) -> WorkResult:
+        if request.inputs.get("operation") != "code_change_heavy":
+            return WorkResult(ok=False, error="unsupported heavy-coding operation")
         try:
             result = run_ai_coding_sandbox(request, agent="openhands")
             patch = request.workspace / "changes.patch.txt"
