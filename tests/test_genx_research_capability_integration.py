@@ -1,7 +1,9 @@
+import inspect
+
 from django.test import TestCase
 
 from control.models import GenXModelCatalog
-from workers.genx_support import GenXWorkerError, capability_model_ids
+from workers.genx_support import GenXWorkerError, capability_model_ids, research_with_web
 
 
 class GenXResearchCapabilityTruthTests(TestCase):
@@ -32,6 +34,11 @@ class GenXResearchCapabilityTruthTests(TestCase):
         )
         with self.assertRaisesRegex(GenXWorkerError, "web_search"):
             capability_model_ids("web_search")
+
+    def test_research_worker_never_uses_generic_text_fallback_for_web_search(self):
+        source = inspect.getsource(research_with_web)
+        self.assertIn('eligible = capability_model_ids("web_search")', source)
+        self.assertNotIn('fallback_category="text"', source)
 
     def test_generic_category_fallback_remains_available_for_non_strict_callers(self):
         GenXModelCatalog.objects.create(
