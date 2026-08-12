@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import redis
+from django.core.management import call_command
 from django.test import TestCase
 from rq.job import Job as RQJob
 
@@ -198,3 +199,25 @@ class RQFailureSanitizerTests(TestCase):
         )
         self.assertEqual(detail["exception_class"], "RuntimeError")
         self.assertNotIn("private-value", detail["error_message"])
+
+
+class RQWorkerBootstrapTests(TestCase):
+    def test_worker_starts_inside_initialized_django_process_on_all_priority_queues(self):
+        expected = [
+            "p0_revenue_protection",
+            "p1_instant_claim",
+            "p2_auto_accept",
+            "p3_assigned",
+            "p4_high_ev",
+            "p5_microjobs",
+            "p6_bounties",
+            "p7_background",
+        ]
+        with patch("control.management.commands.run_rq_worker.connection") as redis_connection, patch(
+            "control.management.commands.run_rq_worker.Worker"
+        ) as worker_class:
+            call_command("run_rq_worker")
+        queues = worker_class.call_args.args[0]
+        self.assertEqual([queue.name for queue in queues], expected)
+        self.assertTrue(all(queue.connection is redis_connection.return_value for queue in queues))
+        worker_class.return_value.work.assert_called_once_with(with_scheduler=True)
