@@ -13,6 +13,9 @@
   const password = document.getElementById("password");
   const code = document.getElementById("verificationCode");
   const error = document.getElementById("authError");
+  const errorTitle = document.getElementById("authErrorTitle");
+  const errorMessage = document.getElementById("authErrorMessage");
+  const sessionNotice = document.getElementById("sessionNotice");
   const continueButton = document.getElementById("continueButton");
   const verifyButton = document.getElementById("verifyButton");
   const recoveryButton = document.getElementById("recoveryButton");
@@ -38,13 +41,14 @@
     button.classList.toggle("loading", busy);
   }
 
-  function showError(message) {
-    error.textContent = message || "We couldn’t verify those details. Check them and try again.";
+  function showError(message, title) {
+    errorTitle.textContent = title || "Sign-in failed";
+    errorMessage.textContent = message || "We couldn’t verify those details. Check them and try again.";
     error.hidden = false;
   }
 
   function clearError() {
-    error.textContent = "";
+    errorMessage.textContent = "";
     error.hidden = true;
   }
 
@@ -73,7 +77,8 @@
       await fetch("/api/auth/csrf", {credentials: "same-origin"});
       const response = await post("/api/auth/login", {username: username.value.trim(), password: password.value});
       if (!response.ok) {
-        showError("We couldn’t verify those details. Check them and try again.");
+        const retryAfter = response.headers.get("Retry-After");
+        showError(retryAfter ? "Too many attempts were recorded. Wait before trying again." : "We couldn’t verify those details. Check them and try again.", retryAfter ? "Access temporarily locked" : "Credentials not accepted");
         return;
       }
       const payload = await response.json();
@@ -101,7 +106,8 @@
     try {
       const response = await post("/api/auth/totp", {code: value, recovery: recoveryMode});
       if (!response.ok) {
-        showError("That verification code wasn’t accepted. Check it and try again.");
+        const retryAfter = response.headers.get("Retry-After");
+        showError(retryAfter ? "Verification is temporarily locked after repeated failures. Wait before trying again." : "That verification code wasn’t accepted. Check it and try again.", retryAfter ? "Verification locked" : "Code not accepted");
         code.select();
         return;
       }
@@ -146,4 +152,5 @@
   });
 
   username.focus();
+  if (new URLSearchParams(window.location.search).get("reason") === "session-expired") sessionNotice.hidden = false;
 }());

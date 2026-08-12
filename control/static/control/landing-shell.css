@@ -12,6 +12,9 @@
 }
 .main-nav a{white-space:nowrap}
 .login-link{flex:0 0 auto;white-space:nowrap}
+.nav-toggle{display:none;width:42px;height:42px;border:1px solid rgba(167,194,229,.16);border-radius:12px;background:rgba(255,255,255,.04);color:#fff;padding:10px;cursor:pointer}
+.nav-toggle span{display:block;width:19px;height:2px;margin:4px auto;border-radius:2px;background:currentColor}
+.truth-section{padding:112px 0 96px}.truth-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.truth-grid article{min-height:280px;padding:28px;border:1px solid rgba(149,177,215,.15);border-radius:22px;background:linear-gradient(145deg,rgba(16,35,58,.88),rgba(7,20,35,.94));box-shadow:var(--shadow)}.truth-grid article:nth-child(2){background:linear-gradient(145deg,rgba(66,66,137,.35),rgba(9,22,39,.95))}.truth-grid article:nth-child(3){background:linear-gradient(145deg,rgba(41,93,89,.3),rgba(9,22,39,.95))}.truth-grid article:nth-child(4){background:linear-gradient(145deg,rgba(98,75,35,.28),rgba(9,22,39,.95))}.truth-grid span{display:grid;place-items:center;width:36px;height:36px;border-radius:11px;background:rgba(201,255,99,.12);color:var(--lime);font-size:10px;font-weight:900}.truth-grid h3{margin:72px 0 12px;font-size:20px}.truth-grid p{margin:0;color:#8fa5bf;line-height:1.65;font-size:13px}
 
 .footer{
   grid-template-columns:auto minmax(0,1fr) auto;
@@ -32,12 +35,17 @@
 .footer .brand-ai{color:var(--blue)}
 
 @media (max-width:1180px){
+  .nav-toggle{display:block;margin-left:auto}
   .main-nav{display:none}
+  .main-nav{position:absolute;top:calc(100% + 10px);left:0;right:0;padding:12px;border:1px solid rgba(167,194,229,.16);border-radius:16px;background:rgba(6,15,28,.97);box-shadow:0 20px 50px rgba(0,0,0,.36)}
+  .main-nav.open{display:grid}.main-nav a{padding:12px 10px;border-radius:10px}.main-nav a:hover{background:rgba(255,255,255,.05)}
   .topbar{justify-content:space-between}
+  .truth-grid{grid-template-columns:1fr 1fr}.truth-grid article{min-height:230px}.truth-grid h3{margin-top:46px}
 }
 
 @media (max-width:720px){
   .topbar{width:calc(100% - 18px);padding-inline:12px;gap:10px}
+  .truth-section{padding:80px 0}.truth-grid{grid-template-columns:1fr}.truth-grid article{min-height:0}.truth-grid h3{margin-top:36px}
   .footer{grid-template-columns:1fr;justify-items:center;gap:10px;padding:28px 0}
   .footer .footer-copyright,
   .footer .footer-network{display:block;justify-self:center;text-align:center}
@@ -46,5 +54,5 @@
 
 @media (max-width:420px){
   .brand-copy strong{font-size:12px}
-  .login-link{padding-inline:9px;font-size:8px}
+  .login-link{padding-inline:9px;font-size:8px}.nav-toggle{width:38px;height:38px}.topbar{gap:7px}
 }

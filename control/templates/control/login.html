@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07111f">
   <title>AmarktAI Earn — Secure Owner Access</title>
-  <link rel="stylesheet" href="{% static 'control/login.css' %}">
+  <link rel="stylesheet" href="{% static 'control/login.css' %}?v=frontend-owner-console">
 </head>
 <body>
   <main class="auth-shell">
@@ -37,6 +37,7 @@
         <span><strong>AMARKTAI</strong><small>EARN</small></span>
       </div>
       <div class="auth-card" id="authCard">
+        <div class="session-notice" id="sessionNotice" role="status" hidden>Your secure session ended. Sign in again to continue.</div>
         <div class="auth-progress" aria-label="Authentication progress">
           <div class="progress-step active" id="accountProgress"><span>1</span><b>Account</b></div>
           <div class="progress-line"><i id="progressFill"></i></div>
@@ -94,7 +95,10 @@
           <p>Opening your owner operations dashboard…</p>
         </section>
 
-        <div class="auth-error" id="authError" role="alert" aria-live="polite" hidden></div>
+        <div class="auth-error" id="authError" role="alert" aria-live="assertive" hidden>
+          <strong id="authErrorTitle">Sign-in failed</strong>
+          <span id="authErrorMessage"></span>
+        </div>
         <div class="security-row" aria-label="Security safeguards">
           <span><i class="security-dot"></i>Encrypted connection</span>
           <span><i class="security-dot"></i>Owner only</span>
@@ -104,6 +108,6 @@
       <p class="auth-footer">Protected by rate limits, secure cookies, and mandatory MFA.</p>
     </section>
   </main>
-  <script src="{% static 'control/login.js' %}" defer></script>
+  <script src="{% static 'control/login.js' %}?v=frontend-owner-console" defer></script>
 </body>
 </html>

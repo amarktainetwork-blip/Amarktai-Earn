@@ -30,16 +30,18 @@ from .services.autonomy import current_mode
 
 User = get_user_model()
 
-PAGE_SECTIONS = (*SECTIONS, "jobs", "money", "system")
+PAGE_SECTIONS = (*SECTIONS, "jobs", "money", "system", "capabilities", "services", "channels", "audit")
 PAGE_META = {
     "overview": ("Overview", "Your autonomous earning business at a glance"),
     "jobs": ("Jobs", "Live work, delivery progress, and payout state"),
     "live-work": ("Jobs", "Live work, delivery progress, and payout state"),
     "agents": ("Agents", "Your digital workforce and runtime readiness"),
+    "capabilities": ("Operations & Capabilities", "Registry-derived operation contracts, proof requirements, and launch status"),
     "money": ("Earnings", "Settled cash, pending payouts, costs, and ledger truth"),
     "earnings": ("Payouts", "Detailed earnings and settlement lifecycle"),
     "treasury": ("Treasury", "Balances and the advanced accounting ledger"),
     "markets": ("Markets & Accounts", "Accounts, connections, work capability, payout proof, and market readiness"),
+    "channels": ("Channels", "Marketplace connection, acquisition, service, payout, and revenue truth"),
     "accounts": ("Markets & Accounts", "Canonical integration-account readiness"),
     "alerts": ("Alerts", "Meaningful owner attention and resolved events"),
     "system": ("System Overview", "Infrastructure, AI runtime, and operating health"),
@@ -48,6 +50,8 @@ PAGE_META = {
     "storage": ("Storage", "Capacity, persistent paths, and resource admission"),
     "performance": ("Performance", "Execution quality, utilization, and growth evidence"),
     "logs": ("Audit Logs", "Technical events and correlation evidence"),
+    "audit": ("Audit", "Owner-readable events with filterable technical evidence"),
+    "services": ("Services & Products", "Canonical offerings, listings, orders, delivery, and settlement state"),
     "security": ("Security", "Owner access, sessions, and protected secret state"),
     "settings": ("Settings", "Connections, limits, AI, security, system health, and audit evidence"),
 }
@@ -104,9 +108,11 @@ def ops_page(request, section="overview"):
         return redirect("login")
     if section not in PAGE_SECTIONS:
         return JsonResponse({"error": "unknown_section"}, status=404)
-    consolidated = {"system", "genx", "nodes", "storage", "performance", "logs", "security"}
+    consolidated = {"system", "nodes", "storage", "performance", "security"}
     if section in consolidated:
         return redirect(f"/ops/settings/?view={section}")
+    if section == "logs":
+        return redirect("/ops/audit/")
     title, description = PAGE_META.get(section, (section.replace("-", " ").title(), "Owner operations"))
     return render(request, "control/operations.html", {
         "section": section,

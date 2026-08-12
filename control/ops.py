@@ -26,6 +26,7 @@ from .models import (
     GenXAccountSnapshot,
     GenXCall,
     GenXCreditValuation,
+    GenXModelCatalog,
     GrowthEvaluation,
     GrowthTarget,
     InboundOrder,
@@ -137,6 +138,7 @@ def overview_snapshot() -> dict:
     settled_7d = truth_7d.settled_cash
     settled_30d = truth_30d.settled_cash
     settled_gross_30d = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__gte=now - timedelta(days=30)).aggregate(v=Sum("gross"))["v"] or Decimal("0")
+    settled_fees_30d = Payout.objects.filter(state=Payout.State.SETTLED, settled_at__gte=now - timedelta(days=30)).aggregate(v=Sum("fee"))["v"] or Decimal("0")
     pending = Payout.objects.filter(state=Payout.State.PAYOUT_PENDING).aggregate(v=Sum("net"))["v"] or Decimal("0")
     genx_used = GenXCall.objects.filter(created_at__date=today).aggregate(v=Sum("credits"))["v"] or Decimal("0")
     latest_genx = GenXAccountSnapshot.objects.order_by("-created_at").first()
@@ -168,6 +170,17 @@ def overview_snapshot() -> dict:
     profit_7d_label = "TRUE RECORDED NET SETTLED PROFIT 7D" if truth_7d.cost_coverage_complete else "RECORDED NET SETTLED PROFIT 7D — COST COVERAGE INCOMPLETE"
     profit_30d_label = "TRUE RECORDED NET SETTLED PROFIT 30D" if truth_30d.cost_coverage_complete else "RECORDED NET SETTLED PROFIT 30D — COST COVERAGE INCOMPLETE"
     recorded_net_margin_30d = None if settled_gross_30d <= 0 else (recorded_net_profit_30d / settled_gross_30d * 100).quantize(Decimal("0.01"))
+    failed_jobs = Job.objects.filter(state=Job.State.FAILED).count()
+    critical_alerts = Alert.objects.filter(status="OPEN", severity__in=["ERROR", "CRITICAL"]).count()
+    owner_actions = Alert.objects.filter(status="OPEN").count()
+    system_healthy = bool(resource and resource.healthy and not resource.blocker_codes and critical_alerts == 0)
+    autonomy_mode = current_mode().value
+    production_state = (
+        "BLOCKED" if critical_alerts or (resource and (not resource.healthy or resource.blocker_codes))
+        else "READY" if autonomy_mode == "LIVE"
+        else "SHADOW" if autonomy_mode == "SHADOW"
+        else "OFF"
+    )
     return {
         "section": "overview",
         "cards": [
@@ -175,6 +188,8 @@ def overview_snapshot() -> dict:
             {"label": "SETTLED TODAY", "value": f"${_money(settled)}", "truth": "received cash only"},
             {"label": "SETTLED 7D", "value": f"${_money(settled_7d)}", "truth": "reconciled received cash only"},
             {"label": "SETTLED 30D", "value": f"${_money(settled_30d)}", "truth": "reconciled received cash only"},
+            {"label": "GROSS SETTLED 30D", "value": f"${_money(settled_gross_30d)}", "truth": "gross value for payouts settled in the reporting window"},
+            {"label": "SETTLED FEES 30D", "value": f"${_money(settled_fees_30d)}", "truth": "persisted marketplace fees on settled payouts"},
             {"label": "PENDING PAYOUT", "value": f"${_money(pending)}", "truth": "not received cash"},
             {"label": "AWARDED/ACCEPTED EXPOSURE", "value": f"${_money(exposure)}", "truth": "contract value at risk; not received cash"},
             {"label": "INBOUND SERVICE EXPOSURE", "value": f"${_money(inbound_exposure)}", "truth": "received/eligible/accepted seller-side orders; not settled cash"},
@@ -189,8 +204,11 @@ def overview_snapshot() -> dict:
             {"label": "AVOIDABLE IDLE", "value": f"{capacity.avoidable_idle_minutes} min" if capacity else "NO SNAPSHOT", "truth": capacity.idle_reason if capacity else "no persisted capacity snapshot"},
             {"label": "BLOCKED PROFITABLE OPPORTUNITIES 24H", "value": blocked_profitable, "truth": "persisted economic decisions with positive expected cash profit"},
             {"label": "ACTIVE PAID JOBS", "value": Job.objects.filter(state__in=[Job.State.CLAIMED, Job.State.AWARDED, Job.State.EXECUTING]).count()},
+            {"label": "FAILED JOBS", "value": failed_jobs, "truth": "persisted jobs in FAILED state"},
             {"label": "ACTIVE AGENTS", "value": Worker.objects.exclude(status__in=["OFFLINE", "READY"]).count()},
             {"label": "OPEN ALERTS", "value": open_alerts},
+            {"label": "OWNER ACTIONS", "value": owner_actions, "truth": "open persisted alerts requiring review"},
+            {"label": "CRITICAL ALERTS", "value": critical_alerts, "truth": "open ERROR or CRITICAL alerts"},
             {"label": "BLOCKED ACQUISITIONS 24H", "value": blocked_acquisitions, "truth": "persisted fail-closed preflight decisions"},
             {"label": "UNKNOWN REMOTE STATE", "value": unknown_remote, "truth": "requires deterministic reconciliation; never blind retry"},
             {"label": "RESOURCE GOVERNOR", "value": "GREEN" if resource and resource.healthy else "BLOCKED" if resource else "NO SNAPSHOT", "truth": ", ".join(resource.blocker_codes) if resource and resource.blocker_codes else "latest persisted admission state"},
@@ -198,7 +216,9 @@ def overview_snapshot() -> dict:
             {"label": "GENX USED TODAY", "value": f"{genx_used} cr"},
         ],
         "meta": {
-            "autonomous_mode": current_mode().value,
+            "autonomous_mode": autonomy_mode,
+            "production_state": production_state,
+            "system_health": "HEALTHY" if system_healthy else "ATTENTION_REQUIRED" if resource else "NO_SNAPSHOT",
             "registered_workers": len(registry_manifest()),
             "revenue_truth": "Expected opportunity values are never earnings. Accepted/pending values are not cash. Only SETTLED is received cash.",
             "target_semantics": "TARGETS_ARE_OBJECTIVE_FLOORS_NEVER_EARNINGS_CAPS",
@@ -228,6 +248,32 @@ def live_work_snapshot(limit: int = 100) -> dict:
             .order_by("-created_at")
             .first()
         )
+        try:
+            score = job.jobscore
+        except Exception:
+            score = None
+        payout = Payout.objects.filter(job=job).order_by("-updated_at").first()
+        calls = list(GenXCall.objects.filter(job=job).order_by("-created_at")[:50])
+        executions = list(job.executions.select_related("worker").order_by("attempt"))
+        artifacts = list(Artifact.objects.filter(job=job).order_by("created_at"))
+        known_genx_cost = sum((call.cost_equivalent or Decimal("0") for call in calls), Decimal("0"))
+        unresolved_genx_cost = any(
+            call.status not in {"FAILED", "CANCELLED"} and call.cost_equivalent is None
+            for call in calls
+        )
+        recorded_profit = None
+        if payout and payout.state == Payout.State.SETTLED and not unresolved_genx_cost:
+            recorded_profit = payout.net - known_genx_cost
+        timeline = [
+            {"at": _dt(job.created_at), "event": "JOB_DISCOVERED", "status": "DISCOVERED"},
+            *[
+                {"at": _dt(item.created_at), "event": f"EXECUTION_ATTEMPT_{item.attempt}", "status": item.status}
+                for item in executions
+            ],
+            *([{"at": _dt(latest_qa.created_at), "event": "QUALITY_CHECK", "status": "PASS" if latest_qa.passed else "FAIL"}] if latest_qa else []),
+            *([{"at": _dt(submission.created_at), "event": f"SUBMISSION_V{submission.version}", "status": submission.status}] if submission else []),
+            *([{"at": _dt(payout.updated_at), "event": "PAYOUT", "status": payout.state}] if payout else []),
+        ]
         rows.append({
             "job": str(job.id),
             "market": job.marketplace.slug,
@@ -235,6 +281,19 @@ def live_work_snapshot(limit: int = 100) -> dict:
             "task_class": job.task_class,
             "state": job.state,
             "reward": f"{job.currency} {job.reward}",
+            "currency": job.currency,
+            "fee": f"{payout.currency} {payout.fee}" if payout else None,
+            "expected_profit": f"{job.currency} {score.expected_profit}" if score else None,
+            "expected_genx_cost": _dec(score.expected_genx_cost) if score else None,
+            "expected_external_cost": _dec(score.expected_external_cost) if score else None,
+            "qualification_decision": score.decision if score else None,
+            "qualification_reasons": score.reason_codes if score else [],
+            "actual_profit": f"{payout.currency} {recorded_profit}" if recorded_profit is not None else None,
+            "actual_profit_truth": (
+                "settled payout net less recorded finalized GenX monetary cost"
+                if recorded_profit is not None else
+                "unavailable until settlement and complete attributable monetary cost evidence"
+            ),
             "plan": plan.status if plan else "—",
             "worker": execution.worker.worker_class if execution and execution.worker else "—",
             "operation": plan.operation if plan else "",
@@ -242,6 +301,14 @@ def live_work_snapshot(limit: int = 100) -> dict:
             "worker_id": execution.worker_id if execution else None,
             "execution": execution.status if execution else "—",
             "attempt": execution.attempt if execution else None,
+            "execution_history": [{
+                "attempt": item.attempt,
+                "worker": item.worker.worker_class if item.worker else None,
+                "status": item.status,
+                "started": _dt(item.started_at),
+                "ended": _dt(item.ended_at),
+                "error": item.error_code,
+            } for item in executions],
             "qa": "PASS" if latest_qa and latest_qa.passed else "FAIL" if latest_qa else "—",
             "repair_attempts": f"{plan.repair_attempts}/{plan.max_repair_attempts}" if plan else None,
             "last_error": plan.last_error_code if plan else "",
@@ -249,7 +316,35 @@ def live_work_snapshot(limit: int = 100) -> dict:
             "submission_version": submission.version if submission else None,
             "open_revisions": Revision.objects.filter(job=job, status="REQUIRED").count(),
             "dependency_preparation": dependency.status if dependency else None,
-            "artifacts": Artifact.objects.filter(job=job).count(),
+            "artifacts": len(artifacts),
+            "artifact_rows": [{
+                "kind": item.kind,
+                "reference": item.url or item.path,
+                "size_bytes": item.size_bytes,
+                "accepted": item.accepted,
+            } for item in artifacts],
+            "genx_calls": [{
+                "created": _dt(item.created_at),
+                "model": item.model,
+                "task_class": item.task_class,
+                "status": item.status,
+                "estimated_credits": _dec(item.estimated_credits),
+                "actual_credits": _dec(item.credits),
+                "cost_equivalent": _dec(item.cost_equivalent),
+                "latency_ms": item.latency_ms,
+                "error": item.error_code,
+            } for item in calls],
+            "payout": None if payout is None else {
+                "state": payout.state,
+                "gross": f"{payout.currency} {payout.gross}",
+                "fee": f"{payout.currency} {payout.fee}",
+                "net": f"{payout.currency} {payout.net}",
+                "reference": payout.external_reference,
+                "earned": _dt(payout.earned_at),
+                "pending": _dt(payout.pending_at),
+                "settled": _dt(payout.settled_at),
+            },
+            "timeline": sorted(timeline, key=lambda item: item["at"] or ""),
             "acceptance_contract": contract.status if contract else "NOT_COMPILED",
             "acceptance_contract_version": contract.version if contract else None,
             "acceptance_compiler": contract.compiler_version if contract else None,
@@ -338,7 +433,28 @@ def agents_snapshot() -> dict:
             "current_job": str(worker.current_job_id) if worker.current_job_id else None,
             "last_heartbeat": _dt(worker.last_heartbeat),
         })
-    return {"section": "agents", "rows": rows, "meta": {"registry_count": len(manifest), "runtime_count": len(runtime)}}
+    operations = []
+    for spec in manifest:
+        for contract in spec.get("operation_contracts", []):
+            external = bool(contract.get("owner_action_blocker"))
+            operations.append({
+                **contract,
+                "status": "EXTERNAL_PROOF_REQUIRED" if external else "READY",
+            })
+    return {
+        "section": "agents",
+        "rows": rows,
+        "operations": operations,
+        "meta": {
+            "registry_count": len(manifest),
+            "runtime_count": len(runtime),
+            "TOTAL_REGISTERED_OPERATIONS": len(operations),
+            "OPERATIONS_READY": sum(row["status"] == "READY" for row in operations),
+            "OPERATIONS_BLOCKED_BY_EXTERNAL_OWNER_ACTION": sum(row["status"] == "EXTERNAL_PROOF_REQUIRED" for row in operations),
+            "OPERATIONS_BLOCKED": sum(row["status"] == "BLOCKED" for row in operations),
+            "OPERATIONS_FAILED": sum(row["status"] == "FAILED" for row in operations),
+        },
+    }
 
 
 def markets_snapshot() -> dict:
@@ -547,8 +663,17 @@ def genx_snapshot(limit: int = 100) -> dict:
         "estimated_credits": _dec(row.estimated_credits),
         "credits": _dec(row.credits),
         "latency_ms": row.latency_ms,
+        "cost_equivalent": _dec(row.cost_equivalent),
+        "remote_state": (row.requested_metadata or {}).get("remote_state"),
+        "compatibility_evidence": (row.requested_metadata or {}).get("compatibility_evidence") or (row.requested_metadata or {}).get("provider_contract_evidence"),
         "error": row.error_code,
     } for row in GenXCall.objects.order_by("-created_at")[:limit]]
+    catalogue = list(
+        GenXModelCatalog.objects.filter(active=True)
+        .values("category")
+        .annotate(total=Count("model_id"))
+        .order_by("category")
+    )
     return {
         "section": "genx",
         "rows": rows,
@@ -559,6 +684,11 @@ def genx_snapshot(limit: int = 100) -> dict:
             "valuation_currency": valuation.currency if valuation else None,
             "monetary_cost_per_credit": _dec(valuation.monetary_cost_per_credit) if valuation else None,
             "owner_action": None if valuation else "Provide a GenX/DashNex top-up receipt or account transaction showing both the monetary amount paid and credits acquired.",
+            "connection_state": "CONNECTED" if latest else "NOT_CONFIGURED",
+            "catalogue_total": sum(row["total"] for row in catalogue),
+            "catalogue_by_category": catalogue,
+            "unknown_remote_state": sum(row["status"] == "UNKNOWN_REMOTE_STATE" or row["remote_state"] == "UNKNOWN_REMOTE_STATE" for row in rows),
+            "recent_successes": sum(row["status"] == "COMPLETED" for row in rows),
         },
     }
 

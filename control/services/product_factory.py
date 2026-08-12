@@ -31,6 +31,7 @@ from control.services.profit_brain import (
     evaluate_opportunity,
     persist_opportunity_decision,
 )
+from control.services.seller_services import is_offering_currently_sellable
 from planning.models import WorkPlan
 from workers.registry import all_specs
 
@@ -790,6 +791,7 @@ def product_factory_cycle() -> dict[str, Any]:
 def factory_snapshot() -> dict[str, Any]:
     policy = load_policy()
     products = ProductCandidate.objects.all().order_by("product_class", "slug")
+    offerings = ServiceOffering.objects.prefetch_related("market_listings__marketplace", "market_listings__inbound_orders").order_by("display_name")
     return {
         "policy": policy,
         "daily_internal_credits": str(_daily_internal_credits()),
@@ -816,6 +818,47 @@ def factory_snapshot() -> dict[str, Any]:
                 "paused_reason": row.paused_reason,
             }
             for row in products
+        ],
+        "offerings": [
+            {
+                "slug": offering.slug,
+                "offering": offering.display_name,
+                "operation": offering.operation,
+                "worker_class": offering.worker_class,
+                "pricing_model": offering.pricing_model,
+                "price": f"{offering.currency} {offering.advertised_price}",
+                "minimum_profitable_price": f"{offering.currency} {offering.minimum_profitable_price}",
+                "fee_rate": str(offering.platform_fee_rate),
+                "expected_genx_cost": f"{offering.currency} {offering.expected_genx_cost}",
+                "expected_external_cost": f"{offering.currency} {offering.expected_external_cost}",
+                "expected_operational_cost": f"{offering.currency} {offering.expected_operational_cost}",
+                "proof_state": offering.proof_state,
+                "enabled": offering.enabled,
+                "accepting_orders": offering.accepting_orders,
+                "sellable": is_offering_currently_sellable(offering),
+                "blocker": (
+                    "OFFERING_DISABLED" if not offering.enabled else
+                    "PROOF_REQUIRED" if offering.proof_state != ServiceOffering.ProofState.SELLABLE else
+                    "ORDERS_PAUSED" if not offering.accepting_orders else ""
+                ),
+                "listings": [
+                    {
+                        "marketplace": listing.marketplace.slug,
+                        "state": listing.status,
+                        "price": f"{listing.currency} {listing.published_price}",
+                        "last_sync": listing.last_synced_at.isoformat() if listing.last_synced_at else None,
+                        "failure": listing.failure_code,
+                        "incoming_orders": listing.inbound_orders.count(),
+                        "delivery_states": {
+                            state: listing.inbound_orders.filter(status=state).count()
+                            for state in InboundOrder.Status.values
+                            if listing.inbound_orders.filter(status=state).exists()
+                        },
+                    }
+                    for listing in offering.market_listings.all()
+                ],
+            }
+            for offering in offerings
         ],
         "capability_matrix_count": CapabilityMonetization.objects.count(),
         "ready_to_publish": products.filter(state=ProductCandidate.State.READY_TO_PUBLISH).count(),
