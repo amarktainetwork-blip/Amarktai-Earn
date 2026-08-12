@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -98,17 +99,15 @@ def _request_key(request, task_class: str, extra: str = "") -> str:
 
 
 def _confirmed_research_tool_rejection(call: GenXCall | None) -> bool:
-    """Return true only for provider-confirmed, zero-cost session-message validation rejection."""
+    """Return true only for provider-confirmed, zero-cost Web Search compatibility rejection."""
     if call is None or call.task_class != "research_web" or call.status != "FAILED":
         return False
     metadata = call.requested_metadata or {}
     if str(metadata.get("billing_truth") or "") != "NOT_APPLICABLE":
         return False
-    if str(metadata.get("remote_job_id") or ""):
-        return False
     event = (
         AuditEvent.objects.filter(
-            event_type="genx.session_failed",
+            event_type__in=("genx.session_failed", "genx.session_remote_tool_rejected"),
             metadata__call_id=str(call.id),
         )
         .order_by("-created_at")
@@ -121,7 +120,82 @@ def _confirmed_research_tool_rejection(call: GenXCall | None) -> bool:
         http_status = int(evidence.get("http_status") or 0)
     except (TypeError, ValueError):
         http_status = 0
-    return str(evidence.get("phase") or "") == "SEND_MESSAGE" and http_status in {400, 422}
+    if http_status not in {400, 422}:
+        return False
+    remote_job_id = str(metadata.get("remote_job_id") or "")
+    if event.event_type == "genx.session_failed":
+        return not remote_job_id and str(evidence.get("phase") or "") == "SEND_MESSAGE"
+    return bool(remote_job_id) and str(evidence.get("phase") or "") == "POLL_REMOTE_JOB"
+
+
+def _remote_failure_http_status(response: dict[str, Any]) -> tuple[int, str, str]:
+    remote = response.get("remote_job") if isinstance(response, dict) else None
+    if not isinstance(remote, dict) or str(remote.get("status") or "").casefold() != "failed":
+        return 0, "", ""
+    error = str(remote.get("error") or remote.get("message") or "")
+    remote_job_id = str(remote.get("job_id") or remote.get("id") or "")
+    raw_status = remote.get("http_status") or remote.get("status_code")
+    try:
+        status = int(raw_status) if raw_status not in (None, "") else 0
+    except (TypeError, ValueError):
+        status = 0
+    if not status:
+        match = re.search(r"\((\d{3})\)\s*$", error)
+        status = int(match.group(1)) if match else 0
+    return status, error, remote_job_id
+
+
+def _record_research_remote_tool_rejection(call: GenXCall | None, response: dict[str, Any]) -> bool:
+    """Persist a terminal failed GenX job as zero-cost compatibility evidence only when unambiguous."""
+    if call is None or call.task_class != "research_web" or call.status != "FAILED":
+        return False
+    http_status, provider_error, payload_job_id = _remote_failure_http_status(response)
+    if http_status not in {400, 422}:
+        return False
+    metadata = dict(call.requested_metadata or {})
+    remote_job_id = str(metadata.get("remote_job_id") or call.external_job_id or "")
+    if not remote_job_id or (payload_job_id and payload_job_id != remote_job_id):
+        return False
+    if Decimal(call.credits or 0) != Decimal("0"):
+        return False
+    if call.cost_equivalent not in (None, Decimal("0")):
+        return False
+    if str(metadata.get("billing_truth") or "") == "ACTUAL":
+        return False
+
+    metadata.update({
+        "billing_truth": "NOT_APPLICABLE",
+        "cost_equivalent_truth": "NOT_APPLICABLE",
+        "provider_http_status": http_status,
+        "provider_error": provider_error,
+        "remote_job_id": remote_job_id,
+    })
+    GenXCall.objects.filter(pk=call.pk).update(
+        credits=Decimal("0"),
+        cost_equivalent=Decimal("0"),
+        error_code=f"PROVIDER_HTTP_{http_status}",
+        requested_metadata=metadata,
+    )
+    call.credits = Decimal("0")
+    call.cost_equivalent = Decimal("0")
+    call.error_code = f"PROVIDER_HTTP_{http_status}"
+    call.requested_metadata = metadata
+    AuditEvent.objects.create(
+        severity="ERROR",
+        event_type="genx.session_remote_tool_rejected",
+        actor="genx-gateway",
+        metadata={
+            "call_id": str(call.id),
+            "job_id": str(call.job_id or ""),
+            "model": call.model,
+            "phase": "POLL_REMOTE_JOB",
+            "http_status": http_status,
+            "remote_job_id": remote_job_id,
+            "provider_error": provider_error,
+            "billing_truth": "NOT_APPLICABLE",
+        },
+    )
+    return True
 
 
 def research_web_model_ids(*, excluded_model_ids: set[str] | None = None) -> list[str]:
@@ -281,6 +355,18 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
                 allow_exploration=bool(request.inputs.get("allow_model_exploration", False)),
                 economically_fragile=bool(request.inputs.get("economically_fragile", False)),
             )
+            if call.status == "FAILED":
+                if _record_research_remote_tool_rejection(call, response):
+                    excluded.add(call.model)
+                    last_rejection = GenXWorkerError(
+                        f"GenX remote Web Search compatibility rejection for {call.model}"
+                    )
+                    continue
+                remote = response.get("remote_job", {}) if isinstance(response, dict) else {}
+                provider_error = str(remote.get("error") or remote.get("message") or call.error_code or "UNKNOWN") if isinstance(remote, dict) else str(call.error_code or "UNKNOWN")
+                raise GenXWorkerError(f"GenX research remote job failed without safe compatibility evidence: {provider_error}")
+            if call.status != "COMPLETED":
+                raise GenXWorkerError(f"GenX research session ended in unexpected state: {call.status}")
             break
         except GenXError as exc:
             rejected_call = GenXCall.objects.filter(request_key=request_key).first()
@@ -311,7 +397,6 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
     source_payload = response.get("session_history", response) if isinstance(response, dict) else response
     sources = extract_session_sources(source_payload)
     if not sources:
-        import re
         sources = list(dict.fromkeys(re.findall(r"https://[^\s)\]>]+", text)))
     return text, sources, call
 
