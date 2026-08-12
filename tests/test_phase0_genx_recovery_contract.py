@@ -165,7 +165,7 @@ class Phase0GenXResultRecoveryTests(TestCase):
         self.assertEqual(second.credits, first.credits)
         self.assertEqual(second.cost_equivalent, first.cost_equivalent)
 
-    def _completed_call_without_remote_usage(self):
+    def _completed_call_without_remote_usage(self, *, max_allowed_credits="100"):
         base = timezone.now() - timedelta(minutes=10)
         call = GenXCall.objects.create(
             request_key="phase0-wallet-delta-call",
@@ -175,7 +175,7 @@ class Phase0GenXResultRecoveryTests(TestCase):
             task_class="research_web",
             external_job_id="gnxsh_job_wallet_delta",
             estimated_credits="0.25",
-            max_allowed_credits="100",
+            max_allowed_credits=max_allowed_credits,
             credits="0",
             status="COMPLETED",
             requested_metadata={
@@ -201,9 +201,7 @@ class Phase0GenXResultRecoveryTests(TestCase):
         before.refresh_from_db(); after.refresh_from_db()
         return call, before, after, base
 
-    def test_missing_remote_usage_uses_unique_bracketed_account_delta_once(self):
-        call, before, after, base = self._completed_call_without_remote_usage()
-
+    def _read_only_wallet_client(self, base):
         class ReadOnlyClient:
             def job(self, job_id):
                 return {
@@ -221,7 +219,11 @@ class Phase0GenXResultRecoveryTests(TestCase):
             def session_messages(self, session_id):
                 return {"messages": []}
 
-        gateway = GenXGateway(client=ReadOnlyClient())
+        return ReadOnlyClient()
+
+    def test_missing_remote_usage_uses_unique_bracketed_account_delta_once(self):
+        call, before, after, base = self._completed_call_without_remote_usage()
+        gateway = GenXGateway(client=self._read_only_wallet_client(base))
         first = resolve_missing_genx_usage(
             call.id,
             expected_remote_job_id="gnxsh_job_wallet_delta",
@@ -246,6 +248,8 @@ class Phase0GenXResultRecoveryTests(TestCase):
         self.assertEqual(evidence["after_snapshot_id"], after.pk)
         self.assertEqual(evidence["derived_credits"], "89.7210")
         self.assertEqual(evidence["competing_billable_calls"], 0)
+        self.assertFalse(evidence["controller_credit_ceiling_breached"])
+        self.assertEqual(evidence["controller_credit_ceiling_overrun"], "0")
         stat = ModelStat.objects.get(model=call.model, task_class=call.task_class)
         self.assertEqual(stat.attempts, 1)
         self.assertEqual(stat.successful_executions, 1)
@@ -256,6 +260,51 @@ class Phase0GenXResultRecoveryTests(TestCase):
             AuditEvent.objects.filter(event_type="genx.billing_usage_evidence_resolved").count(),
             1,
         )
+        self.assertEqual(
+            AuditEvent.objects.filter(event_type="genx.actual_usage_exceeded_controller_ceiling").count(),
+            0,
+        )
+
+    def test_proven_actual_charge_above_controller_ceiling_is_recorded_and_flagged_once(self):
+        call, before, after, base = self._completed_call_without_remote_usage(max_allowed_credits="50")
+        gateway = GenXGateway(client=self._read_only_wallet_client(base))
+
+        first = resolve_missing_genx_usage(
+            call.id,
+            expected_remote_job_id="gnxsh_job_wallet_delta",
+            gateway=gateway,
+        )
+        second = resolve_missing_genx_usage(
+            call.id,
+            expected_remote_job_id="gnxsh_job_wallet_delta",
+            gateway=gateway,
+        )
+        first.refresh_from_db(); second.refresh_from_db()
+
+        self.assertEqual(first.credits, Decimal("89.7210"))
+        self.assertEqual(first.cost_equivalent, Decimal("0.8972"))
+        self.assertEqual(first.requested_metadata["billing_truth"], "ACTUAL")
+        evidence = first.requested_metadata["billing_evidence"]
+        self.assertEqual(evidence["before_snapshot_id"], before.pk)
+        self.assertEqual(evidence["after_snapshot_id"], after.pk)
+        self.assertTrue(evidence["controller_credit_ceiling_known"])
+        self.assertTrue(evidence["controller_credit_ceiling_breached"])
+        self.assertEqual(evidence["call_credit_ceiling"], "50.0000")
+        self.assertEqual(evidence["controller_credit_ceiling_overrun"], "39.7210")
+        self.assertTrue(evidence["accounting_truth_preserved_despite_budget_breach"])
+        self.assertEqual(second.credits, first.credits)
+        self.assertEqual(
+            AuditEvent.objects.filter(event_type="genx.billing_usage_evidence_resolved").count(),
+            1,
+        )
+        anomalies = AuditEvent.objects.filter(event_type="genx.actual_usage_exceeded_controller_ceiling")
+        self.assertEqual(anomalies.count(), 1)
+        self.assertEqual(anomalies.get().metadata["actual_credits"], "89.7210")
+        self.assertEqual(anomalies.get().metadata["controller_credit_ceiling"], "50.0000")
+        self.assertEqual(anomalies.get().metadata["overrun_credits"], "39.7210")
+        stat = ModelStat.objects.get(model=call.model, task_class=call.task_class)
+        self.assertEqual(stat.credits, Decimal("89.7210"))
+        self.assertEqual(stat.cost_equivalent, Decimal("0.8972"))
 
     def test_account_delta_recovery_refuses_overlapping_potentially_billable_call(self):
         call, _before, _after, base = self._completed_call_without_remote_usage()
