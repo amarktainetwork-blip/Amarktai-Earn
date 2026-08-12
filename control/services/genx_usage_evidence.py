@@ -121,6 +121,28 @@ def _record_evidence(
     return call
 
 
+def _record_controller_budget_anomaly(*, call: GenXCall, evidence: dict[str, Any]) -> None:
+    if not evidence.get("controller_credit_ceiling_breached"):
+        return
+    if AuditEvent.objects.filter(
+        event_type="genx.actual_usage_exceeded_controller_ceiling",
+        metadata__call_id=str(call.id),
+    ).exists():
+        return
+    AuditEvent.objects.create(
+        event_type="genx.actual_usage_exceeded_controller_ceiling",
+        actor="genx-usage-evidence",
+        metadata={
+            "call_id": str(call.id),
+            "remote_job_id": str(evidence.get("remote_job_id") or ""),
+            "actual_credits": str(call.credits),
+            "controller_credit_ceiling": str(evidence.get("call_credit_ceiling") or ""),
+            "overrun_credits": str(evidence.get("controller_credit_ceiling_overrun") or ""),
+            "accounting_truth_preserved": True,
+        },
+    )
+
+
 def _direct_remote_usage(
     *,
     gateway: GenXGateway,
@@ -224,16 +246,17 @@ def _unique_account_delta_usage(
         raise GenXUsageEvidenceError(
             "bracketing GenX account snapshots do not prove a positive credit charge"
         )
-    if call.max_allowed_credits <= ZERO or delta > call.max_allowed_credits:
-        raise GenXUsageEvidenceError(
-            "account snapshot delta exceeds the call's controller credit ceiling"
-        )
 
     competing = _possible_competing_calls(call=call, before=before, after=after)
     if competing:
         raise GenXUsageEvidenceError(
             "account snapshot delta is ambiguous because another potentially billable GenX call overlaps the evidence window"
         )
+
+    controller_ceiling = Decimal(call.max_allowed_credits or ZERO)
+    ceiling_known = controller_ceiling > ZERO
+    ceiling_breached = ceiling_known and delta > controller_ceiling
+    ceiling_overrun = delta - controller_ceiling if ceiling_breached else ZERO
 
     evidence = {
         "remote_job_id": remote_job_id,
@@ -249,7 +272,11 @@ def _unique_account_delta_usage(
         "after_available_credits": str(after_credits),
         "derived_credits": str(delta),
         "competing_billable_calls": 0,
-        "call_credit_ceiling": str(call.max_allowed_credits),
+        "call_credit_ceiling": str(controller_ceiling),
+        "controller_credit_ceiling_known": ceiling_known,
+        "controller_credit_ceiling_breached": ceiling_breached,
+        "controller_credit_ceiling_overrun": str(ceiling_overrun),
+        "accounting_truth_preserved_despite_budget_breach": ceiling_breached,
     }
     enriched = dict(job_payload)
     enriched["usage"] = {
@@ -264,11 +291,13 @@ def _unique_account_delta_usage(
     reconciled.refresh_from_db()
     if str((reconciled.requested_metadata or {}).get("billing_truth") or "") != "ACTUAL":
         raise GenXUsageEvidenceError("account snapshot evidence did not resolve actual billing truth")
-    return _record_evidence(
+    recorded = _record_evidence(
         call=reconciled,
         method="ACCOUNT_SNAPSHOT_DELTA_UNIQUE_ATTRIBUTION",
         evidence=evidence,
     )
+    _record_controller_budget_anomaly(call=recorded, evidence=evidence)
+    return recorded
 
 
 def resolve_missing_genx_usage(
@@ -282,6 +311,8 @@ def resolve_missing_genx_usage(
     Direct provider usage wins. If historical read endpoints no longer expose usage,
     an account credit delta is accepted only when two persisted snapshots bracket the
     provider job and no other potentially billable GenX call overlaps that window.
+    A controller ceiling is an admission/control invariant, not permission to discard
+    an already-incurred provider charge; proven overruns are recorded as anomalies.
     """
     gateway = gateway or GenXGateway()
     call = GenXCall.objects.get(pk=call_id)
