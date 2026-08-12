@@ -142,7 +142,10 @@ def research_with_web(request, *, query: str, requirements: str = "") -> tuple[s
     )
     message = f"Research task: {query}\n\nRequirements:\n{requirements or 'Provide the strongest evidence and note uncertainty.'}"
     job = Job.objects.get(pk=request.job_id)
-    eligible = capability_model_ids("web_search", "research", fallback_category="text")
+    # GenX web search is a model capability, not a generic property of every text model.
+    # Select only models whose live provider catalog advertises web_search; do not
+    # silently broaden to every text model or hard-code a particular provider/model.
+    eligible = capability_model_ids("web_search")
     call, response = gateway.run_session(
         job_id=request.job_id,
         worker_id=request.worker_id,
