@@ -201,12 +201,100 @@ def _ffmpeg(request: WorkRequest, source: Path, operation: str) -> WorkResult:
     })
 
 
+def _video_dimensions(probe: dict) -> tuple[int, int] | None:
+    for stream in probe.get("streams", []):
+        if stream.get("codec_type") == "video":
+            return int(stream.get("width") or 0), int(stream.get("height") or 0)
+    return None
+
+
+def _concat_video(request: WorkRequest) -> WorkResult:
+    raw_sources = request.inputs.get("sources")
+    if not isinstance(raw_sources, list) or not 2 <= len(raw_sources) <= 12:
+        raise MediaWorkerError("media_concat requires between 2 and 12 source clips")
+    sources = [Path(str(value)) for value in raw_sources]
+    probes = []
+    for source in sources:
+        _validate_source(source)
+        probe = _probe(source)
+        if not any(stream.get("codec_type") == "video" for stream in probe.get("streams", [])):
+            raise MediaWorkerError("every media_concat source must contain video")
+        probes.append(probe)
+    dimensions = {_video_dimensions(probe) for probe in probes}
+    if None in dimensions or len(dimensions) != 1:
+        raise MediaWorkerError("media_concat source clips must share the same video dimensions")
+    expected_duration = sum(float(probe["duration_seconds"]) for probe in probes)
+    if expected_duration > _int_env("MEDIA_MAX_DURATION_SECONDS", 3600):
+        raise MediaWorkerError("assembled media duration exceeds configured bounds")
+    audio_presence = [any(stream.get("codec_type") == "audio" for stream in probe.get("streams", [])) for probe in probes]
+    include_audio = all(audio_presence)
+
+    request.workspace.mkdir(parents=True, exist_ok=True)
+    manifest = request.workspace / "concat-inputs.txt"
+    lines = []
+    for source in sources:
+        escaped = str(source.resolve()).replace("'", "'\\''")
+        lines.append(f"file '{escaped}'")
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    target = request.workspace / "media-assembled.mp4"
+    maximum_output = _int_env("MEDIA_MAX_OUTPUT_BYTES", 150 * 1024 * 1024)
+    args = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        "-f", "concat", "-safe", "0", "-i", str(manifest),
+        "-threads", "1", "-c:v", "libx264", "-preset", "veryfast",
+    ]
+    if include_audio:
+        args += ["-c:a", "aac"]
+    else:
+        args += ["-an"]
+    args += ["-fs", str(maximum_output), str(target)]
+    run_options = {}
+    if resource is not None:
+        def impose_file_limit():
+            resource.setrlimit(resource.RLIMIT_FSIZE, (maximum_output, maximum_output))
+        run_options["preexec_fn"] = impose_file_limit
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=_int_env("MEDIA_PROCESS_TIMEOUT_SECONDS", 600),
+            check=False,
+            **run_options,
+        )
+        if result.returncode != 0:
+            raise MediaWorkerError("ffmpeg video assembly failed")
+        _check_output(target)
+        output_probe = _probe(target)
+        if abs(output_probe["duration_seconds"] - expected_duration) > max(1.0, 0.02 * expected_duration):
+            raise MediaWorkerError("assembled video duration is incomplete")
+    except Exception:
+        _remove_output(target)
+        raise
+    finally:
+        _remove_output(manifest)
+    return WorkResult(ok=True, artifacts=[target], evidence={
+        "operation": "media_concat",
+        "media_kind": "av",
+        "expected_format": "mp4",
+        "expected_duration_seconds": expected_duration,
+        "output_duration_seconds": output_probe["duration_seconds"],
+        "require_audio": include_audio,
+        "require_video": True,
+        "source_count": len(sources),
+        "max_output_bytes": maximum_output,
+        "output_size_bytes": target.stat().st_size,
+    })
+
+
 class MediaWorker(Worker):
     worker_class = "media"
 
     def execute(self, request: WorkRequest) -> WorkResult:
         try:
             operation = str(request.inputs.get("operation") or "")
+            if operation == "media_concat":
+                return _concat_video(request)
             source = Path(str(request.inputs["source"]))
             _validate_source(source)
             if operation in IMAGE_OPERATIONS:
