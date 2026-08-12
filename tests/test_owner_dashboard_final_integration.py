@@ -61,21 +61,21 @@ class FinalOwnerDashboardAcceptanceTests(TestCase):
 
     def test_a_every_primary_owner_route_resolves(self):
         self.authenticate()
-        for path in ("/ops/overview/", "/ops/jobs/", "/ops/markets/", "/ops/agents/", "/ops/money/", "/ops/treasury/", "/ops/alerts/", "/ops/settings/"):
+        for path in ("/ops/overview/", "/ops/jobs/", "/ops/capabilities/", "/ops/markets/", "/ops/services/", "/ops/agents/", "/ops/money/", "/ops/treasury/", "/ops/genx/", "/ops/alerts/", "/ops/audit/", "/ops/settings/"):
             self.assertEqual(self.client.get(path).status_code, 200, path)
 
     def test_b_unauthenticated_requests_remain_protected(self):
-        for path in ("/ops/overview/", "/ops/jobs/", "/ops/markets/", "/ops/agents/", "/ops/money/", "/ops/treasury/", "/ops/alerts/", "/ops/settings/"):
+        for path in ("/ops/overview/", "/ops/jobs/", "/ops/capabilities/", "/ops/markets/", "/ops/services/", "/ops/agents/", "/ops/money/", "/ops/treasury/", "/ops/genx/", "/ops/alerts/", "/ops/audit/", "/ops/settings/"):
             self.assertEqual(self.client.get(path).url, "/login/", path)
 
     def test_c_every_primary_navigation_link_maps_to_a_real_route(self):
         self.authenticate(); html = self.client.get("/ops/overview/").content.decode()
-        for path in ("/ops/overview/", "/ops/jobs/", "/ops/markets/", "/ops/agents/", "/ops/money/", "/ops/treasury/", "/ops/alerts/", "/ops/settings/"):
+        for path in ("/ops/overview/", "/ops/jobs/", "/ops/capabilities/", "/ops/markets/", "/ops/services/", "/ops/agents/", "/ops/money/", "/ops/treasury/", "/ops/genx/", "/ops/alerts/", "/ops/audit/", "/ops/settings/"):
             self.assertIn(f'href="{path}"', html)
 
     def test_d_no_obsolete_primary_navigation_routes_remain(self):
         self.authenticate(); html = self.client.get("/ops/overview/").content.decode()
-        for path in ("/ops/system/", "/ops/genx/", "/ops/nodes/", "/ops/storage/", "/ops/performance/", "/ops/logs/", "/ops/security/", "/ops/banking/"):
+        for path in ("/ops/system/", "/ops/nodes/", "/ops/storage/", "/ops/performance/", "/ops/logs/", "/ops/security/", "/ops/banking/"):
             self.assertNotIn(f'href="{path}"', html)
 
     def test_e_account_registry_renders_all_canonical_accounts(self):
@@ -106,7 +106,8 @@ class FinalOwnerDashboardAcceptanceTests(TestCase):
 
     def test_i_earnings_does_not_mix_expected_and_settled_revenue(self):
         script = Path(finders.find("control/app.js")).read_text(encoding="utf-8")
-        self.assertIn("Only bank or rail-confirmed, reconciled SETTLED payouts", script)
+        self.assertIn("Gross, fees, paid execution cost, pending payout, settlement, and profit", script)
+        self.assertIn("Real payout history only; no invented chart points", script)
         self.assertIn("Contract exposure, not received cash", script)
 
     def test_j_treasury_preserves_payment_payout_settlement_distinctions(self):
@@ -155,10 +156,11 @@ class FinalOwnerDashboardAcceptanceTests(TestCase):
         self.assertIn(".drawer-panel{max-height:100dvh;overflow-y:auto", styles)
         self.assertIn("overscroll-behavior:contain", styles)
 
-    def test_r_main_dashboard_text_tokens_resolve_to_white(self):
-        styles = Path(finders.find("control/app.css")).read_text(encoding="utf-8")
-        self.assertIn(".app-shell{--text:#fff;--muted:#fff;--muted-2:#fff}", styles)
-        self.assertIn("color:#fff!important", styles)
+    def test_r_main_dashboard_has_readable_shared_console_typography(self):
+        styles = Path(finders.find("control/console.css")).read_text(encoding="utf-8")
+        self.assertIn("--console-muted:#9aadc3", styles)
+        self.assertIn(".modern-table td{padding:13px 14px;font-size:11px", styles)
+        self.assertIn("@media(max-width:768px)", styles)
 
     def test_s_no_visible_placeholder_action_remains(self):
         script = Path(finders.find("control/app.js")).read_text(encoding="utf-8").lower()

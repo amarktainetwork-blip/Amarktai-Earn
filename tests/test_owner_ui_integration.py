@@ -109,10 +109,11 @@ class OwnerUIIntegrationTests(TestCase):
         overview = self.client.get("/ops/overview/")
         self.assertEqual(overview.status_code, 200)
         self.assertContains(overview, 'data-section="overview"')
-        self.assertContains(overview, "OWNER CONTROL CENTRE")
-        self.assertContains(overview, ">Work<")
-        self.assertContains(overview, "Markets &amp; Accounts")
-        self.assertContains(overview, ">Agents<")
+        self.assertContains(overview, "Global operating status")
+        self.assertContains(overview, ">Jobs<")
+        self.assertContains(overview, ">Capabilities<")
+        self.assertContains(overview, ">Channels<")
+        self.assertContains(overview, ">Workers<")
         self.assertContains(overview, ">Earnings<")
         self.assertContains(overview, ">Treasury<")
         self.assertContains(overview, ">Alerts<")
@@ -124,10 +125,13 @@ class OwnerUIIntegrationTests(TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertContains(response, f'data-section="{section}"')
 
-        for section in ("system", "genx", "nodes", "storage", "performance", "logs", "security"):
+        for section in ("system", "nodes", "storage", "performance", "security"):
             response = self.client.get(f"/ops/{section}/")
             self.assertEqual(response.status_code, 302)
             self.assertEqual(response.url, f"/ops/settings/?view={section}")
+        self.assertEqual(self.client.get("/ops/logs/").url, "/ops/audit/")
+        for section in ("capabilities", "services", "genx", "audit"):
+            self.assertEqual(self.client.get(f"/ops/{section}/").status_code, 200)
 
         markets = self.client.get("/ops/markets/")
         self.assertContains(markets, 'data-section="markets"')
@@ -136,6 +140,7 @@ class OwnerUIIntegrationTests(TestCase):
 
     def test_ui_assets_are_discoverable_and_preserve_settled_cash_language(self):
         self.assertIsNotNone(finders.find("control/app.css"))
+        self.assertIsNotNone(finders.find("control/console.css"))
         self.assertIsNotNone(finders.find("control/app.js"))
         self.assertIsNotNone(finders.find("control/login.css"))
         self.assertIsNotNone(finders.find("control/landing.css"))
@@ -144,7 +149,8 @@ class OwnerUIIntegrationTests(TestCase):
         app_script = Path(finders.find("control/app.js")).read_text(encoding="utf-8")
         landing_styles = Path(finders.find("control/landing.css")).read_text(encoding="utf-8")
         self.assertIn("[hidden]{display:none!important}", app_styles)
-        self.assertIn("Only bank or rail-confirmed, reconciled SETTLED payouts", app_script)
+        self.assertIn("Gross, fees, paid execution cost, pending payout, settlement, and profit", app_script)
+        self.assertIn("Real payout history only; no invented chart points", app_script)
         self.assertIn("Contract exposure, not received cash", app_script)
         self.assertIn("Earned, but not received cash", app_script)
         self.assertIn("animation:ticker 12s linear infinite", landing_styles)
