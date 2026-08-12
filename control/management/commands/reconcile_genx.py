@@ -3,6 +3,7 @@ import json
 from django.core.management.base import BaseCommand, CommandError
 
 from control.services.genx_recovery import GenXRecoveryError, recover_completed_genx_call
+from control.services.genx_usage_evidence import GenXUsageEvidenceError, resolve_missing_genx_usage
 from gateways.genx.client import GenXError
 from gateways.genx.service import GenXGateway
 
@@ -24,6 +25,10 @@ class Command(BaseCommand):
         remote_job_id = str(options.get("remote_job_id") or "").strip()
         try:
             if call_id:
+                resolve_missing_genx_usage(
+                    call_id,
+                    expected_remote_job_id=remote_job_id,
+                )
                 result = recover_completed_genx_call(
                     call_id,
                     expected_remote_job_id=remote_job_id,
@@ -32,7 +37,7 @@ class Command(BaseCommand):
                 if remote_job_id:
                     raise CommandError("--remote-job-id requires --call-id")
                 result = GenXGateway().reconcile_pending(limit=limit)
-        except (GenXError, GenXRecoveryError, ValueError) as exc:
+        except (GenXError, GenXRecoveryError, GenXUsageEvidenceError, ValueError) as exc:
             raise CommandError(f"GenX reconciliation failed: {exc}") from exc
         if options["format"] == "json":
             self.stdout.write(json.dumps(result, sort_keys=True, default=str))

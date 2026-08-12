@@ -12,7 +12,18 @@ from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 import control.queueing as queueing
-from control.models import GenXCall, GenXCreditValuation, Job, JobScore, Marketplace, ModelStat, Worker
+from control.models import (
+    AuditEvent,
+    GenXAccountSnapshot,
+    GenXCall,
+    GenXCreditValuation,
+    Job,
+    JobScore,
+    Marketplace,
+    ModelStat,
+    Worker,
+)
+from control.services.genx_usage_evidence import GenXUsageEvidenceError, resolve_missing_genx_usage
 from gateways.genx.service import GenXGateway
 
 
@@ -153,3 +164,137 @@ class Phase0GenXResultRecoveryTests(TestCase):
         self.assertEqual(stat.cost_equivalent, Decimal("0.8972"))
         self.assertEqual(second.credits, first.credits)
         self.assertEqual(second.cost_equivalent, first.cost_equivalent)
+
+    def _completed_call_without_remote_usage(self):
+        base = timezone.now() - timedelta(minutes=10)
+        call = GenXCall.objects.create(
+            request_key="phase0-wallet-delta-call",
+            job=self.job,
+            worker=self.worker,
+            model="claude-opus-4-8",
+            task_class="research_web",
+            external_job_id="gnxsh_job_wallet_delta",
+            estimated_credits="0.25",
+            max_allowed_credits="100",
+            credits="0",
+            status="COMPLETED",
+            requested_metadata={
+                "transport": "session",
+                "session_id": "gnxsh_session_wallet_delta",
+                "remote_job_id": "gnxsh_job_wallet_delta",
+                "billing_truth": "UNRESOLVED",
+                "cost_equivalent_truth": "ESTIMATED_USAGE",
+            },
+            started_at=base + timedelta(minutes=2),
+            completed_at=timezone.now(),
+        )
+        ModelStat.objects.create(
+            model=call.model,
+            task_class=call.task_class,
+            attempts=1,
+            successful_executions=1,
+        )
+        before = GenXAccountSnapshot.objects.create(available_credits="98893.278", raw={})
+        after = GenXAccountSnapshot.objects.create(available_credits="98803.557", raw={})
+        GenXAccountSnapshot.objects.filter(pk=before.pk).update(created_at=base + timedelta(minutes=1))
+        GenXAccountSnapshot.objects.filter(pk=after.pk).update(created_at=base + timedelta(minutes=5))
+        before.refresh_from_db(); after.refresh_from_db()
+        return call, before, after, base
+
+    def test_missing_remote_usage_uses_unique_bracketed_account_delta_once(self):
+        call, before, after, base = self._completed_call_without_remote_usage()
+
+        class ReadOnlyClient:
+            def job(self, job_id):
+                return {
+                    "job_id": job_id,
+                    "model": "claude-opus-4-8",
+                    "status": "completed",
+                    "created_at": (base + timedelta(minutes=2)).isoformat(),
+                    "updated_at": (base + timedelta(minutes=4)).isoformat(),
+                    "result_url": "data:text/plain;base64,QQ==",
+                }
+
+            def result(self, job_id):
+                return {"result_url": "data:text/plain;base64,QQ=="}
+
+            def session_messages(self, session_id):
+                return {"messages": []}
+
+        gateway = GenXGateway(client=ReadOnlyClient())
+        first = resolve_missing_genx_usage(
+            call.id,
+            expected_remote_job_id="gnxsh_job_wallet_delta",
+            gateway=gateway,
+        )
+        second = resolve_missing_genx_usage(
+            call.id,
+            expected_remote_job_id="gnxsh_job_wallet_delta",
+            gateway=gateway,
+        )
+        first.refresh_from_db(); second.refresh_from_db()
+
+        self.assertEqual(first.credits, Decimal("89.7210"))
+        self.assertEqual(first.cost_equivalent, Decimal("0.8972"))
+        self.assertEqual(first.requested_metadata["billing_truth"], "ACTUAL")
+        self.assertEqual(
+            first.requested_metadata["billing_evidence_method"],
+            "ACCOUNT_SNAPSHOT_DELTA_UNIQUE_ATTRIBUTION",
+        )
+        evidence = first.requested_metadata["billing_evidence"]
+        self.assertEqual(evidence["before_snapshot_id"], before.pk)
+        self.assertEqual(evidence["after_snapshot_id"], after.pk)
+        self.assertEqual(evidence["derived_credits"], "89.7210")
+        self.assertEqual(evidence["competing_billable_calls"], 0)
+        stat = ModelStat.objects.get(model=call.model, task_class=call.task_class)
+        self.assertEqual(stat.attempts, 1)
+        self.assertEqual(stat.successful_executions, 1)
+        self.assertEqual(stat.credits, Decimal("89.7210"))
+        self.assertEqual(stat.cost_equivalent, Decimal("0.8972"))
+        self.assertEqual(second.credits, first.credits)
+        self.assertEqual(
+            AuditEvent.objects.filter(event_type="genx.billing_usage_evidence_resolved").count(),
+            1,
+        )
+
+    def test_account_delta_recovery_refuses_overlapping_potentially_billable_call(self):
+        call, _before, _after, base = self._completed_call_without_remote_usage()
+        GenXCall.objects.create(
+            request_key="phase0-competing-call",
+            job=self.job,
+            worker=self.worker,
+            model="other-model",
+            task_class="research_web",
+            external_job_id="gnxsh_job_competing",
+            estimated_credits="1",
+            max_allowed_credits="100",
+            credits="0",
+            status="SUBMITTED",
+            requested_metadata={"billing_truth": "PENDING"},
+            started_at=base + timedelta(minutes=3),
+        )
+
+        class ReadOnlyClient:
+            def job(self, job_id):
+                return {
+                    "job_id": job_id,
+                    "status": "completed",
+                    "created_at": (base + timedelta(minutes=2)).isoformat(),
+                    "updated_at": (base + timedelta(minutes=4)).isoformat(),
+                }
+
+            def result(self, job_id):
+                return {}
+
+            def session_messages(self, session_id):
+                return {"messages": []}
+
+        with self.assertRaisesRegex(GenXUsageEvidenceError, "ambiguous"):
+            resolve_missing_genx_usage(
+                call.id,
+                expected_remote_job_id="gnxsh_job_wallet_delta",
+                gateway=GenXGateway(client=ReadOnlyClient()),
+            )
+        call.refresh_from_db()
+        self.assertEqual(call.credits, Decimal("0.0000"))
+        self.assertEqual(call.requested_metadata["billing_truth"], "UNRESOLVED")
