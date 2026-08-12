@@ -1,22 +1,42 @@
 {
-  "title": "Amarktai Website Data Extractor",
-  "description": "Bounded extraction of one public HTTPS page. Private/local destinations and robots-disallowed targets are rejected.",
+  "title": "Amarktai Public Web + Browser Actor",
+  "description": "Bounded extraction and authorized Chromium rendering of one public HTTPS page. Private/local destinations and robots-disallowed targets are rejected. Form preview never submits.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
     "public_url": {
       "title": "Public HTTPS URL",
       "type": "string",
-      "description": "A public HTTPS page that the Actor is permitted to fetch.",
+      "description": "A public HTTPS page that the Actor is permitted to fetch or render.",
       "editor": "textfield"
     },
     "extraction_scope": {
       "title": "Extraction scope",
       "type": "string",
-      "description": "Choose bounded metadata, headings, or a page summary.",
-      "enum": ["metadata_only", "headings", "page_summary"],
+      "description": "HTTP modes are lightweight; browser modes render JavaScript and may create a screenshot.",
+      "enum": [
+        "metadata_only",
+        "headings",
+        "page_summary",
+        "browser_snapshot",
+        "browser_extract",
+        "form_inspect",
+        "form_fill_preview"
+      ],
       "default": "page_summary",
       "editor": "select"
+    },
+    "authorization_confirmed": {
+      "title": "Browser authorization confirmed",
+      "type": "boolean",
+      "description": "Required for browser modes. Confirms the requested public-page interaction is authorized.",
+      "default": false
+    },
+    "form_values": {
+      "title": "Form fill preview values",
+      "type": "object",
+      "description": "Optional public form field-name/value map used only by form_fill_preview. Password, file, hidden and submit controls are never filled and the form is never submitted.",
+      "editor": "json"
     }
   },
   "required": ["public_url"]
