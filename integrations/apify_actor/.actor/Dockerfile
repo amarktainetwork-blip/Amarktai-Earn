@@ -9,6 +9,7 @@ COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt \
     && python -m playwright install --with-deps chromium
 COPY src ./src
+RUN python -m compileall -q src
 
 RUN useradd --create-home --uid 10001 actor \
     && mkdir -p /ms-playwright \
