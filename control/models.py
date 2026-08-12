@@ -598,7 +598,6 @@ class Node(Timestamped):
     disk_percent = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     last_heartbeat = models.DateTimeField(default=timezone.now)
 
-
 class Worker(Timestamped):
     id = models.CharField(max_length=120, primary_key=True)
     worker_class = models.CharField(max_length=80)
@@ -702,7 +701,7 @@ class GenXCall(Timestamped):
     credits = models.DecimalField(max_digits=16, decimal_places=4, default=0)
     usage = models.JSONField(default=dict)
     requested_metadata = models.JSONField(default=dict)
-    result_url = models.URLField(blank=True)
+    result_url = models.TextField(blank=True)
     latency_ms = models.PositiveIntegerField(default=0)
     status = models.CharField(max_length=32)
     cost_equivalent = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True, default=None)
