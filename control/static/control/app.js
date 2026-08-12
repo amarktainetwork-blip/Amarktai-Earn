@@ -12,10 +12,12 @@
     overview: ["overview", "live-work", "agents", "markets", "alerts", "earnings"],
     jobs: ["live-work"], "live-work": ["live-work"],
     agents: ["agents", "live-work"],
-    money: ["overview", "earnings", "treasury", "markets"],
+    capabilities: ["agents"],
+    money: ["overview", "earnings", "treasury", "markets", "performance"],
     treasury: ["overview", "earnings", "treasury", "accounts"],
-    markets: ["markets", "accounts"], alerts: ["alerts"],
-    settings: ["overview", "settings", "security", "nodes", "storage", "performance", "genx", "logs", "factory"],
+    markets: ["markets", "accounts"], channels: ["markets", "accounts"],
+    services: ["factory"], genx: ["genx"], audit: ["logs"], alerts: ["alerts"],
+    settings: ["overview", "settings", "accounts"],
     system: ["nodes", "storage", "performance", "genx", "security"],
   };
   const advanced = new Set(["genx", "nodes", "storage", "performance", "logs", "security", "settings", "earnings", "treasury"]);
@@ -35,21 +37,27 @@
   let refreshing = false;
   let currentData = {};
   let pendingData = null;
-  let activeJobFilter = "active";
+  let activeJobFilter = "all";
+  let activeAuditFilter = "all";
+
+  const goodStates = new Set(["SETTLED", "ACCEPTED", "READY", "PASS", "OK", "LIVE", "COMPLETED", "ENROLLED", "HEALTHY", "CONNECTED", "PUBLISHED", "QA_PASSED"]);
+  const activeStates = new Set(["EXECUTING", "WORKING", "SEARCHING", "REVIEWING", "CLAIMED", "AWARDED", "ALLOWED", "QUEUED", "SUBMITTED", "DELIVERED"]);
+  const badStates = new Set(["FAILED", "ERROR", "CRITICAL", "BLOCKED", "REJECTED", "ATTENTION_REQUIRED", "UNKNOWN_REMOTE_STATE"]);
+  const warningStates = new Set(["PAYOUT_PENDING", "WARNING", "PENDING", "SHADOW", "EXTERNAL_PROOF_REQUIRED", "NEEDS_REPAIR", "OFF", "NO_SNAPSHOT"]);
 
   function esc(value) {
     return String(value === null || value === undefined ? "" : value).replace(/[&<>"']/g, (character) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"}[character]));
   }
-  function human(value) { return String(value || "").replace(/[_-]+/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()); }
+  function human(value) { return String(value === null || value === undefined ? "" : value).replace(/[_-]+/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()); }
   function reason(value) { return messages[value] || human(value); }
   function titleForWorker(value) { return human(value).replace("Ci ", "CI ").replace("Seo ", "SEO ").replace("Ai ", "AI "); }
   function shortId(value) { const string = String(value || ""); return string.length > 16 ? string.slice(0, 8) + "…" : string || "—"; }
   function statusClass(value) {
     const status = String(value || "").toUpperCase();
-    if (["SETTLED", "ACCEPTED", "READY", "PASS", "OK", "LIVE", "COMPLETED", "ENROLLED"].includes(status)) return "status-good";
-    if (["EXECUTING", "WORKING", "SEARCHING", "REVIEWING", "CLAIMED", "AWARDED", "ALLOWED"].includes(status)) return "status-active";
-    if (["FAILED", "ERROR", "CRITICAL", "BLOCKED", "REJECTED"].includes(status)) return "status-bad";
-    if (["PAYOUT_PENDING", "SUBMITTED", "WARNING", "PENDING", "SHADOW"].includes(status)) return "status-warn";
+    if (goodStates.has(status)) return "status-good";
+    if (activeStates.has(status)) return "status-active";
+    if (badStates.has(status)) return "status-bad";
+    if (warningStates.has(status)) return "status-warn";
     return "";
   }
   function stateBadge(value) { return `<span class="state-badge state-${esc(String(value || "unknown").toLowerCase().replaceAll("_", "-"))} ${statusClass(value)}">${esc(human(value || "Unknown"))}</span>`; }
@@ -103,10 +111,11 @@
   }
 
   async function loadSources() {
-    const sources = sourceMap[section] || (advanced.has(section) ? [section] : [section]);
+    const requested = sourceMap[section] || (advanced.has(section) ? [section] : [section]);
+    const sources = [...new Set(["overview", "alerts", ...requested])];
     const entries = await Promise.all(sources.map(async (name) => {
       const response = await fetch(`/api/ops/${name}`, {credentials: "same-origin"});
-      if (response.status === 401) { window.location.assign("/login/"); throw new Error("unauthorized"); }
+      if (response.status === 401) { window.location.assign("/login/?reason=session-expired"); throw new Error("unauthorized"); }
       if (!response.ok) throw new Error(`Dashboard source ${name} is unavailable`);
       return [name, await response.json()];
     }));
@@ -122,6 +131,19 @@
       ["ACTIVE JOB VALUE", cardValue(cards, "AWARDED/ACCEPTED EXPOSURE", "$0.00"), "Contract exposure, not received cash", "exposure"],
     ];
     return `<div class="metric-grid">${metrics.map(([label, value, truth, classes]) => `<article class="metric-card ${classes}"><div class="metric-label"><span>${esc(label)}</span><i></i></div><div class="metric-value">${esc(value)}</div><div class="metric-truth">${esc(truth)}</div></article>`).join("")}</div>`;
+  }
+
+  function renderOperatingTruth(overview) {
+    const meta = overview.meta || {};
+    const rows = [
+      ["PRODUCTION", meta.production_state || "NO_SNAPSHOT", "Whether production action is currently permitted"],
+      ["SYSTEM HEALTH", meta.system_health || "NO_SNAPSHOT", "Persisted resource and critical-alert evidence"],
+      ["FAILED JOBS", cardValue(overview.cards, "FAILED JOBS", "0"), "Persisted terminal failures"],
+      ["UNKNOWN REMOTE", cardValue(overview.cards, "UNKNOWN REMOTE STATE", "0"), "Stopped for deterministic reconciliation"],
+      ["GENX BALANCE", cardValue(overview.cards, "GENX BALANCE", "—"), "Provider credit balance; not currency"],
+      ["OWNER ACTIONS", cardValue(overview.cards, "OWNER ACTIONS", "0"), "Open items requiring review"],
+    ];
+    return `<div class="health-grid operating-truth">${rows.map(([label, value, copy]) => `<article class="health-card"><small>${esc(label)}</small><strong class="${statusClass(value)}">${esc(human(value))}</strong><p>${esc(copy)}</p></article>`).join("")}</div>`;
   }
 
   function renderAgentMini(agents, jobs) {
@@ -197,6 +219,7 @@
     const greeting = new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening";
     root.innerHTML = `<section class="overview-welcome"><div><span class="eyebrow">OWNER OVERVIEW</span><h2>${greeting}</h2><p>Your autonomous earning system at a glance.</p></div><div class="autonomy-pill ${modeClass(mode)}"><small>AUTONOMY STATE</small><strong>${esc(human(mode))}</strong></div></section>
       ${renderMetrics(overview)}
+      ${renderOperatingTruth(overview)}
       <div class="dashboard-grid"><section class="panel system-working"><div class="working-header"><div><span class="working-kicker">RUNTIME ACTIVITY</span><h2 class="working-title">${workTitle}</h2><p class="working-copy">${workCopy}</p></div><span class="working-signal ${agentsExecuting ? "active" : ""}"><i></i>${workSignal}</span></div>${renderAgentMini(agents, jobs)}</section>
       ${panel("Needs your attention", "Only meaningful owner actions", `<div class="panel-body">${renderAttention(alerts, 4)}</div>`, {href: "/ops/alerts/", label: "View alerts"})}</div>
       ${panel("Jobs in progress", "Real work moving through delivery and settlement", jobRows(jobs, 5), {href: "/ops/jobs/", label: "View all jobs"})}
@@ -208,9 +231,17 @@
   }
 
   function jobMatches(row, filter) {
-    if (filter === "active") return ["CLAIMED", "AWARDED", "EXECUTING", "SUBMITTED", "ACCEPTED"].includes(row.state);
+    if (filter === "discovered") return row.state === "DISCOVERED";
+    if (filter === "qualified") return row.state === "EXPECTED" && row.qualification_decision !== "REJECT";
+    if (filter === "rejected") return row.qualification_decision === "REJECT";
+    if (filter === "acquired") return ["CLAIMED", "AWARDED"].includes(row.state);
+    if (filter === "executing") return row.state === "EXECUTING" || (row.execution_history || []).some((item) => item.status === "EXECUTING");
+    if (filter === "qa") return row.qa && row.qa !== "—";
+    if (filter === "ready") return row.submission_ready === true;
+    if (filter === "submitted") return ["SUBMITTED", "ACCEPTED"].includes(row.state);
     if (filter === "payout") return row.state === "PAYOUT_PENDING";
-    if (filter === "completed") return ["SETTLED", "FAILED"].includes(row.state);
+    if (filter === "settled") return row.state === "SETTLED";
+    if (filter === "failed") return row.state === "FAILED" || (row.execution_history || []).some((item) => item.status === "FAILED");
     return true;
   }
   function renderJobCards(rows) {
@@ -220,8 +251,9 @@
   }
   function renderJobs(data) {
     const rows = (data["live-work"] || {}).rows || [];
-    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>${rows.length} recorded job${rows.length === 1 ? "" : "s"}</h2><p>Every card is backed by persisted marketplace and execution state.</p></div><div class="filter-tabs" role="tablist" aria-label="Job filters"><button data-filter="active" class="${activeJobFilter === "active" ? "active" : ""}">Active</button><button data-filter="payout" class="${activeJobFilter === "payout" ? "active" : ""}">Awaiting payout</button><button data-filter="completed" class="${activeJobFilter === "completed" ? "active" : ""}">Completed</button><button data-filter="all" class="${activeJobFilter === "all" ? "active" : ""}">All</button></div></div><div id="jobCards">${renderJobCards(rows)}</div>${jobDrawerShell()}`;
-    root.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => { activeJobFilter = button.dataset.filter; renderJobs(data); }));
+    const filters = [["all", "All jobs"], ["discovered", "Discovered"], ["qualified", "Qualified"], ["rejected", "Rejected"], ["acquired", "Acquired / awarded"], ["executing", "Executing"], ["qa", "QA"], ["ready", "Ready"], ["submitted", "Submitted / delivered"], ["payout", "Payout pending"], ["settled", "Settled"], ["failed", "Failed"]];
+    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>${rows.length} recorded job${rows.length === 1 ? "" : "s"}</h2><p>Qualification, execution, acceptance, and settlement stay linked to persisted evidence.</p></div><label class="job-filter-label">WORKFLOW STATE<select id="jobStateFilter">${filters.map(([value, label]) => `<option value="${value}" ${activeJobFilter === value ? "selected" : ""}>${label}</option>`).join("")}</select></label></div><div id="jobCards">${renderJobCards(rows)}</div>${jobDrawerShell()}`;
+    root.querySelector("#jobStateFilter").addEventListener("change", (event) => { activeJobFilter = event.target.value; renderJobs(data); });
     bindJobDrawers(rows);
   }
 
@@ -235,16 +267,57 @@
   function openJobDrawer(row) {
     if (!row) return; const drawer = document.getElementById("jobDrawer"); const content = document.getElementById("drawerContent");
     const opener = document.activeElement;
-    const fields = [["Marketplace", human(row.market)], ["Reward", row.reward], ["Deadline", row.deadline ? new Date(row.deadline).toLocaleString() : "No deadline recorded"], ["State", human(row.state)], ["Current agent", row.worker && row.worker !== "—" ? titleForWorker(row.worker) : "Not assigned"], ["Execution", human(row.execution || "Not started")], ["Work plan", human(row.plan || "Not created")], ["Operation", human(row.operation || "Not selected")], ["QA", human(row.qa || "Not run")], ["Acceptance contract", `${human(row.acceptance_contract || "Not compiled")}${row.acceptance_contract_version ? ` · v${row.acceptance_contract_version}` : ""}`], ["Semantic acceptance", human(row.semantic_acceptance || "Not evaluated")], ["Submission ready", row.submission_ready ? "Yes" : "No"], ["Submission", human(row.submission || "Not submitted")], ["Revisions", String(row.open_revisions || 0)], ["Artifacts", String(row.artifacts || 0)]];
+    const fields = [["Marketplace", human(row.market)], ["Reward", row.reward], ["Fee", row.fee || "Not known before payout"], ["Expected profit", row.expected_profit || "No persisted score"], ["Recorded actual profit", row.actual_profit || "Not yet available"], ["Deadline", row.deadline ? new Date(row.deadline).toLocaleString() : "No deadline recorded"], ["State", human(row.state)], ["Current worker", row.worker && row.worker !== "—" ? titleForWorker(row.worker) : "Not assigned"], ["Execution", human(row.execution || "Not started")], ["Work plan", human(row.plan || "Not created")], ["Operation", human(row.operation || "Not selected")], ["Attempts", String((row.execution_history || []).length)], ["Repairs", row.repair_attempts || "0"], ["QA", human(row.qa || "Not run")], ["Acceptance contract", `${human(row.acceptance_contract || "Not compiled")}${row.acceptance_contract_version ? ` · v${row.acceptance_contract_version}` : ""}`], ["Semantic acceptance", human(row.semantic_acceptance || "Not evaluated")], ["Submission ready", row.submission_ready ? "Yes" : "No"], ["Submission", human(row.submission || "Not submitted")], ["Settlement", human((row.payout || {}).state || "Not recorded")], ["Revisions", String(row.open_revisions || 0)], ["Artifacts", String(row.artifacts || 0)]];
     const acceptance = (row.acceptance_results || []).map((item) => `<div class="readiness-item ${item.status === "PASS" ? "yes" : ""}"><i>${item.status === "PASS" ? "✓" : "!"}</i><span>${esc(human(item.id))} · ${esc(human(item.status))}</span></div>`).join("");
     const failures = (row.acceptance_failures || []).map((item) => `<span class="reason-chip">${esc(reason(item))}</span>`).join("");
-    content.innerHTML = `<div class="drawer-head"><div><span class="step-kicker">JOB DETAIL</span><h2 id="drawerTitle">${esc(row.title)}</h2></div><button class="drawer-close" type="button" aria-label="Close job detail">×</button></div><div class="drawer-grid">${fields.map(([label, value]) => `<div class="drawer-field"><small>${esc(label.toUpperCase())}</small><strong>${esc(value)}</strong></div>`).join("")}</div><div class="drawer-section"><h3>Delivery lifecycle</h3>${lifecycle(row)}</div><div class="drawer-section"><h3>Acceptance &amp; submission gate</h3><div class="readiness-list">${acceptance || `<div class="readiness-item"><i>·</i><span>Not evaluated</span></div>`}</div>${failures ? `<div class="reason-list">${failures}</div>` : ""}</div><details class="ledger-disclosure"><summary>Advanced technical detail</summary><div class="panel-body"><div class="drawer-field"><small>JOB ID</small><strong>${esc(row.job)}</strong></div><div class="drawer-field"><small>COMPILER</small><strong>${esc(row.acceptance_compiler || "Not compiled")}</strong></div>${row.last_error ? `<div class="drawer-field"><small>LAST ERROR</small><strong>${esc(reason(row.last_error))}</strong></div>` : ""}</div></details>`;
+    const executionTable = (row.execution_history || []).length ? genericTable(row.execution_history) : empty("No execution attempts", "Execution evidence will appear when a worker starts this job.");
+    const genxTable = (row.genx_calls || []).length ? genericTable(row.genx_calls) : empty("No GenX calls", "This job has no persisted provider calls.");
+    const artifactTable = (row.artifact_rows || []).length ? genericTable(row.artifact_rows) : empty("No artifacts", "No persisted delivery artifacts are linked to this job.");
+    const timeline = (row.timeline || []).map((item) => `<div class="timeline-row"><i></i><time>${esc(item.at ? new Date(item.at).toLocaleString() : "Time unavailable")}</time><strong>${esc(human(item.event))} · ${esc(human(item.status))}</strong></div>`).join("");
+    content.innerHTML = `<div class="drawer-head"><div><span class="step-kicker">JOB DETAIL · ${esc(shortId(row.job))}</span><h2 id="drawerTitle">${esc(row.title)}</h2></div><button class="drawer-close" type="button" aria-label="Close job detail">×</button></div><div class="drawer-grid">${fields.map(([label, value]) => `<div class="drawer-field"><small>${esc(label.toUpperCase())}</small><strong>${esc(value)}</strong></div>`).join("")}</div><p class="settings-copy">${esc(row.actual_profit_truth || "Actual profit remains unavailable until canonical evidence is complete.")}</p><div class="drawer-section"><h3>Delivery lifecycle</h3>${lifecycle(row)}</div><div class="drawer-section"><h3>Acceptance &amp; submission gate</h3><div class="readiness-list">${acceptance || `<div class="readiness-item"><i>·</i><span>Not evaluated</span></div>`}</div>${failures ? `<div class="reason-list">${failures}</div>` : ""}</div><details class="ledger-disclosure" open><summary>Execution &amp; repair history</summary>${executionTable}</details><details class="ledger-disclosure"><summary>GenX usage &amp; cost evidence</summary>${genxTable}</details><details class="ledger-disclosure"><summary>Artifacts</summary>${artifactTable}</details><div class="job-drawer-block"><h3>Audit timeline</h3><div class="timeline">${timeline || "No timeline events recorded"}</div></div><details class="ledger-disclosure"><summary>Advanced technical detail</summary><div class="panel-body"><div class="drawer-field"><small>JOB ID</small><strong>${esc(row.job)}</strong></div><div class="drawer-field"><small>COMPILER</small><strong>${esc(row.acceptance_compiler || "Not compiled")}</strong></div>${row.last_error ? `<div class="drawer-field"><small>LAST ERROR</small><strong>${esc(reason(row.last_error))}</strong></div>` : ""}</div></details>`;
     drawer.hidden = false; document.body.style.overflow = "hidden"; content.querySelector(".drawer-close").focus();
     let closed = false;
     const escapeDrawer = (event) => { if (event.key === "Escape") close(); };
     const close = () => { if (closed) return; closed = true; drawer.hidden = true; document.body.style.overflow = ""; document.removeEventListener("keydown", escapeDrawer); if (opener && opener.focus) opener.focus(); window.setTimeout(applyPendingData, 0); };
     content.querySelector(".drawer-close").addEventListener("click", close); drawer.addEventListener("click", (event) => { if (event.target === drawer) close(); });
     document.addEventListener("keydown", escapeDrawer);
+  }
+
+  function capabilityRows(rows) {
+    if (!rows.length) return empty("No matching operations", "The canonical worker registry has no operations matching this filter.");
+    return `<div class="table-scroll"><table class="modern-table capability-table"><thead><tr><th>Operation</th><th>Status</th><th>Worker class</th><th>Input contract</th><th>Runtime requirement</th><th>QA policy</th><th>Cost policy</th><th>Failure policy</th><th>External blocker</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(human(row.operation))}<small class="technical-id">${esc(row.operation)}</small></td><td>${stateBadge(row.status)}</td><td>${esc(titleForWorker(row.worker_class))}</td><td class="contract-copy"><details><summary>View contract</summary><p>${esc(row.input_contract)}</p></details></td><td>${esc(human(row.runtime_capability))}${(row.tool_requirements || []).length ? `<small>${esc(row.tool_requirements.join(" · "))}</small>` : ""}</td><td>${esc(human(row.qa_profile))}<small>${row.semantic_qa ? "Semantic + deterministic" : "Deterministic"}</small></td><td class="contract-copy"><details><summary>View cost policy</summary><p>${esc(row.cost_policy)}</p></details></td><td class="contract-copy"><details><summary>View failure policy</summary><p>${esc(row.failure_policy)}</p></details></td><td>${row.owner_action_blocker ? `<span class="reason-chip">${esc(reason(row.owner_action_blocker))}</span><small class="technical-id">${esc(row.owner_action_blocker)}</small>` : "—"}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+
+  function renderCapabilities(data) {
+    const payload = data.agents || {rows: [], operations: [], meta: {}}; const operations = payload.operations || []; const meta = payload.meta || {};
+    const summary = [["REGISTERED OPERATIONS", meta.TOTAL_REGISTERED_OPERATIONS || operations.length, "Canonical registry total"], ["READY", meta.OPERATIONS_READY || 0, "Local proof complete"], ["EXTERNAL PROOF REQUIRED", meta.OPERATIONS_BLOCKED_BY_EXTERNAL_OWNER_ACTION || 0, "Production provider proof outstanding"], ["BLOCKED", meta.OPERATIONS_BLOCKED || 0, "Contract or runtime blocker"], ["FAILED", meta.OPERATIONS_FAILED || 0, "Registry proof failure"]];
+    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Registry-derived operation truth</h2><p>Every row comes from the worker registry contract. Counts are dynamic; provider-backed operations stay external-proof-required until backend evidence clears them.</p></div></div><div class="capability-summary">${summary.map(([label, value, copy]) => `<article class="health-card"><small>${esc(label)}</small><strong>${esc(value)}</strong><p>${esc(copy)}</p></article>`).join("")}</div><div class="toolbar-row"><input id="capabilitySearch" type="search" placeholder="Search operation, worker, runtime, or blocker" aria-label="Search operations"><select id="capabilityStatus" aria-label="Filter operation status"><option value="all">All statuses</option><option value="READY">Ready</option><option value="EXTERNAL_PROOF_REQUIRED">External proof required</option><option value="BLOCKED">Blocked</option><option value="FAILED">Failed</option></select></div><section class="panel"><div class="panel-head"><div><h2>Operation contracts</h2><p>Input, runtime, QA, cost, failure, and proof policy from one source of truth</p></div></div><div id="capabilityRows">${capabilityRows(operations)}</div></section>`;
+    const update = () => { const query = root.querySelector("#capabilitySearch").value.trim().toLowerCase(); const status = root.querySelector("#capabilityStatus").value; const filtered = operations.filter((row) => (status === "all" || row.status === status) && (!query || JSON.stringify(row).toLowerCase().includes(query))); root.querySelector("#capabilityRows").innerHTML = capabilityRows(filtered); };
+    root.querySelector("#capabilitySearch").addEventListener("input", update); root.querySelector("#capabilityStatus").addEventListener("change", update);
+  }
+
+  function renderGenX(data) {
+    const payload = data.genx || {rows: [], meta: {}}; const rows = payload.rows || []; const meta = payload.meta || {}; const categories = meta.catalogue_by_category || []; const max = Math.max(1, ...categories.map((row) => Number(row.total || 0)));
+    const hero = [["CONNECTION", meta.connection_state || "NOT_CONFIGURED", "Live account snapshot evidence"], ["AVAILABLE CREDITS", meta.available_credits ?? "Unresolved", "Provider credits; not currency"], ["MONETARY VALUATION", meta.valuation_status || "OWNER_ACTION_REQUIRED", meta.monetary_cost_per_credit ? `${meta.valuation_currency} ${meta.monetary_cost_per_credit} per credit` : meta.owner_action || "No verified valuation"], ["UNKNOWN REMOTE", meta.unknown_remote_state || 0, "Stopped for reconciliation"]];
+    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>GenX operating truth</h2><p>Catalogue negotiation chooses compatible models at runtime. The console never hardcodes an ordinary provider model.</p></div></div><div class="genx-hero">${hero.map(([label, value, copy]) => `<article class="health-card"><small>${esc(label)}</small><strong class="${statusClass(value)}">${esc(human(value))}</strong><p>${esc(copy)}</p></article>`).join("")}</div><div class="section-grid"><section class="panel"><div class="panel-head"><div><h2>Live catalogue</h2><p>${Number(meta.catalogue_total || 0)} active models by provider category · synced ${esc(timeAgo(meta.snapshot_at))}</p></div></div><div class="panel-body">${categories.length ? `<div class="catalogue-bars">${categories.map((row) => `<div class="catalogue-bar"><i style="height:${Math.max(4, Number(row.total || 0) / max * 120)}px"></i><strong>${Number(row.total || 0)}</strong><small>${esc(human(row.category || "uncategorized"))}</small></div>`).join("")}</div>` : empty("No live catalogue snapshot", "Configure GenX and synchronize its catalogue before provider-backed work is proven.")}</div></section><section class="panel"><div class="panel-head"><div><h2>Negotiation evidence</h2><p>Recent successful, rejected, and unresolved provider calls</p></div></div><div class="panel-body"><div class="pipeline"><div class="pipeline-step"><strong>${Number(meta.recent_successes || 0)}</strong><small>Recent completed</small></div><div class="pipeline-step"><strong>${Number(meta.unknown_remote_state || 0)}</strong><small>Unknown remote</small></div><div class="pipeline-step"><strong>${rows.filter((row) => row.compatibility_evidence).length}</strong><small>Compatibility evidence</small></div></div>${meta.owner_action ? `<div class="account-next"><strong>Owner action</strong><p>${esc(meta.owner_action)}</p></div>` : ""}</div></section></div>${panel("Recent GenX calls", "Selected model, task, credits, monetary cost, latency, remote state, and compatibility evidence", rows.length ? genericTable(rows) : empty("No GenX calls recorded", "The call ledger will appear after real provider execution."))}`;
+  }
+
+  function renderServices(data) {
+    const factory = data.factory || {offerings: [], products: [], policy: {}}; const offerings = factory.offerings || []; const products = factory.products || [];
+    const listingCount = offerings.reduce((total, row) => total + (row.listings || []).length, 0); const orderCount = offerings.reduce((total, row) => total + (row.listings || []).reduce((sum, listing) => sum + Number(listing.incoming_orders || 0), 0), 0);
+    const body = offerings.length ? `<div class="service-list">${offerings.map((row) => `<article class="service-row"><div><h3>${esc(row.offering)}</h3><p>${esc(human(row.operation))} · ${esc(titleForWorker(row.worker_class))}</p></div><div class="service-cell"><small>STATE</small>${stateBadge(row.sellable ? "READY" : row.blocker || row.proof_state)}</div><div class="service-cell"><small>PRICE / MINIMUM</small><strong>${esc(row.price)} / ${esc(row.minimum_profitable_price)}</strong></div><div class="service-cell"><small>FEE / GENX COST</small><strong>${esc(row.fee_rate)} / ${esc(row.expected_genx_cost)}</strong></div><div class="service-cell"><small>OTHER EXPECTED COST</small><strong>${esc(row.expected_external_cost)} + ${esc(row.expected_operational_cost)}</strong></div><div class="service-listings">${(row.listings || []).length ? genericTable(row.listings) : `<p>No marketplace listings are persisted for this offering.</p>`}</div></article>`).join("")}</div>` : empty("No service offerings", "Only canonical service offerings and real marketplace listings appear here.");
+    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Services &amp; Products</h2><p>Offerings, listings, orders, delivery, and settlement stay connected to canonical commercial records.</p></div></div><div class="health-grid"><article class="health-card"><small>OFFERINGS</small><strong>${offerings.length}</strong><p>Persisted catalogue</p></article><article class="health-card"><small>SELLABLE</small><strong>${offerings.filter((row) => row.sellable).length}</strong><p>All sellability gates clear</p></article><article class="health-card"><small>LISTINGS</small><strong>${listingCount}</strong><p>Marketplace listing records</p></article><article class="health-card"><small>INCOMING ORDERS</small><strong>${orderCount}</strong><p>Persisted inbound orders</p></article></div>${body}<details class="ledger-disclosure"><summary>Owned product factory · ${products.length} products</summary><div class="panel-body"><p class="settings-copy">${esc(factory.truth || "Inventory is not revenue.")}</p>${products.length ? genericTable(products) : empty("No owned products", "No product candidates are persisted.")}</div></details>`;
+  }
+
+  function auditCategory(row) {
+    const event = String(row.event || "").toLowerCase();
+    if (event.includes("genx")) return "genx"; if (event.includes("market") || event.includes("channel")) return "marketplace"; if (event.includes("payout") || event.includes("settlement") || event.includes("ledger")) return "settlement"; if (event.includes("security") || event.includes("auth")) return "security"; if (event.includes("autonom")) return "autonomy"; if (event.includes("recovery")) return "recovery"; if (event.includes("execution") || event.includes("worker")) return "execution"; return "job";
+  }
+
+  function renderAudit(data) {
+    const rows = (data.logs || {}).rows || []; const filters = [["all", "All"], ["job", "Jobs"], ["execution", "Executions"], ["genx", "GenX"], ["marketplace", "Marketplace"], ["settlement", "Settlement"], ["security", "Security"], ["autonomy", "Autonomy"], ["recovery", "Owner recovery"]]; const visible = rows.filter((row) => activeAuditFilter === "all" || auditCategory(row) === activeAuditFilter);
+    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Owner-readable audit</h2><p>Human-readable event names first; correlation IDs and raw metadata remain expandable.</p></div></div><div class="audit-filters" role="tablist" aria-label="Audit event filters">${filters.map(([value, label]) => `<button type="button" data-audit-filter="${value}" class="${activeAuditFilter === value ? "active" : ""}">${label}</button>`).join("")}</div><section class="panel">${visible.length ? visible.map((row) => `<article class="audit-event"><time>${esc(row.created ? new Date(row.created).toLocaleString() : "Time unavailable")}</time><span>${stateBadge(row.severity)}</span><div><strong>${esc(human(row.event))}</strong><small>${esc(row.actor ? `Actor: ${row.actor}` : "System event")}</small></div><details><summary>Evidence</summary><div class="panel-body"><small>CORRELATION</small><code>${esc(row.correlation || "—")}</code>${row.metadata ? `<pre class="raw-object">${esc(JSON.stringify(row.metadata, null, 2))}</pre>` : ""}</div></details></article>`).join("") : empty("No events in this filter", "No persisted audit events match the selected category.")}</section>`;
+    root.querySelectorAll("[data-audit-filter]").forEach((button) => button.addEventListener("click", () => { activeAuditFilter = button.dataset.auditFilter; renderAudit(data); }));
   }
 
   function renderAgents(data) {
@@ -254,10 +327,11 @@
   }
 
   function renderMoney(data) {
-    const overview = data.overview || {cards: []}; const earnings = (data.earnings || {}).rows || []; const treasury = data.treasury || {rows: [], secondary_rows: []};
-    const settled = cardValue(overview.cards, "SETTLED 30D", "$0.00"); const pending = cardValue(overview.cards, "PENDING PAYOUT", "$0.00"); const inbound = cardValue(overview.cards, "INBOUND SERVICE EXPOSURE", "$0.00"); const costCard = (overview.cards || []).find((row) => String(row.label || "").includes("PAID EXECUTION COST 30D")); const cost = costCard ? costCard.value : "$0.00"; const coverageComplete = overview.meta && overview.meta.settled_profit_cost_coverage_complete === true; const profitCard = (overview.cards || []).find((row) => String(row.label || "").includes("NET SETTLED PROFIT 30D")); const profit = profitCard ? profitCard.value : "$0.00"; const profitLabel = coverageComplete ? "TRUE RECORDED NET SETTLED PROFIT · 30D" : "RECORDED NET SETTLED PROFIT · COST COVERAGE INCOMPLETE";
-    const payoutBody = earnings.length ? `<div class="payout-list">${earnings.map((row) => `<div class="payout-row"><div><strong>Job ${esc(shortId(row.job))}</strong><small>${esc(row.reference || "No external reference")}</small></div><strong>${esc(row.net)}</strong><div>${stateBadge(row.state)}</div><small>${esc(row.settled ? new Date(row.settled).toLocaleDateString() : row.pending ? `Pending since ${new Date(row.pending).toLocaleDateString()}` : "Earned, not settled")}</small></div>`).join("")}</div>` : empty("No payout history yet", "Real job payouts will appear here without being promoted to cash before settlement.");
-    root.innerHTML = `<div class="money-hero"><article class="money-primary"><small>SETTLED CASH · LAST 30 DAYS</small><strong>${esc(settled)}</strong><p>Only bank or rail-confirmed, reconciled SETTLED payouts are presented as received cash.</p></article><article class="money-side"><span>PENDING PAYOUT</span><strong>${esc(pending)}</strong><small>Earned, not received cash</small></article><article class="money-side"><span>INBOUND SERVICE EXPOSURE</span><strong>${esc(inbound)}</strong><small>Seller-side orders in flight; never cash before settlement</small></article><article class="money-side"><span>${esc(profitLabel)}</span><strong>${esc(profit)}</strong><small>Settled payout net less recorded attributable paid execution cost (${esc(cost)}). Missing monetary cost truth remains explicit. Targets are objectives, never caps.</small></article></div><div class="section-grid"><section class="panel"><div class="panel-head"><div><h2>Earnings movement</h2><p>Real payout history only</p></div></div><div class="panel-body chart-shell">${buildChart(earnings)}</div></section><section class="panel"><div class="panel-head"><div><h2>Treasury balances</h2><p>Earned, pending, and settled remain separate</p></div></div>${treasury.rows.length ? genericTable(treasury.rows) : empty("No treasury balances", "Balances appear after real financial lifecycle records exist.")}</section></div>${panel("Payout history", "Job-to-payout linkage and settlement state", payoutBody)}<details class="ledger-disclosure"><summary>Advanced ledger · accounting evidence</summary>${treasury.secondary_rows && treasury.secondary_rows.length ? genericTable(treasury.secondary_rows) : empty("No advanced ledger activity has been recorded.")}</details>`;
+    const overview = data.overview || {cards: [], meta: {}}; const earnings = (data.earnings || {}).rows || []; const treasury = data.treasury || {rows: [], secondary_rows: []}; const performance = data.performance || {rows: []};
+    const costCard = (overview.cards || []).find((row) => String(row.label || "").includes("PAID EXECUTION COST 30D")); const profitCard = (overview.cards || []).find((row) => String(row.label || "").includes("NET SETTLED PROFIT 30D")); const coverageComplete = overview.meta && overview.meta.settled_profit_cost_coverage_complete === true;
+    const finance = [["GROSS REVENUE · SETTLED 30D", cardValue(overview.cards, "GROSS SETTLED 30D", "$0.00"), "Gross value on settled payouts"], ["MARKETPLACE FEES · SETTLED 30D", cardValue(overview.cards, "SETTLED FEES 30D", "$0.00"), "Persisted settled payout fees"], ["GENX COST · SETTLED 30D", costCard ? costCard.value : "$0.00", coverageComplete ? "Attributable cost coverage complete" : "Attributable cost coverage incomplete"], ["EXTERNAL COST · ACTUAL", "Not recorded", "No canonical actual external-cost source"], ["OPERATIONAL COST · ACTUAL", "Not recorded", "No canonical actual operational-cost source"], ["NET REALIZED PROFIT · 30D", profitCard ? profitCard.value : "$0.00", coverageComplete ? "Settled net less recorded paid execution cost" : "Recorded result; cost coverage incomplete"], ["EXPECTED PROFIT · 24H", cardValue(overview.cards, "EXPECTED PROFIT 24H", "$0.00"), "Modelled allowed opportunities; not revenue"], ["PAYOUT PENDING", cardValue(overview.cards, "PENDING PAYOUT", "$0.00"), "Earned, not received cash"]];
+    const dimensions = (performance.rows || []).filter((row) => ["MARKET", "CHANNEL", "OPERATION", "MARKET_CAPABILITY", "PERIOD"].some((type) => String(row.dimension || "").includes(type)));
+    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Finance &amp; realized profit</h2><p>Gross, fees, paid execution cost, pending payout, settlement, and profit keep their canonical meanings.</p></div></div><div class="health-grid finance-grid">${finance.map(([label, value, truth]) => `<article class="health-card"><small>${esc(label)}</small><strong>${esc(value)}</strong><p>${esc(truth)}</p></article>`).join("")}</div><div class="section-grid"><section class="panel"><div class="panel-head"><div><h2>Settlement movement</h2><p>Real payout history only; no invented chart points</p></div></div><div class="panel-body chart-shell">${buildChart(earnings)}</div></section><section class="panel"><div class="panel-head"><div><h2>Treasury balances</h2><p>Earned, pending, and settled remain separate</p></div></div>${treasury.rows.length ? genericTable(treasury.rows) : empty("No treasury balances", "Balances appear after real financial lifecycle records exist.")}</section></div>${panel("Recent settlements & payouts", "Gross, fee, net, lifecycle state, and external reference", earnings.length ? genericTable(earnings) : empty("No payout history yet", "Real job payouts will appear here without being promoted to cash before settlement."))}${panel("Profit by channel, operation, and period", "Persisted profitability aggregates only", dimensions.length ? genericTable(dimensions) : empty("No profitability aggregates yet", "This view stays empty until canonical settled performance history exists."))}<details class="ledger-disclosure"><summary>Advanced accounting ledger</summary>${treasury.secondary_rows && treasury.secondary_rows.length ? genericTable(treasury.secondary_rows) : empty("No advanced ledger activity has been recorded.")}</details>`;
   }
 
   function renderMarkets(data) {
@@ -278,21 +352,12 @@
     const overview = data.overview || {cards: []}; const treasury = data.treasury || {rows: [], secondary_rows: []}; const earnings = (data.earnings || {}).rows || []; const accounts = (data.accounts || {}).rows || [];
     const receiptRoutes = accounts.filter((row) => row.payout_route && row.payout_route !== "NONE");
     root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Treasury</h2><p>Payment routes, payout state, settlement, reconciliation, and owner receipt remain separate canonical stages.</p></div></div><div class="health-grid"><article class="health-card"><small>PENDING PAYOUT</small><strong>${esc(cardValue(overview.cards, "PENDING PAYOUT", "$0.00"))}</strong><p>Earned, not received cash</p></article><article class="health-card"><small>SETTLED · 30D</small><strong>${esc(cardValue(overview.cards, "SETTLED 30D", "$0.00"))}</strong><p>Reconciled received cash</p></article><article class="health-card"><small>PAYOUT ROUTES</small><strong>${receiptRoutes.length}</strong><p>Configured catalogue routes</p></article><article class="health-card"><small>RECEIPT PROVEN</small><strong>${receiptRoutes.filter((row) => row.cash_ready).length}</strong><p>Authoritative owner receipt evidence</p></article></div><div class="section-grid"><section class="panel"><div class="panel-head"><div><h2>Balances</h2><p>Earned, pending, and settled are never collapsed</p></div></div>${treasury.rows.length ? genericTable(treasury.rows) : empty("No treasury balances", "Balances appear after real financial lifecycle records exist.")}</section><section class="panel"><div class="panel-head"><div><h2>Settlement movement</h2><p>Real payout history only</p></div></div><div class="panel-body chart-shell">${buildChart(earnings)}</div></section></div>${panel("Owner receipt routes", "Withdrawal remains a human action where the provider requires it", receiptRoutes.length ? `<div class="payout-list">${receiptRoutes.map((row) => `<div class="payout-row"><div><strong>${esc(row.display_name)}</strong><small>${esc(human(row.payout_route))}</small></div><strong>${esc(human(row.payout_receipt_proof_state))}</strong><div>${stateBadge(row.live_proving_state)}</div><small>${esc(row.human_withdrawal_required ? "Human withdrawal required" : "Provider payout route")}</small></div>`).join("")}</div>` : empty("No payout routes recorded", "Canonical account setup will identify supported owner receipt routes."))}<details class="ledger-disclosure"><summary>Advanced accounting ledger</summary>${treasury.secondary_rows && treasury.secondary_rows.length ? genericTable(treasury.secondary_rows) : empty("No ledger activity", "Entries appear only from persisted financial events.")}</details>`;
+    if (receiptRoutes.length) root.insertAdjacentHTML("beforeend", panel("Rail readiness evidence", "Connection, KYC, payout receipt proof, sync, blocker, and owner action per canonical rail", genericTable(receiptRoutes.map((row) => ({rail: row.display_name, route: row.payout_route, connection: row.api_connection_state, kyc: row.kyc_state, payout_readiness: row.payout_receipt_proof_state, currency: row.currency || "Not supplied", last_sync: row.last_connection_success_at || row.last_reconciled_at, blocker: row.last_safe_error || row.owner_action_required, owner_action: row.owner_action_required}))))) ;
   }
 
   function renderSettings(data) {
-    const overview = data.overview || {meta: {}}; const settings = data.settings || {rows: []}; const security = data.security || {cards: [], rows: []}; const nodes = data.nodes || {rows: [], secondary_rows: []}; const storage = data.storage || {rows: [], meta: {}}; const performance = data.performance || {cards: [], rows: []}; const genx = data.genx || {rows: [], meta: {}}; const logs = data.logs || {rows: []}; const factory = data.factory || {policy: {}, products: []};
-    const genxMeta = genx.meta || {};
-    const sections = [
-      ["connections", "Connections", "Integration credentials are managed from Markets & Accounts; secret values remain write-only.", `<a class="account-manage inline-action" href="/ops/markets/">Open Markets &amp; Accounts</a>`],
-      ["limits", "Autonomy & Limits", "Persisted operating configuration and safety bounds.", `<div class="health-grid"><article class="health-card"><small>AUTONOMY</small><strong>${esc(human((overview.meta || {}).autonomous_mode || "OFF"))}</strong><p>Canonical runtime mode</p></article><article class="health-card"><small>PRODUCT FACTORY</small><strong>${factory.policy && factory.policy.enabled === true ? "Enabled" : "Disabled"}</strong><p>Disabled unless explicitly owner-authorized</p></article><article class="health-card"><small>READY TO PUBLISH</small><strong>${Number(factory.ready_to_publish || 0)}</strong><p>Inventory is not revenue</p></article><article class="health-card"><small>DAILY INTERNAL CREDITS</small><strong>${esc(factory.daily_internal_credits || "0")}</strong><p>Persisted production usage</p></article></div>${genericTable(settings.rows || [])}`],
-      ["ai", "AI / GenX", "Live catalogue, credits, calls, and truthful monetary valuation state.", `<div class="health-grid"><article class="health-card"><small>AVAILABLE CREDITS</small><strong>${esc(genxMeta.available_credits ?? "Unresolved")}</strong><p>Provider-reported credits, not currency</p></article><article class="health-card"><small>MONETARY VALUATION</small><strong>${esc(human(genxMeta.valuation_status || "OWNER_ACTION_REQUIRED"))}</strong><p>${esc(genxMeta.owner_action || `${genxMeta.valuation_currency || ""} ${genxMeta.monetary_cost_per_credit || ""}`.trim())}</p></article></div>${genericTable(genx.rows || [])}`],
-      ["security", "Security", "Owner access, protected secret state, and active sessions.", `${security.cards && security.cards.length ? `<div class="health-grid">${security.cards.map((card) => `<article class="health-card"><small>${esc(card.label)}</small><strong>${valueMarkup(card.value)}</strong></article>`).join("")}</div>` : ""}${genericTable(security.rows || [])}`],
-      ["health", "System Health", "Nodes, storage admission, quality, and resource evidence.", `${genericTable(nodes.rows || [])}${genericTable(storage.rows || [])}${performance.cards && performance.cards.length ? `<div class="health-grid">${performance.cards.slice(0, 4).map((card) => `<article class="health-card"><small>${esc(card.label)}</small><strong>${esc(card.value)}</strong><p>${esc(card.truth || "Persisted evidence")}</p></article>`).join("")}</div>` : ""}`],
-      ["audit", "Audit", "Append-only technical events remain available without occupying primary navigation.", genericTable((logs.rows || []).slice(0, 100))],
-    ];
-    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Settings</h2><p>Connections, limits, AI, security, health, and audit evidence in one bounded surface.</p></div></div><div class="settings-sections">${sections.map(([id, title, copy, body], index) => `<details class="ledger-disclosure" id="${id}" ${index === 0 ? "open" : ""}><summary>${esc(title)}</summary><div class="panel-body"><p class="settings-copy">${esc(copy)}</p>${body}</div></details>`).join("")}</div>`;
-    const requested = new URLSearchParams(window.location.search).get("view"); const map = {system: "health", nodes: "health", storage: "health", performance: "health", genx: "ai", security: "security", logs: "audit"}; const target = document.getElementById(map[requested] || requested || ""); if (target) { target.open = true; target.scrollIntoView({block: "start"}); }
+    const overview = data.overview || {meta: {}}; const settings = data.settings || {rows: []}; const accounts = data.accounts || {rows: [], meta: {}}; const mode = (overview.meta || {}).autonomous_mode || "OFF"; const production = (overview.meta || {}).production_state || "NO_SNAPSHOT";
+    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Canonical settings</h2><p>Only persisted controls and safe configuration state live here. Monitoring stays in its operating page.</p></div></div><div class="health-grid"><article class="health-card"><small>AUTONOMY MODE</small><strong class="${statusClass(mode)}">${esc(human(mode))}</strong><p>Canonical runtime control</p></article><article class="health-card"><small>PRODUCTION STATE</small><strong class="${statusClass(production)}">${esc(human(production))}</strong><p>Derived by the backend operating gate</p></article><article class="health-card"><small>INTEGRATIONS CONFIGURED</small><strong>${Number((accounts.meta || {}).connections_verified || 0)} / ${Number((accounts.meta || {}).total || (accounts.rows || []).length)}</strong><p>Secrets remain write-only</p></article><article class="health-card"><small>OWNER ACTIONS</small><strong>${esc(cardValue(overview.cards, "OWNER ACTIONS", "0"))}</strong><p>Open the action inbox for resolution</p></article></div><div class="settings-sections"><details class="ledger-disclosure" open><summary>Autonomy, limits &amp; safe controls</summary><div class="panel-body"><p class="settings-copy">These values come from canonical SystemSetting records. Sensitive values are always redacted.</p>${settings.rows && settings.rows.length ? genericTable(settings.rows) : empty("No persisted overrides", "Repository and environment defaults remain in force.")}</div></details><details class="ledger-disclosure"><summary>Integration configuration</summary><div class="panel-body"><p class="settings-copy">Manage write-only credentials, authoritative connection tests, KYC, payout proof, and owner actions from the canonical account surface.</p><a class="account-manage inline-action" href="/ops/markets/">Open Channels &amp; Accounts</a></div></details><details class="ledger-disclosure"><summary>Owner-action links</summary><div class="panel-body"><div class="system-links"><a class="system-link" href="/ops/alerts/"><strong>Action inbox</strong><small>Critical, external proof, payout, provider, and security work</small></a><a class="system-link" href="/ops/capabilities/"><strong>Capability proof</strong><small>Registry-derived external proof blockers</small></a><a class="system-link" href="/ops/genx/"><strong>GenX control</strong><small>Credits, catalogue, valuation, and remote state</small></a><a class="system-link" href="/ops/audit/"><strong>Audit</strong><small>Owner-readable events and raw evidence</small></a></div></div></details></div>`;
   }
 
   function secureFields() {
@@ -320,9 +385,19 @@
     bind("#proofForm", `/api/integrations/${encodeURIComponent(row.slug)}/proof`, (data) => ({proof_type: data.get("proof_type"), proof_reference: data.get("proof_reference")}));
   }
 
+  function alertGuidance(row) {
+    const type = String(row.type || "").toUpperCase();
+    if (type.includes("PAYOUT") || type.includes("KYC")) return {category: "Payout / KYC", action: "Complete and verify the payout route before enabling work.", href: "/ops/treasury/"};
+    if (type.includes("AUTH") || type.includes("MARKET") || type.includes("BID")) return {category: "Marketplace connection", action: "Review the affected channel, reconnect it, and run an authoritative test.", href: "/ops/markets/"};
+    if (type.includes("GENX") || type.includes("REMOTE")) return {category: "Provider reconciliation", action: "Review provider evidence and reconcile the remote state before retrying.", href: "/ops/genx/"};
+    if (type.includes("SECURITY") || type.includes("SCOPE")) return {category: "Security / production", action: "Review the security evidence and keep production blocked until resolved.", href: "/ops/settings/"};
+    if (type.includes("QA") || type.includes("EXECUTION") || type.includes("REVISION")) return {category: "Failed execution", action: "Open the affected job, inspect its QA or failure evidence, and choose the bounded recovery path.", href: "/ops/jobs/"};
+    return {category: "Requires owner", action: "Review the evidence and resolve the recorded blocker before increasing autonomy.", href: "/ops/overview/"};
+  }
+
   function renderAlerts(data) {
     const rows = (data.alerts || {}).rows || []; const attention = rows.filter((row) => !["RESOLVED", "ACKNOWLEDGED"].includes(row.status)); const handled = rows.filter((row) => row.status === "ACKNOWLEDGED"); const resolved = rows.filter((row) => row.status === "RESOLVED");
-    function group(title, values, type) { return `<section><div class="alert-group-head"><h2>${esc(title)}</h2><span>${values.length}</span></div>${values.length ? `<div class="alert-list">${values.map((row) => `<article class="alert-card ${row.severity === "ERROR" || row.severity === "CRITICAL" ? "error" : type === "resolved" ? "resolved" : ""}"><span class="alert-symbol">${type === "resolved" ? "✓" : row.severity === "ERROR" || row.severity === "CRITICAL" ? "!" : "•"}</span><div><h3>${esc(friendlyAlertTitle(row))}</h3><p>${esc(row.message || reason(row.type))}</p><details class="ledger-disclosure"><summary>Technical detail</summary><div class="panel-body"><code>${esc(row.type || "")}</code>${row.evidence ? `<pre class="raw-object">${esc(JSON.stringify(row.evidence, null, 2))}</pre>` : ""}</div></details></div><time class="alert-time">${esc(timeAgo(row.created))}</time></article>`).join("")}</div>` : empty(`No ${title.toLowerCase()}`, type === "attention" ? "Everything requiring owner attention is clear." : "No records in this group.")}</section>`; }
+    function group(title, values, type) { return `<section><div class="alert-group-head"><h2>${esc(title)}</h2><span>${values.length}</span></div>${values.length ? `<div class="alert-list">${values.map((row) => { const guide = alertGuidance(row); const affected = row.evidence && (row.evidence.market || row.evidence.job || row.evidence.strategy_id || row.evidence.scope_version); return `<article class="alert-card ${row.severity === "ERROR" || row.severity === "CRITICAL" ? "error" : type === "resolved" ? "resolved" : ""}"><span class="alert-symbol">${type === "resolved" ? "✓" : row.severity === "ERROR" || row.severity === "CRITICAL" ? "!" : "•"}</span><div><span class="step-kicker">${esc(guide.category)}</span><h3>${esc(friendlyAlertTitle(row))}</h3><p>${esc(row.message || reason(row.type))}</p><p><strong>Why it matters:</strong> This evidence can block safe production, delivery, or settlement.</p><p><strong>Recommended owner action:</strong> ${esc(guide.action)}</p><a class="panel-link" href="${esc(guide.href)}">Open relevant control →</a><details class="ledger-disclosure"><summary>Technical detail</summary><div class="panel-body"><code>${esc(row.type || "")}</code>${affected ? `<p>Affected object: ${esc(affected)}</p>` : ""}${row.evidence ? `<pre class="raw-object">${esc(JSON.stringify(row.evidence, null, 2))}</pre>` : ""}</div></details></div><time class="alert-time">${esc(timeAgo(row.created))}</time></article>`; }).join("")}</div>` : empty(`No ${title.toLowerCase()}`, type === "attention" ? "Everything requiring owner attention is clear." : "No records in this group.")}</section>`; }
     root.innerHTML = `<div class="alert-groups">${group("Needs your attention", attention, "attention")}${group("Handled automatically", handled, "handled")}${group("Resolved", resolved, "resolved")}</div>`;
   }
 
@@ -357,10 +432,14 @@
     currentData = data;
     if (section === "overview") renderOverview(data);
     else if (section === "jobs" || section === "live-work") renderJobs(data);
+    else if (section === "capabilities") renderCapabilities(data);
     else if (section === "agents") renderAgents(data);
     else if (section === "money") renderMoney(data);
     else if (section === "treasury") renderTreasury(data);
-    else if (section === "markets") renderMarkets(data);
+    else if (section === "markets" || section === "channels") renderMarkets(data);
+    else if (section === "services") renderServices(data);
+    else if (section === "genx") renderGenX(data);
+    else if (section === "audit") renderAudit(data);
     else if (section === "alerts") renderAlerts(data);
     else if (section === "system") renderSystem(data);
     else if (section === "settings") renderSettings(data);
@@ -373,12 +452,20 @@
     [["navJobs", jobs], ["navAlerts", alerts]].forEach(([id, count]) => { const element = document.getElementById(id); if (element && count !== null) { element.textContent = count ? (count > 99 ? "99+" : String(count)) : ""; element.classList.toggle("visible", count > 0); } });
   }
 
+  function updateGlobalStatus(data) {
+    const overview = data.overview || {cards: [], meta: {}}; const meta = overview.meta || {}; const alertRows = (data.alerts || {}).rows || [];
+    const actions = alertRows.filter((row) => !["RESOLVED", "ACKNOWLEDGED"].includes(row.status)).length;
+    const values = [["productionState", meta.production_state || "NO_SNAPSHOT"], ["autonomyState", meta.autonomous_mode || "OFF"], ["systemHealthState", meta.system_health || "NO_SNAPSHOT"], ["ownerActionState", actions]];
+    values.forEach(([id, value]) => { const element = document.getElementById(id); if (!element) return; const strong = element.querySelector("strong"); strong.textContent = id === "ownerActionState" ? String(value) : human(value); element.classList.remove("status-good", "status-warn", "status-bad", "status-active"); element.classList.add(statusClass(id === "ownerActionState" ? (Number(value) ? "WARNING" : "READY") : value) || "status-warn"); });
+  }
+
   async function refresh(manual) {
     if (refreshing) return; refreshing = true; refreshButton.classList.add("spinning");
     try {
       const data = await loadSources();
       currentData = data;
       updateNavBadges(data);
+      updateGlobalStatus(data);
       if (!manual && hasActiveInteraction()) pendingData = data;
       else { render(data); pendingData = null; }
       skeleton.hidden = true; root.hidden = false; firstRender = false;

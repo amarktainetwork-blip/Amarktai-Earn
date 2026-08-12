@@ -6,9 +6,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07111f">
   <meta name="description" content="AmarktAI Earn is an owner-controlled AI earning system that finds opportunities, chooses the work worth doing, executes it, checks quality and tracks payout truth.">
+  <meta name="robots" content="index,follow,max-image-preview:large">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="AmarktAI Earn — The owner operating system for AI-powered earning work">
+  <meta property="og:description" content="Qualify opportunities, execute with the right workers, verify quality, and track payout through settlement in one owner-controlled system.">
+  <meta name="twitter:card" content="summary_large_image">
   <title>AmarktAI Earn — The system runs the earning loop</title>
-  <link rel="stylesheet" href="{% static 'control/landing.css' %}">
-  <link rel="stylesheet" href="{% static 'control/landing-shell.css' %}">
+  <link rel="stylesheet" href="{% static 'control/landing.css' %}?v=frontend-owner-console">
+  <link rel="stylesheet" href="{% static 'control/landing-shell.css' %}?v=frontend-owner-console">
 </head>
 <body>
   <div class="page-noise" aria-hidden="true"></div>
@@ -18,10 +23,13 @@
       <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i></span>
       <span class="brand-copy"><strong>AMARKT<span class="brand-ai">AI</span> <span class="brand-earn">EARN</span></strong></span>
     </a>
-    <nav class="main-nav" aria-label="Primary navigation">
+    <button class="nav-toggle" id="navToggle" type="button" aria-label="Open site navigation" aria-expanded="false" aria-controls="mainNav"><span></span><span></span><span></span></button>
+    <nav class="main-nav" id="mainNav" aria-label="Primary navigation">
       <a href="#what">What it does</a>
       <a href="#earn">Ways to earn</a>
       <a href="#loop">How it works</a>
+      <a href="#profit">Profit &amp; safety</a>
+      <a href="#owner">Owner control</a>
     </nav>
     <a class="login-link" href="{% url 'login' %}">Owner dashboard <span>→</span></a>
   </header>
@@ -194,7 +202,7 @@
       </div>
     </section>
 
-    <section class="choice-section shell">
+    <section class="choice-section shell" id="profit">
       <div class="choice-copy">
         <div class="eyebrow">THE PROFIT FILTER</div>
         <h2>It should not take <em>every</em> job.</h2>
@@ -217,6 +225,19 @@
           <strong>Unclear scope</strong><strong>Low reward</strong><strong>High delivery risk</strong><strong>Payment route uncertain</strong>
           <footer><i></i> Protect time, money and reputation</footer>
         </div>
+      </div>
+    </section>
+
+    <section class="truth-section shell" aria-labelledby="truth-title">
+      <div class="section-head">
+        <div><div class="eyebrow">PROFIT, SAFETY &amp; SETTLEMENT</div><h2 id="truth-title">Automation that knows<br><em>when to stop.</em></h2></div>
+        <p>Earn is built around permission and evidence. The Profit Brain evaluates expected economics before resources are committed. GenX supplies compatible AI capabilities when required, while safety gates keep account, payout, policy and quality proof separate.</p>
+      </div>
+      <div class="truth-grid">
+        <article><span>01</span><h3>Profit Brain</h3><p>Compares reward, marketplace fees, GenX credits, other expected cost, time and risk. Expected profit stays a forecast—not revenue.</p></article>
+        <article><span>02</span><h3>GenX execution</h3><p>Selects compatible provider capabilities for the task at runtime, records actual calls and stops ambiguous remote work for reconciliation.</p></article>
+        <article><span>03</span><h3>Approval controls</h3><p>Accounts, automation policy, acquisition, publishing and payout proof each keep their own fail-closed gate under owner control.</p></article>
+        <article><span>04</span><h3>Settlement truth</h3><p>Earned, pending and settled remain distinct. The console calls money received only after authoritative payout and reconciliation evidence exists.</p></article>
       </div>
     </section>
 
@@ -279,5 +300,6 @@
     <p class="footer-copyright">© 2026 Amarkt<span class="brand-ai">AI</span> Earn. All rights reserved.</p>
     <p class="footer-network">Part of the Amarkt<span class="brand-ai">AI</span> Network · <a href="/terms/">Terms</a></p>
   </footer>
+  <script src="{% static 'control/landing.js' %}?v=frontend-owner-console" defer></script>
 </body>
 </html>
