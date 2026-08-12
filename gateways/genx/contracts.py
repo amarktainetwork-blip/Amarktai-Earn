@@ -251,13 +251,21 @@ def route_models(
     allow_exploration: bool = False,
     exploration_fraction: Decimal = Decimal("0.05"),
 ) -> list[EconomicRoute]:
-    """Rank in money only with a valuation; otherwise use a named credit-efficiency score."""
+    """Rank provider-eligible models without turning missing local history into a capability gate.
+
+    ``allow_exploration`` and ``exploration_fraction`` remain in the public contract for
+    backwards compatibility and audit callers. A live GenX model does not need local
+    ModelStat history before its first legitimate use: cold-start models are routed
+    under the same real credit ceiling and monetary profitability controls as proven
+    models, and are labelled ``exploration`` only as an audit/learning fact.
+    """
     routes: list[EconomicRoute] = []
     for candidate in candidates:
         unproven = candidate.attempts == 0
-        if unproven and not allow_exploration:
-            continue
-        quality = candidate.qa_acceptance_probability
+        # No local evidence means unknown, not forbidden. Until real QA exists, use
+        # the task's required quality as the cold-start expectation; actual outcomes
+        # immediately replace that assumption through ModelStat on later routes.
+        quality = required_quality if unproven else candidate.qa_acceptance_probability
         if not unproven and quality < required_quality:
             continue
         expected_credits = candidate.expected_credits or candidate.average_credits or candidate.price_hint or ZERO
@@ -269,8 +277,6 @@ def route_models(
         if max_genx_credits is not None and total_credits > max_genx_credits:
             continue
         exploration = unproven
-        if exploration and (max_genx_credits is None or total_credits > max_genx_credits * exploration_fraction):
-            continue
         success_probability = max(ZERO, Decimal("1") - candidate.failure_probability)
         non_currency_score = (quality * success_probability) / max(total_credits, Decimal("0.00000001"))
         expected_net: Decimal | None = None
