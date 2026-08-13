@@ -51,12 +51,36 @@ def genx_quality_and_exploration_bounded() -> bool:
     low_quality = ModelCandidate(
         "low", expected_credits=Decimal("0.1"), attempts=20, qa_accepted=2, qa_rejected=18
     )
-    new = ModelCandidate("new", expected_credits=Decimal("1"))
-    return (
+    cold_start = ModelCandidate("new", expected_credits=Decimal("1"))
+    admitted = route_models(
+        [cold_start],
+        expected_revenue=Decimal("100"),
+        max_genx_credits=Decimal("10"),
+        allow_exploration=False,
+    )
+    compatibility_flag = route_models(
+        [cold_start],
+        expected_revenue=Decimal("100"),
+        max_genx_credits=Decimal("10"),
+        allow_exploration=True,
+        exploration_fraction=Decimal("0.01"),
+    )
+    over_budget = route_models(
+        [cold_start],
+        expected_revenue=Decimal("100"),
+        max_genx_credits=Decimal("1"),
+        allow_exploration=True,
+        exploration_fraction=Decimal("1"),
+    )
+    return bool(
         route_models([low_quality], expected_revenue=Decimal("100"), max_genx_credits=Decimal("10")) == []
-        and route_models([new], expected_revenue=Decimal("100"), max_genx_credits=Decimal("10"), allow_exploration=False) == []
-        and route_models([new], expected_revenue=Decimal("100"), max_genx_credits=Decimal("10"), allow_exploration=True, exploration_fraction=Decimal("0.05")) == []
-        and bool(route_models([new], expected_revenue=Decimal("100"), max_genx_credits=Decimal("10"), allow_exploration=True, exploration_fraction=Decimal("0.20")))
+        and admitted
+        and compatibility_flag
+        and over_budget == []
+        and admitted[0].exploration
+        and compatibility_flag[0].exploration
+        and admitted[0].quality_probability == Decimal("0.80")
+        and admitted[0].expected_credits <= Decimal("10")
     )
 
 
