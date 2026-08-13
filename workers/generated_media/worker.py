@@ -125,7 +125,11 @@ class GeneratedMediaWorker(Worker):
         gateway = GenXGateway()
         estimated, call_limit = credit_envelope(request.job_id, request.inputs)
         job = Job.objects.get(pk=request.job_id)
-        params = {"prompt": prompt}
+        # GenX voice/TTS models publish text as their required input, while image,
+        # audio/SFX/music and video generation models use prompt. Keep that
+        # provider-schema distinction explicit without hard-wiring any model ID.
+        prompt_parameter = "text" if operation == "voice_generate" else "prompt"
+        params = {prompt_parameter: prompt}
         if duration is not None:
             params["duration_seconds"] = duration
         if voice:
@@ -146,7 +150,7 @@ class GeneratedMediaWorker(Worker):
             accounting_currency=job.currency,
             allow_exploration=bool(request.inputs.get("allow_model_exploration", False)),
             economically_fragile=bool(request.inputs.get("economically_fragile", False)),
-            required_params=("prompt",),
+            required_params=(prompt_parameter,),
         )
 
         uploaded_file_id = ""
@@ -187,7 +191,7 @@ class GeneratedMediaWorker(Worker):
         ).hexdigest()[:48]
         call = None
         try:
-            required_params = ("prompt", source_param) if source_param else ("prompt",)
+            required_params = (prompt_parameter, source_param) if source_param else (prompt_parameter,)
             call = gateway.run(
                 job_id=request.job_id,
                 worker_id=request.worker_id,
