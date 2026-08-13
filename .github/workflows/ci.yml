@@ -165,7 +165,7 @@ jobs:
             amarktai-earn-sandbox-broker:phase8c python /app/scripts/dependency-prep-smoke.py
       - name: Build Apify browser Actor and prove off-host browser runtime
         run: |
-          docker build -t amarktai-earn-apify-browser-ci integrations/apify_actor
+          docker build -t amarktai-earn-apify-browser-ci -f integrations/apify_actor/.actor/Dockerfile integrations/apify_actor
           test "$(docker image inspect -f '{{.Config.User}}' amarktai-earn-apify-browser-ci)" = "10001:10001"
           docker run --rm --entrypoint python amarktai-earn-apify-browser-ci -c 'from playwright.async_api import async_playwright; import src.main; print("APIFY_BROWSER_IMPORT_OK")'
       - name: Build production image and prove secrets are excluded
