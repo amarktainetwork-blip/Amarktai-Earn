@@ -9,6 +9,7 @@ from django.test import SimpleTestCase, TestCase
 from control.models import Artifact, AuditEvent, Execution, Job, Marketplace, Worker
 from control.services.phase3_acceptance import PASS, READY_CREDENTIAL, READY_OWNER, READY_PRODUCTION, phase3_acceptance_report
 from control.services.self_improvement import SelfImprovementGateError, create_self_improvement_review_manifest
+from control.services.semantic_acceptance import genx_quality_and_exploration_bounded
 
 
 PRELIVE_NAMES = (
@@ -126,6 +127,11 @@ class Phase3CompositionTests(SimpleTestCase):
             report = phase3_acceptance_report(ci_proven=True)
         self.assertEqual(report["status"], "FAIL")
         self.assertIn("CAPABILITIES", [row["name"] for row in report["core"] if row["status"] == "FAIL"])
+
+
+class Phase3SemanticAcceptanceRegressionTests(SimpleTestCase):
+    def test_cold_start_genx_routing_is_bounded_by_real_credit_ceiling(self):
+        self.assertTrue(genx_quality_and_exploration_bounded())
 
 
 class SelfImprovementReviewBoundaryTests(TestCase):
