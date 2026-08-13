@@ -178,7 +178,7 @@ class Phase2VisionAndMediaFixtureTests(SimpleTestCase):
         selected = SimpleNamespace(
             model_id="fixture-media-model",
             model_payload={"parameters": [
-                {"name": "prompt"}, {"name": "duration"}, {"name": "image_file_id"}
+                {"name": "prompt"}, {"name": "text"}, {"name": "duration"}, {"name": "image_file_id"}
             ]},
         )
         gateway = Mock()
@@ -224,6 +224,14 @@ class Phase2VisionAndMediaFixtureTests(SimpleTestCase):
                             self.assertTrue(result.evidence["require_video"])
                         else:
                             self.assertTrue(result.evidence["require_audio"])
+
+                voice_select = gateway.select_model.call_args_list[0]
+                self.assertEqual(voice_select.kwargs["params"]["text"], "Original fixture media concept")
+                self.assertNotIn("prompt", voice_select.kwargs["params"])
+                self.assertEqual(voice_select.kwargs["required_params"], ("text",))
+                voice_run = gateway.run.call_args_list[0]
+                self.assertEqual(voice_run.kwargs["params"]["text"], "Original fixture media concept")
+                self.assertEqual(voice_run.kwargs["required_params"], ("text",))
 
     def test_generated_media_rejects_unconfirmed_rights_before_provider_boundary(self):
         with tempfile.TemporaryDirectory() as temp, patch("workers.generated_media.worker.GenXGateway") as gateway:
