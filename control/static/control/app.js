@@ -16,7 +16,7 @@
     money: ["overview", "earnings", "treasury", "markets", "performance"],
     treasury: ["overview", "earnings", "treasury", "accounts"],
     markets: ["markets", "accounts"], channels: ["markets", "accounts"],
-    services: ["factory"], genx: ["genx"], audit: ["logs"], alerts: ["alerts"],
+    services: ["factory"], commercial: ["commercial"], genx: ["genx"], audit: ["logs"], alerts: ["alerts"],
     settings: ["overview", "settings", "accounts"],
     system: ["nodes", "storage", "performance", "genx", "security"],
   };
@@ -314,6 +314,31 @@
     if (event.includes("genx")) return "genx"; if (event.includes("market") || event.includes("channel")) return "marketplace"; if (event.includes("payout") || event.includes("settlement") || event.includes("ledger")) return "settlement"; if (event.includes("security") || event.includes("auth")) return "security"; if (event.includes("autonom")) return "autonomy"; if (event.includes("recovery")) return "recovery"; if (event.includes("execution") || event.includes("worker")) return "execution"; return "job";
   }
 
+  function renderCommercial(data) {
+    const commercial = data.commercial || {};
+    const api = commercial.api_business || {products: [], calls: 0, settled_revenue: "0", settled_net_profit: "0"};
+    const customers = commercial.customers || {total: 0, repeat: 0, settled_profit: "0", retention: "NOT_YET_PROVEN"};
+    const factory = commercial.product_factory || {candidates: 0, ready: 0, published: 0, sales: 0, inventory: 0, settled_profit: "0"};
+    const products = api.products || [];
+    const inventory = commercial.launch_inventory || [];
+    const experiments = commercial.experiments || [];
+    const explanations = commercial.profit_explanations || [];
+    const cards = [
+      ["API PRODUCTS", products.length, "Canonical product records"], ["METERED CALLS", Number(api.calls || 0), "QA-approved usage records"],
+      ["SETTLED API REVENUE", `$${api.settled_revenue || "0"}`, "Authoritative settlement only"], ["SETTLED API PROFIT", `$${api.settled_net_profit || "0"}`, "Settled less attributable cost"],
+      ["API CUSTOMERS", Number(customers.total || 0), "Privacy-conscious profiles"], ["REPEAT CUSTOMERS", Number(customers.repeat || 0), customers.retention || "NOT_YET_PROVEN"],
+      ["MRR", `$${api.mrr || "0"}`, api.mrr_truth || "NOT_YET_PROVEN"], ["OVERAGE REVENUE", `$${api.overage_revenue || "0"}`, api.overage_truth || "NOT_YET_PROVEN"],
+    ];
+    const productRows = products.map((row) => ({product: row.name, proof: row.proof_state, publication: row.publication_state, plans: row.plans, calls: row.calls, expected_cost: row.expected_cost, actual_cost: row.actual_cost, settled_revenue: row.settled_revenue, settled_profit: row.settled_net_profit, owner_actions: row.required_external_actions}));
+    const factoryRows = [{candidates: factory.candidates, ready: factory.ready, published: factory.published, sales: factory.sales, inventory: factory.inventory, settled_profit: factory.settled_profit}];
+    root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Commercial control centre</h2><p>Sellable inventory, channel readiness, customer economics, experiments, and settled profit without invented demand or revenue.</p></div><a class="account-manage inline-action" href="/api/docs/">Public API docs</a></div>
+      <div class="health-grid commercial-metrics">${cards.map(([label, value, truth]) => `<article class="health-card"><small>${esc(label)}</small><strong>${esc(value)}</strong><p>${esc(human(truth))}</p></article>`).join("")}</div>
+      ${panel("API business", "Proof, publication, plans, usage, cost, and settlement", productRows.length ? genericTable(productRows) : empty("No API products", "Bootstrap the canonical commercial catalog."))}
+      <div class="section-grid commercial-grid">${panel("Launch order", "Ranked from canonical proof, economics, and blockers", inventory.length ? genericTable(inventory) : empty("No ranked inventory", "Bootstrap commercial product packages."))}${panel("Product Factory", "Inventory and outcomes from the existing factory", genericTable(factoryRows))}</div>
+      ${panel("Offer experiments", "Winner recommendations require settled risk-adjusted profit", experiments.length ? genericTable(experiments) : empty("No experiments", "No offer variants are collecting first-party evidence."))}
+      ${panel("Why did AmarktAI choose this?", "Persisted Profit Brain facts and rejection reasons", explanations.length ? genericTable(explanations) : empty("No decision evidence yet", "Canonical decisions appear after real opportunities are scored."))}`;
+  }
+
   function renderAudit(data) {
     const rows = (data.logs || {}).rows || []; const filters = [["all", "All"], ["job", "Jobs"], ["execution", "Executions"], ["genx", "GenX"], ["marketplace", "Marketplace"], ["settlement", "Settlement"], ["security", "Security"], ["autonomy", "Autonomy"], ["recovery", "Owner recovery"]]; const visible = rows.filter((row) => activeAuditFilter === "all" || auditCategory(row) === activeAuditFilter);
     root.innerHTML = `<div class="page-toolbar"><div class="page-toolbar-copy"><h2>Owner-readable audit</h2><p>Human-readable event names first; correlation IDs and raw metadata remain expandable.</p></div></div><div class="audit-filters" role="tablist" aria-label="Audit event filters">${filters.map(([value, label]) => `<button type="button" data-audit-filter="${value}" class="${activeAuditFilter === value ? "active" : ""}">${label}</button>`).join("")}</div><section class="panel">${visible.length ? visible.map((row) => `<article class="audit-event"><time>${esc(row.created ? new Date(row.created).toLocaleString() : "Time unavailable")}</time><span>${stateBadge(row.severity)}</span><div><strong>${esc(human(row.event))}</strong><small>${esc(row.actor ? `Actor: ${row.actor}` : "System event")}</small></div><details><summary>Evidence</summary><div class="panel-body"><small>CORRELATION</small><code>${esc(row.correlation || "—")}</code>${row.metadata ? `<pre class="raw-object">${esc(JSON.stringify(row.metadata, null, 2))}</pre>` : ""}</div></details></article>`).join("") : empty("No events in this filter", "No persisted audit events match the selected category.")}</section>`;
@@ -438,6 +463,7 @@
     else if (section === "treasury") renderTreasury(data);
     else if (section === "markets" || section === "channels") renderMarkets(data);
     else if (section === "services") renderServices(data);
+    else if (section === "commercial") renderCommercial(data);
     else if (section === "genx") renderGenX(data);
     else if (section === "audit") renderAudit(data);
     else if (section === "alerts") renderAlerts(data);

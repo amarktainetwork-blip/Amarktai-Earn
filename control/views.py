@@ -1,7 +1,8 @@
 import json
 from datetime import timedelta
-import pyotp
+
 import jwt
+import pyotp
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.hashers import check_password
@@ -12,10 +13,24 @@ from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
-from .jwt_auth import issue_access, issue_refresh, rotate_refresh, revoke_refresh
-from .models import AuditEvent, GenXAccountSnapshot, GenXCall, Job, LoginChallenge, OwnerSecurityProfile, Payout, RecoveryCode, ReauthenticationGrant, RefreshSession, Worker
+
+from .jwt_auth import issue_access, issue_refresh, revoke_refresh, rotate_refresh
+from .models import (
+    AuditEvent,
+    GenXAccountSnapshot,
+    GenXCall,
+    Job,
+    LoginChallenge,
+    OwnerSecurityProfile,
+    Payout,
+    ReauthenticationGrant,
+    RecoveryCode,
+    RefreshSession,
+    Worker,
+)
+from .ops import SECTIONS
+from .ops import snapshot as ops_snapshot
 from .secrets import decrypt_secret
-from .ops import SECTIONS, snapshot as ops_snapshot
 from .services.auth_security import (
     Throttled,
     client_ip,
@@ -30,7 +45,7 @@ from .services.autonomy import current_mode
 
 User = get_user_model()
 
-PAGE_SECTIONS = (*SECTIONS, "jobs", "money", "system", "capabilities", "services", "channels", "audit")
+PAGE_SECTIONS = (*SECTIONS, "jobs", "money", "system", "capabilities", "services", "channels", "audit", "commercial")
 PAGE_META = {
     "overview": ("Overview", "Your autonomous earning business at a glance"),
     "jobs": ("Jobs", "Live work, delivery progress, and payout state"),
@@ -52,6 +67,7 @@ PAGE_META = {
     "logs": ("Audit Logs", "Technical events and correlation evidence"),
     "audit": ("Audit", "Owner-readable events with filterable technical evidence"),
     "services": ("Services & Products", "Canonical offerings, listings, orders, delivery, and settlement state"),
+    "commercial": ("Commercial", "Sellable inventory, API economics, customers, experiments, and settled outcomes"),
     "security": ("Security", "Owner access, sessions, and protected secret state"),
     "settings": ("Settings", "Connections, limits, AI, security, system health, and audit evidence"),
 }
@@ -126,6 +142,9 @@ def ops_page(request, section="overview"):
 def ops_api(request, section):
     if not getattr(request, "owner", None):
         return JsonResponse({"error": "unauthorized"}, status=401)
+    if section == "commercial":
+        from control.services.commercial_intelligence import commercial_snapshot
+        return JsonResponse(commercial_snapshot())
     try:
         return JsonResponse(ops_snapshot(section, owner=request.owner))
     except KeyError:
