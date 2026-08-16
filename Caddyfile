@@ -8,7 +8,7 @@ earn.amarktai.co.za {
         -Server
     }
 
-    @html_pages path / /login/ /terms/
+    @html_pages path / /login/ /terms/ /api/docs/
     header @html_pages Content-Disposition "inline"
 
     reverse_proxy web:8000
