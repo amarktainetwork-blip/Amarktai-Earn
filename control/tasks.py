@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from control.models import Job
-from control.services.agentgigs import process_pending_webhooks, process_webhook_event, sync_applications, sync_job, sync_market
+from control.services.agentgigs import (
+    process_pending_webhooks,
+    process_webhook_event,
+    sync_applications,
+    sync_job,
+    sync_market,
+)
 
 
 def sync_agentgigs_market_task():
@@ -56,3 +62,11 @@ def submit_work_plan_task(plan_id: int):
 
     plan = submit_work_plan(plan_id)
     return {"plan_id": plan.id, "status": plan.status}
+
+
+def execute_commercial_api_request_task(request_id: str):
+    from control.models import CommercialAPIRequest
+    from control.services.commercial_api import execute_request
+
+    row = execute_request(CommercialAPIRequest.objects.select_related("product", "api_key__plan").get(pk=request_id))
+    return {"request_id": str(row.id), "status": row.status, "qa_passed": row.qa_passed}
