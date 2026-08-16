@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
-import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -95,23 +92,6 @@ def _paypal(credentials: dict[str, str], session) -> tuple[str | None, str | Non
     return str(payload.get("app_id") or "") or None, "PayPal REST application", ("OAUTH", "RECEIPT_RECONCILIATION")
 
 
-def _valr(credentials: dict[str, str], session) -> tuple[str | None, str | None, tuple[str, ...]]:
-    _required(credentials, "api_key", "view_api_secret")
-    timestamp = str(int(time.time() * 1000))
-    path = "/v1/account/balances"
-    message = f"{timestamp}GET{path}"
-    signature = hmac.new(credentials["view_api_secret"].encode(), message.encode(), hashlib.sha512).hexdigest()
-    payload = _request(
-        session,
-        "GET",
-        f"https://api.valr.com{path}",
-        headers={"X-VALR-API-KEY": credentials["api_key"], "X-VALR-SIGNATURE": signature, "X-VALR-TIMESTAMP": timestamp, "Accept": "application/json"},
-    )
-    if not isinstance(payload, list):
-        raise ConnectionTestError("MALFORMED_RESPONSE", "VALR returned an unexpected balances response.")
-    return None, "VALR view-only account", ("BALANCE_READ", "RECEIPT_RECONCILIATION")
-
-
 def _lemon_squeezy(credentials: dict[str, str], session) -> tuple[str | None, str | None, tuple[str, ...]]:
     _required(credentials, "api_key")
     payload = _request(
@@ -172,7 +152,6 @@ def _dealwork(credentials: dict[str, str], session) -> tuple[str | None, str | N
 TESTERS = {
     "PAYSTACK": _paystack,
     "PAYPAL": _paypal,
-    "VALR": _valr,
     "LEMON_SQUEEZY": _lemon_squeezy,
     "APIFY": _apify,
     "TASKBOUNTY": _taskbounty,

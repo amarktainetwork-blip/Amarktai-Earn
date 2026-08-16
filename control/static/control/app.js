@@ -16,7 +16,7 @@
     money: ["overview", "earnings", "treasury", "markets", "performance"],
     treasury: ["overview", "earnings", "treasury", "accounts"],
     markets: ["markets", "accounts"], channels: ["markets", "accounts"],
-    services: ["factory"], commercial: ["commercial"], genx: ["genx"], audit: ["logs"], alerts: ["alerts"],
+    services: ["factory"], commercial: ["commercial"], "autonomous-earn": ["autonomous-earn"], genx: ["genx"], audit: ["logs"], alerts: ["alerts"],
     settings: ["overview", "settings", "accounts"],
     system: ["nodes", "storage", "performance", "genx", "security"],
   };

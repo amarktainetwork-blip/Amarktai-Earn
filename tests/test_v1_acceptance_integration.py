@@ -39,7 +39,7 @@ class V1AcceptanceIntegrationTests(TestCase):
         self.assertEqual(by_id["genx_async_session_truth"]["status"], "PASS")
         for identifier in (
             "two_sided_revenue_engine", "service_offering_truth", "inbound_order_uses_canonical_job_lifecycle",
-            "global_portfolio_ranking", "seller_pricing_profit_floor", "crypto_markets_offhost_only",
+            "global_portfolio_ranking", "seller_pricing_profit_floor", "crypto_markets_absent",
             "nevermined_fiat_only_on_webdock", "skyfire_noncrypto_gate", "hyrve_fail_closed_without_contract",
             "service_capability_requires_execution_proof", "coding_service_blocked_when_sandbox_off",
             "public_web_service_blocked_when_web_disabled", "market_policy_staleness_blocks_mutation",

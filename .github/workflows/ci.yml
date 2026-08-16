@@ -2,7 +2,7 @@ name: Amarktai Earn CI
 
 on:
   pull_request:
-    branches: [main, phase2-3/ready-for-keys]
+    branches: [main, phase2-3/ready-for-keys, launch/final-ui-profitability]
   push:
     branches: [main]
 
@@ -128,6 +128,10 @@ jobs:
           if-no-files-found: warn
       - name: Webdock host compliance integration
         run: python manage.py test tests.test_webdock_host_compliance_integration -v 2
+      - name: Autonomous income and fiat-only Webdock integration
+        env:
+          AUTONOMOUS_MODE: "OFF"
+        run: python manage.py test tests.test_autonomous_income_integration -v 2
       - name: Priority pricing onboarding publication integration
         run: >-
           python manage.py test
@@ -155,7 +159,7 @@ jobs:
         if: always()
         run: python manage.py test tests.test_channel_completion_regressions_integration -v 2
       - name: Full Django integration matrix
-        run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration tests.test_dependency_media_integration tests.test_v1_acceptance_integration tests.test_profit_brain_integration tests.test_multifile_composite_integration tests.test_expanded_workers_integration tests.test_multi_market_adapters_integration tests.test_synthetic_safety_integration tests.test_final_freeze_integration tests.test_owner_ui_integration tests.test_owner_dashboard_final_integration tests.test_frontend_owner_console_integration tests.test_genx_async_session_integration tests.test_genx_web_search_negotiation tests.test_two_sided_revenue_integration tests.test_banking_integration tests.test_phase5_market_readiness_integration tests.test_phase3_channels_integration tests.test_channel_completion_integration tests.test_channel_completion_regressions_integration tests.test_webdock_host_compliance_integration tests.test_rq_queueing_integration tests.test_phase1_execution_engine_integration tests.test_phase2_capability_factory_integration tests.test_phase2_ocr_browser_integration tests.test_phase3_ready_for_keys_integration -v 2
+        run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration tests.test_dependency_media_integration tests.test_v1_acceptance_integration tests.test_profit_brain_integration tests.test_multifile_composite_integration tests.test_expanded_workers_integration tests.test_multi_market_adapters_integration tests.test_synthetic_safety_integration tests.test_final_freeze_integration tests.test_owner_ui_integration tests.test_owner_dashboard_final_integration tests.test_frontend_owner_console_integration tests.test_genx_async_session_integration tests.test_genx_web_search_negotiation tests.test_two_sided_revenue_integration tests.test_banking_integration tests.test_phase5_market_readiness_integration tests.test_phase3_channels_integration tests.test_channel_completion_integration tests.test_channel_completion_regressions_integration tests.test_webdock_host_compliance_integration tests.test_autonomous_income_integration tests.test_rq_queueing_integration tests.test_phase1_execution_engine_integration tests.test_phase2_capability_factory_integration tests.test_phase2_ocr_browser_integration tests.test_phase3_ready_for_keys_integration -v 2
       - name: Production configuration preflight
         env:
           AMARKTAI_ENV: production
@@ -193,7 +197,7 @@ jobs:
       - name: Build production image and prove secrets are excluded
         run: |
           docker build -t amarktai-earn-ci .
-          docker run --rm amarktai-earn-ci sh -lc 'test ! -e /app/.env && command -v pg_dump && command -v pg_restore && command -v gpg && command -v ffmpeg && command -v ffprobe && command -v tesseract && command -v pdftoppm'
+          docker run --rm amarktai-earn-ci sh -lc 'test ! -e /app/.env && command -v pg_dump && command -v pg_restore && command -v gpg && command -v ffmpeg && command -v ffprobe && ! command -v tesseract && command -v pdftoppm'
           docker run --rm amarktai-earn-ci python /app/scripts/media-smoke.py
       - name: Encrypted PostgreSQL backup and restore proof
         run: |
@@ -240,3 +244,7 @@ jobs:
         run: python manage.py phase3_acceptance --format json --ci-proven --fail-on FAIL
       - name: Final launch acceptance report
         run: python manage.py launch_acceptance --format json --ci-proven --fail-on FAIL
+      - name: Final autonomous income acceptance report
+        env:
+          AUTONOMOUS_MODE: "OFF"
+        run: python manage.py autonomous_income_acceptance --format json

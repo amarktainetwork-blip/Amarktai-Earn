@@ -77,9 +77,9 @@ class MultiMarketPersistenceTests(TestCase):
     def test_bootstrap_persists_exact_disabled_truth_and_is_idempotent(self):
         first = bootstrap_market_integrations()
         second = bootstrap_market_integrations()
-        self.assertEqual(first["total"], 6)
-        self.assertEqual(Marketplace.objects.count(), 6)
-        self.assertEqual(MarketIntegrationProfile.objects.count(), 6)
+        self.assertEqual(first["total"], 7)
+        self.assertEqual(Marketplace.objects.count(), 7)
+        self.assertEqual(MarketIntegrationProfile.objects.count(), 7)
         self.assertEqual(second["created"], 0)
         for market in Marketplace.objects.select_related("integration_profile"):
             self.assertFalse(market.enabled)
@@ -91,6 +91,8 @@ class MultiMarketPersistenceTests(TestCase):
                 "discover", "normalize", "claim", "apply", "bid", "messages", "input_assets",
                 "submission", "revision", "status", "payment", "payout",
                 "webhook_or_event_support", "rate_limit", "policy_verified", "payout_ready",
+                "repo_access", "github_try", "github_claim", "application", "assignment_status",
+                "delivery", "payment_request", "settlement_status",
             })
 
     def test_crypto_payout_account_cannot_open_market_gate(self):

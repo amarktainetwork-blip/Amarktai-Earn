@@ -70,3 +70,48 @@ def execute_commercial_api_request_task(request_id: str):
 
     row = execute_request(CommercialAPIRequest.objects.select_related("product", "api_key__plan").get(pk=request_id))
     return {"request_id": str(row.id), "status": row.status, "qa_passed": row.qa_passed}
+
+
+def autonomous_income_frequent_task():
+    from control.services.autonomous_income import run_autonomous_frequent_cycle
+    from control.services.autonomy import AutonomyMode, current_mode
+    from control.services.markets import configured_adapter
+
+    adapters = {}
+    if current_mode() in {AutonomyMode.LOW_RISK, AutonomyMode.FULL}:
+        for slug in ("taskbounty", "opire", "algora", "gitpay"):
+            try:
+                adapters[slug] = configured_adapter(slug)
+            except (KeyError, ValueError):
+                continue
+    return {**run_autonomous_frequent_cycle(adapters=adapters), "hook": "FREQUENT_DISCOVERY_AND_RECONCILIATION"}
+
+
+def autonomous_income_bounded_work_task():
+    from control.services.autonomous_income import run_autonomous_earn_loop
+    from control.services.autonomy import AutonomyMode, current_mode
+    from control.services.markets import configured_adapter
+
+    adapters = {}
+    if current_mode() in {AutonomyMode.LOW_RISK, AutonomyMode.FULL}:
+        for slug in ("taskbounty", "opire", "algora", "gitpay"):
+            try:
+                adapters[slug] = configured_adapter(slug)
+            except (KeyError, ValueError):
+                continue
+    return {**run_autonomous_earn_loop(adapters=adapters), "hook": "BOUNDED_RANK_AND_WORK"}
+
+
+def autonomous_income_daily_task():
+    from control.services.autonomous_income import run_autonomous_daily_cycle
+    from control.services.autonomy import AutonomyMode, current_mode
+    from control.services.markets import configured_adapter
+
+    adapters = {}
+    if current_mode() in {AutonomyMode.LOW_RISK, AutonomyMode.FULL}:
+        for slug in ("taskbounty", "opire", "algora", "gitpay"):
+            try:
+                adapters[slug] = configured_adapter(slug)
+            except (KeyError, ValueError):
+                continue
+    return {**run_autonomous_daily_cycle(adapters=adapters), "hook": "DAILY_SETTLEMENT_AND_PERFORMANCE"}

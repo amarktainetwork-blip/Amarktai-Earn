@@ -22,17 +22,17 @@ from control.services.market_priority import (
 class MarketPriorityStdlibTests(unittest.TestCase):
     def test_priority_covers_exact_canonical_earning_catalog(self):
         self.assertEqual(set(PRIORITIES), set(CANONICAL_EARNING_MARKETS))
-        self.assertEqual(len(CANONICAL_EARNING_MARKETS), 27)
+        self.assertEqual(len(CANONICAL_EARNING_MARKETS), 18)
         self.assertEqual(
             ACTIVE_MARKETS,
             {
-                "lemon-squeezy", "taskbounty", "rapidapi", "apify-store",
-                "contra", "dealwork", "algora",
+                "taskbounty", "rapidapi", "apify-store", "algora", "opire",
+                "gitpay", "lemon-squeezy", "contra", "dealwork",
             },
         )
-        self.assertEqual(len(ACTIVE_MARKETS), 7)
+        self.assertEqual(len(ACTIVE_MARKETS), 9)
         self.assertEqual(ARCHIVED_MARKETS, {"agentmarket", "chowdr"})
-        self.assertEqual(len(INACTIVE_MARKETS), 18)
+        self.assertEqual(len(INACTIVE_MARKETS), 7)
         self.assertFalse(ACTIVE_MARKETS & ARCHIVED_MARKETS)
         self.assertFalse(ACTIVE_MARKETS & INACTIVE_MARKETS)
         self.assertFalse(ARCHIVED_MARKETS & INACTIVE_MARKETS)
@@ -43,13 +43,13 @@ class MarketPriorityStdlibTests(unittest.TestCase):
         ordered = sorted(PRIORITIES.items(), key=lambda item: item[1].rank)
         self.assertEqual(
             [slug for slug, _priority in ordered[:5]],
-            ["lemon-squeezy", "taskbounty", "rapidapi", "apify-store", "contra"],
+            ["taskbounty", "rapidapi", "apify-store", "algora", "opire"],
         )
-        self.assertTrue(all(priority.tier == "ACTIVATE_FIRST" for _slug, priority in ordered[:5]))
-        self.assertEqual([priority.rank for _slug, priority in ordered], list(range(1, 28)))
+        self.assertTrue(all(priority.tier in {"ACTIVATE_FIRST", "OWNER_ACTION"} for _slug, priority in ordered[:5]))
+        self.assertEqual([priority.rank for _slug, priority in ordered], list(range(1, 19)))
 
     def test_unusable_or_unimplemented_owner_payout_routes_are_not_active(self):
-        for slug in ("agentgigs", "callboard", "opire"):
+        for slug in ("agentgigs", "callboard"):
             self.assertNotIn(slug, ACTIVE_MARKETS)
             self.assertIn(slug, INACTIVE_MARKETS)
             priority = PRIORITIES[slug]
@@ -59,8 +59,8 @@ class MarketPriorityStdlibTests(unittest.TestCase):
 
         self.assertNotIn("nevermined", ACTIVE_MARKETS)
         self.assertIn("nevermined", INACTIVE_MARKETS)
-        self.assertIn("not implemented yet", PRIORITIES["nevermined"].payout_path)
-        self.assertEqual(PRIORITIES["nevermined"].action, "IMPLEMENT_AND_PROVE_STABLECOIN_SETTLEMENT")
+        self.assertIn("Fiat", PRIORITIES["nevermined"].payout_path)
+        self.assertEqual(PRIORITIES["nevermined"].action, "VERIFY_FIAT_PLAN_AND_STRIPE_PAYOUT")
 
     def test_test_credit_candidates_are_archived_not_presented_as_revenue(self):
         self.assertEqual(PRIORITIES["agentmarket"].tier, "ARCHIVE")
@@ -79,14 +79,14 @@ class MarketPriorityStdlibTests(unittest.TestCase):
         self.assertIn("retired_non_earning_rows_hidden", source)
         self.assertNotIn("delete()", source)
 
-    def test_taskbounty_external_crypto_receipt_never_uses_private_keys(self):
+    def test_taskbounty_uses_only_owner_configured_usd_bank_payout(self):
         catalog_source = Path("markets/catalog.py").read_text(encoding="utf-8")
         adapter_source = Path("markets/taskbounty/client.py").read_text(encoding="utf-8")
-        self.assertNotIn("CRYPTO_PAYOUT_ROUTES_PROHIBITED", catalog_source)
-        self.assertIn("external_crypto_receipt_allowed", catalog_source)
-        self.assertIn("/solver/payout-method", adapter_source)
-        self.assertIn("PAYOUT_METHODS", adapter_source)
-        self.assertIn("private keys", adapter_source.lower())
+        self.assertIn("supported_payout_selected", catalog_source)
+        self.assertIn("USD_BANK_TRANSFER", catalog_source)
+        self.assertNotIn("/solver/payout-method", adapter_source)
+        self.assertNotIn("PAYOUT_METHODS", adapter_source)
+        self.assertIn("payout api is disabled", adapter_source.lower())
         self.assertNotIn("seed_phrase", adapter_source)
 
     def test_owner_market_ui_explains_priority_and_cleanup(self):

@@ -601,7 +601,15 @@ def admit_request(*, identity: AuthenticatedAPIIdentity, product: CommercialAPIP
     job = Job.objects.create(
         marketplace=marketplace, external_id=f"commercial-api:{row.id}", title=f"API: {product.display_name}",
         task_class=product.slug, reward=product.gross_price, currency="USD", state=Job.State.AWARDED,
-        normalized_payload={"source_type": "COMMERCIAL_API", "commercial_api_request_id": str(row.id), "operation": product.operation, "inputs": payload},
+        normalized_payload={
+            "source_type": "COMMERCIAL_API",
+            "source_classification": "BUILT_IN_DEMAND",
+            "revenue_channel": "PAY_PER_CALL_API",
+            "autonomous_action": "MARKETPLACE_API_ACTOR_INCOME",
+            "commercial_api_request_id": str(row.id),
+            "operation": product.operation,
+            "inputs": payload,
+        },
     )
     row.job = job
     row.save(update_fields=["job", "updated_at"])

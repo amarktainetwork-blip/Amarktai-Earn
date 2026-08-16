@@ -241,10 +241,7 @@ class TwoSidedRevenueIntegrationTests(TestCase):
         self.assertEqual(profile.api_contract_state, "PUBLIC_API_CONTRACT_NOT_VERIFIED")
 
     def test_offhost_candidates_cannot_become_webdock_runtime_channels(self):
-        market = Marketplace.objects.get(slug="virtuals-acp")
-        self.assertFalse(market.enabled)
-        self.assertEqual(market.integration_profile.hosting_policy, "OFFHOST_SETTLEMENT_REQUIRED")
-        self.assertIn("WALLET_EXECUTION_PROHIBITED_ON_WEBDOCK", market.integration_profile.blockers)
+        self.assertFalse(Marketplace.objects.filter(slug="virtuals-acp").exists())
 
     def test_service_requires_real_execution_and_qa_proof(self):
         offering = self._offering()

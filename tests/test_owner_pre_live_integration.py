@@ -115,7 +115,7 @@ class IntegrationCredentialSecurityTests(TestCase):
         self.assertNotIn(b"sk_test_hidden", response.content)
 
     def test_private_wallet_and_bank_material_are_rejected(self):
-        with self.assertRaisesRegex(ValueError, "private_or_recovery_material_prohibited"):
+        with self.assertRaisesRegex(ValueError, "unsupported_credential_fields"):
             store_credentials("taskbounty", {"solana_usdc_address": "seed phrase abandon ability able about above absent"}, actor="owner")
         with self.assertRaisesRegex(ValueError, "unsupported_credential_fields"):
             store_credentials("paystack", {"bank_account_number": "123456789"}, actor="owner")

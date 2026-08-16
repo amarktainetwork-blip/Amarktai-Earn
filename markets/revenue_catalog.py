@@ -359,34 +359,7 @@ WEBDOCK_DEFINITIONS = (
 )
 
 
-_OFFHOST = (
-    ("virtuals-acp", "Virtuals ACP", "https://whitepaper.virtuals.io/"),
-    ("coinbase-x402-bazaar", "Coinbase x402 Bazaar", "https://docs.cdp.coinbase.com/x402/"),
-    ("okx-ai", "OKX AI", "https://www.okx.com/web3"),
-    ("agrenting", "Agrenting", "https://agrenting.ai/"),
-    ("olas-mech", "Olas Mech", "https://docs.olas.network/"),
-    ("masumi-sokosumi", "Masumi / Sokosumi", "https://docs.masumi.network/"),
-    ("singularitynet", "SingularityNET", "https://dev.singularitynet.io/"),
-    ("fetch-agentverse", "Fetch Agentverse (blockchain path)", "https://docs.agentverse.ai/"),
-    ("clawrr", "Clawrr", "https://clawrr.com/"),
-    ("planetloga", "PlanetLoga", "https://planetloga.com/"),
-)
-
-OFFHOST_DEFINITIONS = tuple(
-    RevenueMarketDefinition(
-        slug=slug, display_name=name, channels=("OFFHOST_SETTLEMENT",), source_urls=(url,),
-        seller_capabilities=_seller_capabilities(), source_wired=False,
-        auth_method="NO WEBDOCK CREDENTIALS", job_acquisition_mode="NONE", seller_mode="FUTURE_EXTERNAL_BRIDGE_ONLY",
-        settlement_rail="CRYPTO_OR_ONCHAIN_OFFHOST_ONLY", currency="USD",
-        hosting_policy="OFFHOST_SETTLEMENT_REQUIRED", api_contract_state="FUTURE_REVIEW_REQUIRED",
-        payout_proof_state="PROHIBITED_ON_WEBDOCK", manual_onboarding_required=True,
-        blockers=("OFFHOST_SETTLEMENT_REQUIRED", "WALLET_EXECUTION_PROHIBITED_ON_WEBDOCK", "EXTERNAL_SETTLEMENT_BRIDGE_NOT_IMPLEMENTED"),
-        evidence_notes="Candidate is catalogued only; no wallet, key, chain, testnet, or transaction code is initialized on Webdock.",
-        execution_placement="OFFHOST_REQUIRED",
-    ) for slug, name, url in _OFFHOST
-)
-
-DEFINITIONS = WEBDOCK_DEFINITIONS + OFFHOST_DEFINITIONS
+DEFINITIONS = WEBDOCK_DEFINITIONS
 BY_SLUG = {definition.slug: definition for definition in DEFINITIONS}
 POLICY_CHECKED_AT = datetime(2026, 8, 9, 12, 0, tzinfo=datetime_timezone.utc)
 
@@ -420,6 +393,11 @@ LEGACY_PROFILE_ENRICHMENTS = {
         "revenue_channels": ["BOUNTY"], "job_acquisition_mode": "SOURCE_WIRED_IMPORT",
         "seller_mode": "SOLVER_MUTATION_CONTRACT_UNVERIFIED", "settlement_rail": "PAYOUT_ONBOARDING_RAIL_UNVERIFIED",
         "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "SOURCE_IMPORT_ONLY_SOLVER_MUTATION_UNVERIFIED",
+    },
+    "gitpay": {
+        "revenue_channels": ["BOUNTY"], "job_acquisition_mode": "FIRST_PARTY_SOURCE_IMPORT_OWNER_ASSISTED",
+        "seller_mode": "ASSIGNMENT_REQUIRED_BEFORE_EXECUTION", "settlement_rail": "BANK_OR_PAYPAL",
+        "hosting_policy": "WEBDOCK_SAFE", "api_contract_state": "SOURCE_IMPORT_ONLY_MUTATIONS_OWNER_ASSISTED",
     },
 }
 
