@@ -8,6 +8,7 @@
   <title>AmarktAI Earn · {{ page_title }}</title>
   <link rel="stylesheet" href="{% static 'control/app.css' %}?v=frontend-owner-console">
   <link rel="stylesheet" href="{% static 'control/console.css' %}?v=frontend-owner-console">
+  <link rel="stylesheet" href="{% static 'control/brand-system.css' %}?v=unified-launch-1">
 </head>
 <body>
   <div class="aurora aurora-one" aria-hidden="true"></div>
@@ -29,10 +30,8 @@
         </div>
         <div class="header-actions">
           <div class="operational-status" aria-label="Global operating status">
-            <span class="header-status" id="productionState"><small>PRODUCTION</small><strong>Checking</strong></span>
             <span class="header-status" id="autonomyState"><small>AUTONOMY</small><strong>Checking</strong></span>
-            <span class="header-status" id="systemHealthState"><small>HEALTH</small><strong>Checking</strong></span>
-            <a class="header-status action-status" id="ownerActionState" href="/ops/alerts/"><small>OWNER ACTIONS</small><strong>Checking</strong></a>
+            <a class="header-status action-status" id="ownerActionState" href="/ops/alerts/"><small>ACTIONS</small><strong>Checking</strong></a>
           </div>
           <div class="live-state" id="liveState" aria-label="Dashboard data status"><i></i><span>Connecting data</span></div>
           <div class="updated-state">Updated <time id="lastUpdated">—</time></div>
