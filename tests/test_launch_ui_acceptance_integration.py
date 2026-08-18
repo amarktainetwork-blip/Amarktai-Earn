@@ -5,7 +5,7 @@ from django.contrib.staticfiles import finders
 from django.test import TestCase
 
 from control.jwt_auth import issue_access
-from control.services.commercial_api import bootstrap_commercial_catalog
+from control.services.api_distribution import bootstrap_api_distribution
 from control.services.commercial_intelligence import bootstrap_commercial_packages
 from control.services.launch_acceptance import ALLOWED, launch_acceptance_report
 
@@ -13,7 +13,7 @@ from control.services.launch_acceptance import ALLOWED, launch_acceptance_report
 class LaunchUIAcceptanceIntegrationTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        bootstrap_commercial_catalog(); bootstrap_commercial_packages()
+        bootstrap_api_distribution(); bootstrap_commercial_packages()
         cls.owner = get_user_model().objects.create_user(username="launch-owner", password="test", is_staff=True)
 
     def test_public_shell_and_documentation_have_semantic_commercial_hierarchy(self):
@@ -55,8 +55,9 @@ class LaunchUIAcceptanceIntegrationTests(TestCase):
 
     def test_launch_gate_has_exact_criteria_and_truthful_classifications(self):
         report = launch_acceptance_report(ci_proven=True)
-        expected = {"CORE_EXECUTION", "CAPABILITY_ENGINEERING", "MONEY_ENGINEERING", "PUBLIC_UI", "RESPONSIVE_UI", "COMMERCIAL_API_GATEWAY", "API_PRODUCT_CATALOG", "RAPIDAPI_PACKAGE", "APIFY_COMMERCIAL_PACKAGE", "CUSTOMER_ECONOMICS", "OFFER_EXPERIMENTS", "PRODUCT_PACKAGING", "CAPABILITY_EVALS", "CONVERSION_TELEMETRY", "PROFIT_EXPLAINABILITY", "AUTONOMY", "EXTERNAL_SIDE_EFFECTS"}
+        expected = {"CORE_EXECUTION", "CAPABILITY_ENGINEERING", "MONEY_ENGINEERING", "PUBLIC_UI", "RESPONSIVE_UI", "COMMERCIAL_API_GATEWAY", "API_PRODUCT_CATALOG", "RAPIDAPI_PACKAGE", "APIFY_COMMERCIAL_PACKAGE", "MULTI_MARKET_API_DISTRIBUTION", "CUSTOMER_ECONOMICS", "OFFER_EXPERIMENTS", "PRODUCT_PACKAGING", "CAPABILITY_EVALS", "CONVERSION_TELEMETRY", "PROFIT_EXPLAINABILITY", "AUTONOMY", "EXTERNAL_SIDE_EFFECTS"}
         self.assertEqual({row["name"] for row in report["criteria"]}, expected)
         self.assertTrue(all(row["status"] in ALLOWED for row in report["criteria"]))
+        self.assertEqual(next(row for row in report["criteria"] if row["name"] == "MULTI_MARKET_API_DISTRIBUTION")["status"], "PASS")
         self.assertEqual(next(row for row in report["criteria"] if row["name"] == "AUTONOMY")["status"], "PASS")
         self.assertFalse(report["safety"]["external_mutations_performed"])
