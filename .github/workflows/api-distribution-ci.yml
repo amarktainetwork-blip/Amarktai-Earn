@@ -1,0 +1,104 @@
+name: API Distribution CI
+
+on:
+  pull_request:
+    branches: [launch/final-ui-profitability]
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+  AMARKTAI_ENV: test
+  DJANGO_SECRET_KEY: ci-django-secret-key-not-production-2026
+  DJANGO_DEBUG: "0"
+  DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+  DJANGO_CSRF_TRUSTED_ORIGINS: http://testserver
+  DJANGO_DB_ENGINE: postgres
+  POSTGRES_DB: amarktai_earn_ci
+  POSTGRES_USER: amarktai_ci
+  POSTGRES_PASSWORD: ci-postgres-password
+  POSTGRES_HOST: 127.0.0.1
+  POSTGRES_PORT: "5432"
+  REDIS_URL: redis://127.0.0.1:6379/0
+  COOKIE_SECURE: "0"
+  JWT_ISSUER: amarktai-earn-ci
+  JWT_AUDIENCE: amarktai-earn-owner-ci
+  JWT_ACTIVE_KID: v1
+  JWT_SIGNING_KEYS_JSON: '{"v1":"ci-signing-key-with-more-than-sixty-four-characters-000000000000000000"}'
+  FIELD_ENCRYPTION_ACTIVE_KID: v1
+  FIELD_ENCRYPTION_KEYS_JSON: '{"v1":"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="}'
+  AUTH_THROTTLE_PEPPER: ci-auth-throttle-pepper-with-more-than-thirty-two-characters
+  AUTONOMOUS_MODE: OFF
+
+jobs:
+  existing-commercial-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: amarktai_earn_ci
+          POSTGRES_USER: amarktai_ci
+          POSTGRES_PASSWORD: ci-postgres-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U amarktai_ci -d amarktai_earn_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip && pip install -r requirements-prod.txt
+      - run: python manage.py migrate --noinput
+      - run: python manage.py bootstrap_launch_commercial
+      - name: Existing commercial regression suites
+        run: >-
+          python manage.py test
+          tests.test_commercial_api_launch_integration
+          tests.test_commercial_intelligence_integration
+          tests.test_launch_ui_acceptance_integration
+          -v 2
+
+  new-distribution-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: amarktai_earn_ci
+          POSTGRES_USER: amarktai_ci
+          POSTGRES_PASSWORD: ci-postgres-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U amarktai_ci -d amarktai_earn_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip && pip install -r requirements-prod.txt
+      - run: python manage.py migrate --noinput
+      - run: python manage.py bootstrap_launch_commercial
+      - name: Multi-market distribution contract suite
+        run: python manage.py test tests.test_api_distribution_integration -v 2
+      - name: Multi-market distribution acceptance
+        run: python manage.py api_distribution_acceptance --format json --fail-on FAIL
