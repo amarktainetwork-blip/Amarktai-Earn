@@ -69,7 +69,7 @@ class ReadOnlyCompletedGenXClient:
                     "role": "assistant",
                     "job_id": "gnxsh_job_phase1_completed",
                     "message_id": "gnxsh_message_phase1",
-                    "content": REPORT,
+                    "content": "I'll research this now. Let me start by checking the official documentation.",
                 }
             ]
         }
@@ -255,6 +255,7 @@ class Phase1CompletedProviderRecoveryIntegrationTests(TestCase):
         artifact = artifacts.get()
         self.assertEqual(Path(artifact.path).name, "research-report.md")
         self.assertTrue(Path(artifact.path).is_file())
+        self.assertEqual(Path(artifact.path).read_text(encoding="utf-8"), REPORT.strip() + "\n")
         self.assertGreater(artifact.size_bytes, 100)
         self.assertEqual(len(artifact.sha256), 64)
         self.assertTrue(artifact.accepted)
