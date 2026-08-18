@@ -7,11 +7,12 @@
   <meta name="theme-color" content="#07111f">
   <title>AmarktAI Earn — Secure Owner Access</title>
   <link rel="stylesheet" href="{% static 'control/login.css' %}?v=frontend-owner-console">
+  <link rel="stylesheet" href="{% static 'control/brand-system.css' %}?v=unified-launch-1">
 </head>
 <body>
   <main class="auth-shell">
     <section class="auth-story" aria-label="AmarktAI Earn introduction">
-      <a class="brand-lockup" href="/login/" aria-label="AmarktAI Earn">
+      <a class="brand-lockup" href="/" aria-label="AmarktAI Earn home">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span><strong>AMARKTAI</strong><small>EARN</small></span>
       </a>
@@ -32,10 +33,10 @@
     </section>
 
     <section class="auth-panel">
-      <div class="mobile-brand">
+      <a class="mobile-brand" href="/" aria-label="AmarktAI Earn home">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span><strong>AMARKTAI</strong><small>EARN</small></span>
-      </div>
+      </a>
       <div class="auth-card" id="authCard">
         <div class="session-notice" id="sessionNotice" role="status" hidden>Your secure session ended. Sign in again to continue.</div>
         <div class="auth-progress" aria-label="Authentication progress">
