@@ -32,16 +32,13 @@ env:
   AUTONOMOUS_MODE: OFF
 
 jobs:
-  existing-commercial-regressions:
+  commercial-api-regressions:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
       postgres:
         image: postgres:17-alpine
-        env:
-          POSTGRES_DB: amarktai_earn_ci
-          POSTGRES_USER: amarktai_ci
-          POSTGRES_PASSWORD: ci-postgres-password
+        env: {POSTGRES_DB: amarktai_earn_ci, POSTGRES_USER: amarktai_ci, POSTGRES_PASSWORD: ci-postgres-password}
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U amarktai_ci -d amarktai_earn_ci"
@@ -55,19 +52,66 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
+        with: {python-version: "3.12", cache: pip}
       - run: python -m pip install --upgrade pip && pip install -r requirements-prod.txt
       - run: python manage.py migrate --noinput
       - run: python manage.py bootstrap_launch_commercial
-      - name: Existing commercial regression suites
-        run: >-
-          python manage.py test
-          tests.test_commercial_api_launch_integration
-          tests.test_commercial_intelligence_integration
-          tests.test_launch_ui_acceptance_integration
-          -v 2
+      - name: Existing commercial API suite
+        run: python manage.py test tests.test_commercial_api_launch_integration -v 2
+
+  commercial-intelligence-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: {POSTGRES_DB: amarktai_earn_ci, POSTGRES_USER: amarktai_ci, POSTGRES_PASSWORD: ci-postgres-password}
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U amarktai_ci -d amarktai_earn_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: python -m pip install --upgrade pip && pip install -r requirements-prod.txt
+      - run: python manage.py migrate --noinput
+      - run: python manage.py bootstrap_launch_commercial
+      - name: Existing commercial intelligence suite
+        run: python manage.py test tests.test_commercial_intelligence_integration -v 2
+
+  launch-ui-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: {POSTGRES_DB: amarktai_earn_ci, POSTGRES_USER: amarktai_ci, POSTGRES_PASSWORD: ci-postgres-password}
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U amarktai_ci -d amarktai_earn_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: python -m pip install --upgrade pip && pip install -r requirements-prod.txt
+      - run: python manage.py migrate --noinput
+      - run: python manage.py bootstrap_launch_commercial
+      - name: Existing launch UI acceptance suite
+        run: python manage.py test tests.test_launch_ui_acceptance_integration -v 2
 
   new-distribution-contract:
     runs-on: ubuntu-latest
@@ -75,10 +119,7 @@ jobs:
     services:
       postgres:
         image: postgres:17-alpine
-        env:
-          POSTGRES_DB: amarktai_earn_ci
-          POSTGRES_USER: amarktai_ci
-          POSTGRES_PASSWORD: ci-postgres-password
+        env: {POSTGRES_DB: amarktai_earn_ci, POSTGRES_USER: amarktai_ci, POSTGRES_PASSWORD: ci-postgres-password}
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U amarktai_ci -d amarktai_earn_ci"
@@ -92,9 +133,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
+        with: {python-version: "3.12", cache: pip}
       - run: python -m pip install --upgrade pip && pip install -r requirements-prod.txt
       - run: python manage.py migrate --noinput
       - run: python manage.py bootstrap_launch_commercial
