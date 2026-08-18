@@ -1,4 +1,5 @@
 import uuid
+
 from django.contrib.auth import get_user_model
 from django.db import models
 from django.utils import timezone
@@ -1397,6 +1398,322 @@ class CapabilityMonetization(Timestamped):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["worker_class", "operation", "commercial_deliverable"], name="uniq_capability_monetization")]
+
+
+class CommercialAPIProduct(Timestamped):
+    """An explicitly approved public API surface backed by one canonical offering/operation."""
+
+    class ExecutionClass(models.TextChoices):
+        SYNCHRONOUS = "SYNCHRONOUS"
+        ASYNCHRONOUS = "ASYNCHRONOUS"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    slug = models.SlugField(unique=True)
+    offering = models.ForeignKey(ServiceOffering, on_delete=models.PROTECT, related_name="api_products")
+    display_name = models.CharField(max_length=160)
+    target_customer = models.CharField(max_length=240)
+    problem_statement = models.TextField()
+    operation = models.CharField(max_length=100)
+    worker_class = models.CharField(max_length=100)
+    execution_class = models.CharField(max_length=20, choices=ExecutionClass.choices)
+    input_schema = models.JSONField(default=dict)
+    output_schema = models.JSONField(default=dict)
+    error_schema = models.JSONField(default=dict)
+    examples = models.JSONField(default=dict)
+    request_limits = models.JSONField(default=dict)
+    quota_unit = models.CharField(max_length=80, default="request")
+    pricing_unit = models.CharField(max_length=80, default="request")
+    expected_execution_cost = models.DecimalField(max_digits=16, decimal_places=6, default=0)
+    gross_price = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    marketplace_fee_rate = models.DecimalField(max_digits=8, decimal_places=6, default=0)
+    expected_net = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    target_margin = models.DecimalField(max_digits=8, decimal_places=6, default=0)
+    minimum_profitable_price = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    proof_state = models.CharField(max_length=40, default="ENGINEERING_PROVEN")
+    publication_state = models.CharField(max_length=40, default="READY_FOR_CREDENTIAL")
+    required_external_actions = models.JSONField(default=list)
+    enabled = models.BooleanField(default=True)
+    version = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(expected_execution_cost__gte=0), name="api_product_cost_nonnegative"),
+            models.CheckConstraint(condition=models.Q(gross_price__gte=0), name="api_product_price_nonnegative"),
+            models.CheckConstraint(condition=models.Q(marketplace_fee_rate__gte=0) & models.Q(marketplace_fee_rate__lt=1), name="api_product_fee_valid"),
+            models.CheckConstraint(condition=models.Q(target_margin__gte=0) & models.Q(target_margin__lt=1), name="api_product_margin_valid"),
+        ]
+
+
+class CommercialAPIPlan(Timestamped):
+    product = models.ForeignKey(CommercialAPIProduct, on_delete=models.CASCADE, related_name="plans")
+    slug = models.SlugField()
+    display_name = models.CharField(max_length=80)
+    version = models.PositiveIntegerField(default=1)
+    currency = models.CharField(max_length=3, default="USD")
+    monthly_price = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    monthly_quota = models.PositiveIntegerField(default=0)
+    overage_price = models.DecimalField(max_digits=14, decimal_places=6, default=0)
+    hard_usage_limit = models.BooleanField(default=True)
+    requests_per_minute = models.PositiveIntegerField(default=30)
+    is_free = models.BooleanField(default=False)
+    paid_external_execution_allowed = models.BooleanField(default=False)
+    minimum_margin = models.DecimalField(max_digits=8, decimal_places=6, default=0)
+    economics = models.JSONField(default=dict)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["product", "slug", "version"], name="uniq_api_plan_product_slug_version"),
+            models.CheckConstraint(condition=models.Q(monthly_price__gte=0), name="api_plan_price_nonnegative"),
+            models.CheckConstraint(condition=models.Q(overage_price__gte=0), name="api_plan_overage_nonnegative"),
+            models.CheckConstraint(condition=models.Q(minimum_margin__gte=0) & models.Q(minimum_margin__lt=1), name="api_plan_margin_valid"),
+        ]
+
+
+class BuyerProfile(Timestamped):
+    """Privacy-conscious customer identity and authoritative derived economics."""
+
+    channel = models.CharField(max_length=80)
+    external_reference_hash = models.CharField(max_length=64)
+    orders = models.PositiveIntegerField(default=0)
+    completed_orders = models.PositiveIntegerField(default=0)
+    settled_orders = models.PositiveIntegerField(default=0)
+    settled_gross = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    marketplace_fees = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    attributable_execution_costs = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    settled_net_profit = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    revision_count = models.PositiveIntegerField(default=0)
+    refund_count = models.PositiveIntegerField(default=0)
+    dispute_count = models.PositiveIntegerField(default=0)
+    average_acceptance_seconds = models.PositiveBigIntegerField(default=0)
+    average_settlement_seconds = models.PositiveBigIntegerField(default=0)
+    last_order_at = models.DateTimeField(null=True, blank=True)
+    preferred_operations = models.JSONField(default=list)
+    support_events = models.PositiveIntegerField(default=0)
+    repeat_buyer = models.BooleanField(default=False)
+    ltv_estimate = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    ltv_confidence = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    sample_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["channel", "external_reference_hash"], name="uniq_buyer_channel_reference_hash"),
+            models.CheckConstraint(condition=models.Q(settled_gross__gte=0), name="buyer_settled_gross_nonnegative"),
+            models.CheckConstraint(condition=models.Q(ltv_confidence__gte=0) & models.Q(ltv_confidence__lte=1), name="buyer_ltv_confidence_valid"),
+        ]
+
+
+class CommercialAPIKey(Timestamped):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    prefix = models.CharField(max_length=20, unique=True)
+    secret_hash = models.CharField(max_length=255)
+    buyer = models.ForeignKey(BuyerProfile, on_delete=models.PROTECT, related_name="api_keys")
+    plan = models.ForeignKey(CommercialAPIPlan, on_delete=models.PROTECT, related_name="api_keys")
+    label = models.CharField(max_length=120, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+
+class CommercialAPIRequest(Timestamped):
+    class Status(models.TextChoices):
+        ADMITTED = "ADMITTED"
+        QUEUED = "QUEUED"
+        EXECUTING = "EXECUTING"
+        QA_PASSED = "QA_PASSED"
+        COMPLETED = "COMPLETED"
+        FAILED = "FAILED"
+        REJECTED = "REJECTED"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    api_key = models.ForeignKey(CommercialAPIKey, on_delete=models.PROTECT, related_name="requests")
+    product = models.ForeignKey(CommercialAPIProduct, on_delete=models.PROTECT, related_name="requests")
+    idempotency_key = models.CharField(max_length=180)
+    request_digest = models.CharField(max_length=64)
+    correlation_id = models.CharField(max_length=64, db_index=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ADMITTED)
+    job = models.OneToOneField(Job, null=True, blank=True, on_delete=models.PROTECT, related_name="commercial_api_request")
+    work_plan_id = models.PositiveBigIntegerField(null=True, blank=True)
+    input_payload = models.JSONField(default=dict)
+    result_payload = models.JSONField(default=dict)
+    error_code = models.CharField(max_length=120, blank=True)
+    error_detail = models.CharField(max_length=500, blank=True)
+    quota_units = models.PositiveIntegerField(default=1)
+    estimated_cost = models.DecimalField(max_digits=16, decimal_places=6, default=0)
+    actual_cost = models.DecimalField(max_digits=16, decimal_places=6, null=True, blank=True)
+    qa_passed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["api_key", "idempotency_key"], name="uniq_api_key_idempotency"),
+            models.CheckConstraint(condition=models.Q(estimated_cost__gte=0), name="api_request_estimated_cost_nonnegative"),
+        ]
+
+
+class CommercialAPIUsage(Timestamped):
+    request = models.OneToOneField(CommercialAPIRequest, on_delete=models.PROTECT, related_name="usage_record")
+    buyer = models.ForeignKey(BuyerProfile, on_delete=models.PROTECT, related_name="api_usage")
+    product = models.ForeignKey(CommercialAPIProduct, on_delete=models.PROTECT, related_name="usage")
+    plan = models.ForeignKey(CommercialAPIPlan, on_delete=models.PROTECT, related_name="usage")
+    units = models.PositiveIntegerField(default=1)
+    gross_billed = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    marketplace_fee = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    execution_cost = models.DecimalField(max_digits=14, decimal_places=6, default=0)
+    settled_revenue = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    settled_net_profit = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+    authoritative_settlement = models.BooleanField(default=False)
+
+
+class ChannelEconomicsVersion(Timestamped):
+    channel = models.CharField(max_length=80)
+    version = models.CharField(max_length=80)
+    source_url = models.URLField()
+    checked_at = models.DateTimeField()
+    stale_after_days = models.PositiveIntegerField(default=30)
+    marketplace_fee_rate = models.DecimalField(max_digits=8, decimal_places=6, default=0)
+    creator_share_rate = models.DecimalField(max_digits=8, decimal_places=6, default=1)
+    payout_rail = models.CharField(max_length=80, blank=True)
+    verified = models.BooleanField(default=False)
+    active = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["channel", "version"], name="uniq_channel_economics_version"),
+            models.CheckConstraint(condition=models.Q(marketplace_fee_rate__gte=0) & models.Q(marketplace_fee_rate__lt=1), name="channel_economics_fee_valid"),
+            models.CheckConstraint(condition=models.Q(creator_share_rate__gt=0) & models.Q(creator_share_rate__lte=1), name="channel_creator_share_valid"),
+        ]
+
+
+class ApifyEventDefinition(Timestamped):
+    slug = models.SlugField()
+    version = models.PositiveIntegerField(default=1)
+    display_name = models.CharField(max_length=120)
+    unit = models.CharField(max_length=80)
+    expected_platform_cost = models.DecimalField(max_digits=14, decimal_places=6, default=0)
+    expected_external_cost = models.DecimalField(max_digits=14, decimal_places=6, default=0)
+    price_per_event = models.DecimalField(max_digits=14, decimal_places=6)
+    minimum_price = models.DecimalField(max_digits=14, decimal_places=6)
+    target_margin = models.DecimalField(max_digits=8, decimal_places=6)
+    volume_tiers = models.JSONField(default=list)
+    publication_state = models.CharField(max_length=40, default="READY_FOR_OWNER_ACTION")
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["slug", "version"], name="uniq_apify_event_slug_version")]
+
+
+class ApifyChargedEvent(Timestamped):
+    definition = models.ForeignKey(ApifyEventDefinition, on_delete=models.PROTECT, related_name="charged_events")
+    run_reference = models.CharField(max_length=160)
+    charge_identity = models.CharField(max_length=180)
+    units = models.PositiveIntegerField(default=1)
+    event_revenue = models.DecimalField(max_digits=14, decimal_places=6)
+    platform_usage_cost = models.DecimalField(max_digits=14, decimal_places=6, default=0)
+    external_cost = models.DecimalField(max_digits=14, decimal_places=6, default=0)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["definition", "charge_identity"], name="uniq_apify_event_charge_identity")]
+
+
+class OfferExperiment(Timestamped):
+    class State(models.TextChoices):
+        SHADOW = "SHADOW"
+        ACTIVE = "ACTIVE"
+        PAUSED = "PAUSED"
+        COMPLETE = "COMPLETE"
+
+    slug = models.SlugField(unique=True)
+    offering = models.ForeignKey(ServiceOffering, null=True, blank=True, on_delete=models.PROTECT, related_name="offer_experiments")
+    product = models.ForeignKey(ProductCandidate, null=True, blank=True, on_delete=models.PROTECT, related_name="offer_experiments")
+    state = models.CharField(max_length=20, choices=State.choices, default=State.SHADOW)
+    allocation_policy = models.JSONField(default=dict)
+    minimum_exposures = models.PositiveIntegerField(default=100)
+    minimum_settled_outcomes = models.PositiveIntegerField(default=5)
+
+
+class OfferVariant(Timestamped):
+    experiment = models.ForeignKey(OfferExperiment, on_delete=models.CASCADE, related_name="variants")
+    slug = models.SlugField()
+    presentation = models.JSONField(default=dict)
+    price = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    quota = models.PositiveIntegerField(null=True, blank=True)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["experiment", "slug"], name="uniq_offer_experiment_variant")]
+
+
+class OfferEvent(Timestamped):
+    variant = models.ForeignKey(OfferVariant, on_delete=models.PROTECT, related_name="events")
+    event_id = models.CharField(max_length=180)
+    event_type = models.CharField(max_length=40)
+    anonymous_reference_hash = models.CharField(max_length=64, blank=True)
+    order = models.ForeignKey(InboundOrder, null=True, blank=True, on_delete=models.PROTECT, related_name="offer_events")
+    authoritative = models.BooleanField(default=False)
+    settled_gross = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    settled_cost = models.DecimalField(max_digits=14, decimal_places=4, default=0)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["variant", "event_id"], name="uniq_offer_variant_event_id")]
+
+
+class ConversionEvent(Timestamped):
+    event_id = models.CharField(max_length=180, unique=True)
+    event_type = models.CharField(max_length=40)
+    anonymous_reference_hash = models.CharField(max_length=64)
+    product = models.ForeignKey(CommercialAPIProduct, null=True, blank=True, on_delete=models.PROTECT, related_name="conversion_events")
+    variant = models.ForeignKey(OfferVariant, null=True, blank=True, on_delete=models.PROTECT, related_name="conversion_events")
+    source = models.CharField(max_length=120, blank=True)
+    metadata = models.JSONField(default=dict)
+
+
+class CommercialProductPackage(Timestamped):
+    slug = models.SlugField(unique=True)
+    package_type = models.CharField(max_length=40)
+    offering = models.ForeignKey(ServiceOffering, null=True, blank=True, on_delete=models.PROTECT, related_name="commercial_packages")
+    product_candidate = models.ForeignKey(ProductCandidate, null=True, blank=True, on_delete=models.PROTECT, related_name="commercial_packages")
+    title = models.CharField(max_length=200)
+    target_buyer = models.CharField(max_length=240)
+    problem = models.TextField()
+    promised_output = models.TextField()
+    required_inputs = models.JSONField(default=dict)
+    operations = models.JSONField(default=list)
+    setup_steps = models.JSONField(default=list)
+    credentials_needed = models.JSONField(default=list)
+    demo_scenario = models.JSONField(default=dict)
+    sample_output = models.JSONField(default=dict)
+    usage_instructions = models.TextField(blank=True)
+    limitations = models.JSONField(default=list)
+    qa_evidence = models.JSONField(default=dict)
+    pricing_model = models.JSONField(default=dict)
+    channel_candidates = models.JSONField(default=list)
+    support_information = models.JSONField(default=dict)
+    listing_copy = models.JSONField(default=dict)
+    asset_requirements = models.JSONField(default=list)
+    publication_blockers = models.JSONField(default=list)
+    launch_rank = models.CharField(max_length=24, default="PROVE_FIRST")
+
+
+class CapabilityEvaluation(Timestamped):
+    capability = models.CharField(max_length=100)
+    operation = models.CharField(max_length=100)
+    candidate_version = models.CharField(max_length=120)
+    baseline_version = models.CharField(max_length=120)
+    fixture_key = models.CharField(max_length=160)
+    quality_score = models.DecimalField(max_digits=8, decimal_places=6)
+    baseline_quality_score = models.DecimalField(max_digits=8, decimal_places=6)
+    latency_ms = models.PositiveIntegerField(default=0)
+    baseline_latency_ms = models.PositiveIntegerField(default=0)
+    monetary_cost = models.DecimalField(max_digits=14, decimal_places=6, default=0)
+    baseline_monetary_cost = models.DecimalField(max_digits=14, decimal_places=6, default=0)
+    repair_rate = models.DecimalField(max_digits=8, decimal_places=6, default=0)
+    completion_rate = models.DecimalField(max_digits=8, decimal_places=6, default=0)
+    decision = models.CharField(max_length=32, default="INSUFFICIENT_EVIDENCE")
+    evidence = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["operation", "candidate_version", "fixture_key"], name="uniq_capability_eval_candidate_fixture")]
 
 
 class DistributionCampaign(Timestamped):

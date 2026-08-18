@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from control import banking_views, channel_admin_views, channel_views, integration_views, lemon_views, market_views, paystack_views, public_views, views, webhooks
+from control import banking_views, channel_admin_views, channel_views, commercial_views, integration_views, lemon_views, market_views, paystack_views, public_views, views, webhooks
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -8,6 +8,12 @@ urlpatterns = [
     path("login/", views.login_page, name="login"),
     path("", public_views.landing_page, name="landing"),
     path("terms/", public_views.terms_page, name="terms"),
+    path("api/docs/", commercial_views.api_docs_page, name="api_docs"),
+    path("api/openapi.json", commercial_views.openapi_json, name="openapi_json"),
+    path("api/v1/products/<slug:product_slug>/jobs", commercial_views.commercial_api_submit, name="commercial_api_submit"),
+    path("api/v1/requests/<uuid:request_id>", commercial_views.commercial_api_status, name="commercial_api_status"),
+    path("api/v1/requests/<uuid:request_id>/result", commercial_views.commercial_api_result, name="commercial_api_result"),
+    path("api/v1/telemetry/events", commercial_views.public_conversion_event, name="public_conversion_event"),
     path("ops/overview/", views.overview_page, name="overview"),
     path("ops/banking/", views.treasury_page, name="banking"),
     path("ops/treasury/", views.treasury_page, name="treasury"),

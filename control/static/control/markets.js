@@ -15,12 +15,13 @@
   let csrfReady = false;
   let loading = false;
 
-  const tierOrder = ["ACTIVATE_FIRST", "PROVE_PAYOUT", "OPPORTUNISTIC", "BUILD_OFFHOST", "BACKLOG"];
+  const tierOrder = ["ACTIVATE_FIRST", "OWNER_ACTION", "ACTIVATE_NEXT", "PROVE_PAYOUT", "OPPORTUNISTIC", "BACKLOG"];
   const tierCopy = {
     ACTIVATE_FIRST: ["Activate first", "Best current combination of autonomous payout, South African setup, and scalable recurring revenue."],
     PROVE_PAYOUT: ["Prove payout next", "Strong earning lanes held back by owner KYC/KYA, South African settlement evidence, or one final payout proof."],
     OPPORTUNISTIC: ["Opportunistic income", "Useful upside, especially coding bounties, but not reliable enough to be a first unattended revenue engine."],
-    BUILD_OFFHOST: ["Off-host expansion", "Keep the Webdock control plane here; wallet, signing, blockchain, and settlement execution must live externally."],
+    OWNER_ACTION: ["Owner action", "First-party workflow exists, but permission, account, assignment, or payout onboarding still requires the owner."],
+    ACTIVATE_NEXT: ["Activate next", "Legitimate normal-payment channels that do not displace existing paid demand on day one."],
     BACKLOG: ["Backlog", "Keep visible for later evidence gathering without spending core launch time here."],
   };
 
@@ -182,7 +183,7 @@
       <article class="markets-primary"><small>EARNING MARKET CONTROL PLANE</small><strong>${esc(meta.active_market_candidates || rows.length)} active candidates</strong><p>Ordered by autonomous payout first, South African setup second, then scalable autonomous earning ceiling.</p></article>
       <article><small>ACTIVATE FIRST</small><strong>${esc((meta.tier_counts || {}).ACTIVATE_FIRST || 0)}</strong><p>Best launch order now.</p></article>
       <article><small>PROVE PAYOUT</small><strong>${esc((meta.tier_counts || {}).PROVE_PAYOUT || 0)}</strong><p>Strong lanes awaiting settlement proof.</p></article>
-      <article><small>OFF-HOST BUILD</small><strong>${esc((meta.tier_counts || {}).BUILD_OFFHOST || 0)}</strong><p>Keep wallet/chain execution away from Webdock.</p></article>
+      <article><small>OWNER ACTION</small><strong>${esc((meta.tier_counts || {}).OWNER_ACTION || 0)}</strong><p>Permission, assignment, or payout setup remains external.</p></article>
       <article><small>AUTONOMY READY</small><strong>${esc(meta.autonomy_ready || 0)}</strong><p>All current mutation gates armed.</p></article>
     </div>
     <div class="priority-method"><strong>Commercial order:</strong> ${esc(meta.priority_truth || "Autonomous payout first, South African setup second, earning ceiling third.")}</div>

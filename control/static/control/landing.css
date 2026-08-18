@@ -21,7 +21,7 @@
 }
 *{box-sizing:border-box}
 html{min-width:320px;background:var(--navy);scroll-behavior:smooth}
-body{margin:0;background:var(--navy);color:var(--ink);overflow-x:hidden}
+body{margin:0;background:var(--navy);color:var(--ink)}
 a{color:inherit}
 button,input,a{font:inherit}
 .shell{width:min(1180px,calc(100% - 48px));margin-inline:auto}

@@ -19,3 +19,4 @@ htmlcov/
 *.log
 runtime/
 backups/
+test-artifacts/

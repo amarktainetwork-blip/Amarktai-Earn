@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from control.services.inbound_controller import revenue_controller_cycle
 from control.services.recovery import heartbeat
+from control.tasks import autonomous_income_bounded_work_task, autonomous_income_daily_task, autonomous_income_frequent_task
 
 
 class Command(BaseCommand):
@@ -42,13 +43,23 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         interval = max(15, options["interval"] or int(os.getenv("REVENUE_WATCHER_INTERVAL_SECONDS", "60")))
         limit = max(1, min(int(options["limit"]), 500))
+        last_daily = 0.0
         while True:
             try:
                 heartbeat("revenue-watcher", details={"phase": "cycle"})
+                autonomous = {
+                    "frequent": autonomous_income_frequent_task(),
+                    "bounded": autonomous_income_bounded_work_task(),
+                }
+                now = time.monotonic()
+                if last_daily == 0.0 or now - last_daily >= 86400:
+                    autonomous["daily"] = autonomous_income_daily_task()
+                    last_daily = now
                 result = {
                     "agentgigs": self._agentgigs_cycle(limit=limit),
                     "dealwork": self._dealwork_cycle(limit=limit),
                     "seller_inbound": revenue_controller_cycle(limit=limit),
+                    "autonomous_income": autonomous,
                 }
                 heartbeat("revenue-watcher", details=result)
                 self.stdout.write(self.style.SUCCESS(str(result)))

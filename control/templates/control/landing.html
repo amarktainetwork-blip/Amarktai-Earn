@@ -2,304 +2,46 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#07111f">
-  <meta name="description" content="AmarktAI Earn is an owner-controlled AI earning system that finds opportunities, chooses the work worth doing, executes it, checks quality and tracks payout truth.">
-  <meta name="robots" content="index,follow,max-image-preview:large">
-  <meta property="og:type" content="website">
-  <meta property="og:title" content="AmarktAI Earn — The owner operating system for AI-powered earning work">
-  <meta property="og:description" content="Qualify opportunities, execute with the right workers, verify quality, and track payout through settlement in one owner-controlled system.">
-  <meta name="twitter:card" content="summary_large_image">
-  <title>AmarktAI Earn — The system runs the earning loop</title>
-  <link rel="stylesheet" href="{% static 'control/landing.css' %}?v=frontend-owner-console">
-  <link rel="stylesheet" href="{% static 'control/landing-shell.css' %}?v=frontend-owner-console">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#07111f">
+  <meta name="description" content="AmarktAI Earn evaluates, executes, sells and tracks profitable digital work, APIs and automations.">
+  <title>AmarktAI Earn — Profit-aware digital work and APIs</title>
+  <link rel="stylesheet" href="{% static 'control/launch.css' %}?v=launch-profitability-2">
 </head>
 <body>
-  <div class="page-noise" aria-hidden="true"></div>
-
-  <header class="topbar">
-    <a class="brand" href="/" aria-label="AmarktAI Earn home">
-      <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span class="brand-copy"><strong>AMARKT<span class="brand-ai">AI</span> <span class="brand-earn">EARN</span></strong></span>
-    </a>
-    <button class="nav-toggle" id="navToggle" type="button" aria-label="Open site navigation" aria-expanded="false" aria-controls="mainNav"><span></span><span></span><span></span></button>
-    <nav class="main-nav" id="mainNav" aria-label="Primary navigation">
-      <a href="#what">What it does</a>
-      <a href="#earn">Ways to earn</a>
-      <a href="#loop">How it works</a>
-      <a href="#profit">Profit &amp; safety</a>
-      <a href="#owner">Owner control</a>
-    </nav>
-    <a class="login-link" href="{% url 'login' %}">Owner dashboard <span>→</span></a>
-  </header>
-
-  <main>
-    <section class="hero shell">
-      <div class="hero-copy">
-        <div class="hero-badge"><span>●</span> Built by Amarkt<span class="brand-ai">AI</span> Network</div>
-        <h1>It finds the work.<br>Runs the job.<br><em>Tracks the money.</em></h1>
-        <p class="hero-lede">Amarkt<span class="brand-ai">AI</span> Earn is an owner-controlled AI earning system. Once approved accounts and channels are connected, it watches for paid opportunities, filters them by profit and risk, uses the right workers to complete the work, checks quality, delivers and follows payout through to settlement. <strong>You set the rules. The system runs the loop.</strong></p>
-        <div class="hero-actions">
-          <a class="btn btn-primary" href="#loop">See how the system works <span>↓</span></a>
-          <a class="btn btn-ghost" href="{% url 'login' %}">Open owner dashboard</a>
-        </div>
-        <div class="plain-proof" aria-label="AmarktAI Earn highlights">
-          <span><b>Finds opportunities</b><small>Across approved markets and sales channels</small></span>
-          <span><b>Runs the work</b><small>Plans, executes, checks and repairs</small></span>
-          <span><b>Tracks real money</b><small>Payout is not cash until it is proven</small></span>
-        </div>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header" data-public-header><div class="site-nav shell">
+    <a class="launch-brand" href="/" aria-label="AmarktAI Earn home"><span class="launch-mark" aria-hidden="true"><i></i><i></i><i></i></span><strong>AMARKT<span>AI</span> EARN</strong></a>
+    <button class="nav-toggle" id="navToggle" type="button" aria-label="Open site navigation" aria-controls="mainNav" aria-expanded="false"><span></span><span></span><span></span></button>
+    <nav class="main-nav" id="mainNav" aria-label="Primary navigation"><a href="#products">Products</a><a href="#api-business">API business</a><a href="#engine">Economic engine</a><a href="#trust">Trust</a><a class="nav-docs" href="{% url 'api_docs' %}" data-funnel="CTA_CLICK">Explore APIs</a></nav>
+    <a class="owner-link" href="{% url 'login' %}">Owner sign in</a>
+  </div></header>
+  <main id="content">
+    <section class="launch-hero shell">
+      <div class="hero-content"><p class="kicker">Profit-aware digital commerce</p><h1>Digital work chosen for <em>profit</em>, not activity.</h1><p class="hero-lede">AmarktAI Earn turns proven capabilities into focused APIs, data automations, digital products and services—then qualifies cost, verifies quality and follows every commercial outcome to settlement.</p>
+        <div class="hero-actions"><a class="button button-primary" href="{% url 'api_docs' %}" data-funnel="CTA_CLICK">Explore launch APIs <span aria-hidden="true">→</span></a><a class="button button-secondary" href="#engine">See the earning loop</a></div>
+        <ul class="hero-proof" aria-label="Platform principles"><li><b>Cost before execution</b><span>Economic admission comes first</span></li><li><b>QA before delivery</b><span>Only accepted output completes</span></li><li><b>Settlement before revenue</b><span>Clicks and orders are not cash</span></li></ul>
       </div>
-
-      <div class="hero-stage" aria-label="Illustration of AmarktAI Earn turning opportunities into completed work">
-        <div class="stage-glow glow-one" aria-hidden="true"></div>
-        <div class="stage-glow glow-two" aria-hidden="true"></div>
-        <div class="job-card job-one">
-          <span class="job-tag">CODING BOUNTY</span>
-          <strong>Fix a production bug</strong>
-          <small>Good fit · worth checking</small>
-        </div>
-        <div class="job-card job-two">
-          <span class="job-tag purple">RESEARCH</span>
-          <strong>Build a competitor brief</strong>
-          <small>Clear scope · low delivery risk</small>
-        </div>
-        <div class="job-card job-three">
-          <span class="job-tag orange">DATA JOB</span>
-          <strong>Collect and clean web data</strong>
-          <small>Route heavy scraping off the VPS</small>
-        </div>
-        <div class="earn-machine">
-          <div class="machine-top">
-            <span class="machine-dot"></span>
-            <small>AMARKT<span class="brand-ai">AI</span> EARN</small>
-            <b>RUNNING THE LOOP</b>
-          </div>
-          <div class="machine-path">
-            <span><i>1</i><b>Find</b><small>Watch for real demand</small></span>
-            <span><i>2</i><b>Choose</b><small>Is this work worth taking?</small></span>
-            <span><i>3</i><b>Do</b><small>Use the right worker</small></span>
-            <span><i>4</i><b>Check</b><small>Catch and repair mistakes</small></span>
-            <span><i>5</i><b>Deliver</b><small>Track acceptance and payout</small></span>
-          </div>
-          <div class="machine-footer"><span>Costs counted</span><span>Quality checked</span><span>Owner controlled</span></div>
-        </div>
-        <div class="status-pill"><i></i> Owner-controlled automation across approved earning channels</div>
-      </div>
+      <div class="hero-product" aria-label="Example commercial execution flow"><div class="product-window"><div class="window-bar"><span></span><span></span><span></span><b>COMMERCIAL CONTROL</b></div><div class="window-summary"><span>STRUCTURED EXTRACTION API</span><strong>Qualified</strong></div><dl class="economics"><div><dt>Expected gross</dt><dd>$0.020</dd></div><div><dt>Channel fee</dt><dd>− $0.005</dd></div><div><dt>Execution cost</dt><dd>− $0.002</dd></div><div class="economics-net"><dt>Expected net</dt><dd>$0.013</dd></div></dl><ol class="mini-flow"><li><span>01</span>Authenticated request</li><li><span>02</span>Profit admission</li><li><span>03</span>Canonical execution</li><li><span>04</span>Independent QA</li></ol><p class="truth-note"><i aria-hidden="true"></i> Illustrative unit economics. No revenue is claimed.</p></div></div>
     </section>
-
-    <section class="ticker" aria-label="Types of digital work AmarktAI Earn can handle">
-      <div class="ticker-track">
-        <div class="ticker-group">
-          <span>CODING</span><i>✦</i><span>RESEARCH</span><i>✦</i><span>DATA</span><i>✦</i><span>APIs</span><i>✦</i><span>CONTENT</span><i>✦</i><span>DIGITAL PRODUCTS</span><i>✦</i><span>AUTOMATION</span><i>✦</i><span>MEDIA</span><i>✦</i>
-        </div>
-        <div class="ticker-group" aria-hidden="true">
-          <span>CODING</span><i>✦</i><span>RESEARCH</span><i>✦</i><span>DATA</span><i>✦</i><span>APIs</span><i>✦</i><span>CONTENT</span><i>✦</i><span>DIGITAL PRODUCTS</span><i>✦</i><span>AUTOMATION</span><i>✦</i><span>MEDIA</span><i>✦</i>
-        </div>
-      </div>
+    <section class="sell-section" id="products"><div class="shell"><header class="section-heading"><p class="kicker">What AmarktAI can sell</p><h2>One operating system.<br>Several ways to earn.</h2><p>Every offering maps to a proven operation, an economic floor and explicit external readiness.</p></header><div class="sell-grid">
+      <article class="sell-card featured"><span class="card-index">01</span><div class="card-icon">API</div><h3>Focused APIs</h3><p>Stable inputs, metered usage and QA-approved results for repeatable data and document work.</p><a href="{% url 'api_docs' %}" data-funnel="PRODUCT_VIEW">View API catalog →</a></article>
+      <article class="sell-card"><span class="card-index">02</span><div class="card-icon">AU</div><h3>Data automations</h3><p>Bounded Actors and workflows that turn public or supplied data into useful outputs.</p></article><article class="sell-card"><span class="card-index">03</span><div class="card-icon">DP</div><h3>Digital products</h3><p>Reusable reports, datasets and packaged intelligence built from successful workflows.</p></article><article class="sell-card"><span class="card-index">04</span><div class="card-icon">SV</div><h3>Business services</h3><p>Research, data, documents, content, media and technical work with acceptance contracts.</p></article>
+    </div></div></section>
+    <section class="api-section shell" id="api-business"><div class="api-copy"><p class="kicker">A real commercial API surface</p><h2>Designed to be called repeatedly—and remain profitable.</h2><p>Each launch API has an explicit schema, request limits, quota unit, latency class, price floor and expected cost. Authentication, idempotency and metering are part of the product.</p><ul class="check-list"><li>Direct hashed API keys and RapidAPI proxy identity</li><li>Synchronous fast paths and asynchronous job lifecycle</li><li>Rate limits, quotas and bounded payloads</li><li>Economic admission before paid provider work</li><li>QA-approved results and exactly-once usage</li></ul><a class="button button-primary" href="{% url 'api_docs' %}" data-funnel="API_DOCUMENTATION_VIEW">Read developer documentation <span aria-hidden="true">→</span></a></div>
+      <div class="api-terminal" aria-label="Commercial API example"><div class="terminal-head"><span></span><span></span><span></span><b>POST /api/v1/products/structured-extraction/jobs</b></div><pre><code>curl -X POST /api/v1/products/structured-extraction/jobs \
+  -H "Authorization: Bearer amk_live_••••" \
+  -H "Idempotency-Key: order-42" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {"text": "Invoice INV-42…"},
+    "schema": {"invoice": "string"}
+  }'</code></pre><div class="terminal-response"><b>202 ACCEPTED</b><code>{ "request_id": "…", "state": "QUEUED" }</code></div></div>
     </section>
-
-    <section class="intro shell" id="what">
-      <div class="eyebrow">WHAT IS IT, REALLY?</div>
-      <div class="intro-grid">
-        <div>
-          <h2>An AI team with a <em>business brain.</em></h2>
-        </div>
-        <div class="intro-copy">
-          <p>Most AI tools wait for you to give them a task. Amarkt<span class="brand-ai">AI</span> Earn is designed to do more: watch approved earning channels, compare opportunities, organise the work, execute it through the right workers and track what actually gets paid.</p>
-          <p>It is not meant to chase everything. A bad job can waste time, credits and reputation. Earn is designed to say <strong>yes to the right work and no to the wrong work.</strong></p>
-        </div>
-      </div>
-
-      <div class="three-up">
-        <article class="feature-card lime-card">
-          <span>01</span>
-          <div class="feature-icon">◎</div>
-          <h3>It watches for opportunities</h3>
-          <p>Approved marketplaces, bounties, API sales, digital products and other online channels can all feed earning opportunities into one place.</p>
-        </article>
-        <article class="feature-card blue-card">
-          <span>02</span>
-          <div class="feature-icon">↗</div>
-          <h3>It works out what is worth doing</h3>
-          <p>Price, fees, cost, time, quality risk and the chance of success all matter before the system commits resources.</p>
-        </article>
-        <article class="feature-card pink-card">
-          <span>03</span>
-          <div class="feature-icon">✓</div>
-          <h3>It checks the work before delivery</h3>
-          <p>The goal is not “generate something and hope.” Work is checked, repaired when needed and only then moved toward delivery.</p>
-        </article>
-      </div>
-    </section>
-
-    <section class="earn-section shell" id="earn">
-      <div class="section-head">
-        <div>
-          <div class="eyebrow">WAYS TO EARN</div>
-          <h2>One system.<br><em>Lots of ways to Earn.</em></h2>
-        </div>
-        <p>Earn is not tied to one freelance site. The bigger idea is a portfolio: several kinds of online work and several places to sell it, so one slow market does not stop the whole business.</p>
-      </div>
-
-      <div class="earn-grid">
-        <article class="earn-card wide-card">
-          <div class="card-top"><span class="mini-badge">MARKETPLACES</span><b>01</b></div>
-          <h3>Paid jobs & freelance work</h3>
-          <p>The system can find suitable posted work, score it, prepare the response and move the best opportunities into a controlled delivery flow.</p>
-          <div class="example-tags"><span>Research</span><span>Automation</span><span>Documents</span><span>Technical work</span></div>
-        </article>
-        <article class="earn-card code-card">
-          <div class="card-top"><span class="mini-badge">BOUNTIES</span><b>02</b></div>
-          <h3>Code fixes & technical challenges</h3>
-          <p>It can take on issues, bug fixes and scoped technical tasks where the expected reward makes sense and the route is approved.</p>
-          <div class="code-lines" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
-        </article>
-        <article class="earn-card api-card">
-          <div class="card-top"><span class="mini-badge">RECURRING</span><b>03</b></div>
-          <h3>Sell useful APIs</h3>
-          <p>Package repeatable Amarkt<span class="brand-ai">AI</span> capabilities so customers can pay for usage again and again.</p>
-          <div class="pulse-row" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-        </article>
-        <article class="earn-card data-card">
-          <div class="card-top"><span class="mini-badge">DATA</span><b>04</b></div>
-          <h3>Data collection & web automation</h3>
-          <p>Build sellable data workflows and scraping tools, while sending heavy scraping to infrastructure designed for it.</p>
-          <div class="data-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-        </article>
-        <article class="earn-card product-card">
-          <div class="card-top"><span class="mini-badge">PRODUCTS</span><b>05</b></div>
-          <h3>Digital products</h3>
-          <p>Create useful downloadable products and repeatable service packages that can sell without finding a brand-new client every time.</p>
-          <div class="product-stack" aria-hidden="true"><i></i><i></i><i></i></div>
-        </article>
-        <article class="earn-card wide-card media-card">
-          <div class="card-top"><span class="mini-badge">CREATIVE WORK</span><b>06</b></div>
-          <h3>Content, media & business deliverables</h3>
-          <p>Turn briefs into research, written content, images, media, structured files and multi-step deliverables using the right mix of workers.</p>
-          <div class="example-tags"><span>Content</span><span>Images</span><span>Reports</span><span>Transcription</span><span>Analysis</span></div>
-        </article>
-      </div>
-    </section>
-
-    <section class="loop-section" id="loop">
-      <div class="shell">
-        <div class="section-head light-head">
-          <div>
-            <div class="eyebrow">THE MONEY LOOP</div>
-            <h2>The system runs the loop.<br><em>You control the rules.</em></h2>
-          </div>
-          <p>Every approved opportunity moves through the same clear path. That makes it easier to scale without losing track of quality, cost or whether the money actually arrived.</p>
-        </div>
-        <div class="loop-list">
-          <article><span>1</span><div><h3>Find</h3><p>Look across approved sources for real demand.</p></div><b>→</b></article>
-          <article><span>2</span><div><h3>Choose</h3><p>Skip work that looks unprofitable, unclear or too risky.</p></div><b>→</b></article>
-          <article><span>3</span><div><h3>Build</h3><p>Break the job into steps and use the right worker for each one.</p></div><b>→</b></article>
-          <article><span>4</span><div><h3>Check</h3><p>Review the result and repair problems before the client sees them.</p></div><b>→</b></article>
-          <article><span>5</span><div><h3>Deliver</h3><p>Send the work, track acceptance and keep payout status separate from promises.</p></div><b>→</b></article>
-          <article><span>6</span><div><h3>Learn</h3><p>Use real results to make better choices next time.</p></div><b>↺</b></article>
-        </div>
-      </div>
-    </section>
-
-    <section class="choice-section shell" id="profit">
-      <div class="choice-copy">
-        <div class="eyebrow">THE PROFIT FILTER</div>
-        <h2>It should not take <em>every</em> job.</h2>
-        <p>Winning is not about being busy. It is about doing work that has a sensible chance of paying enough after fees, AI costs, tools, retries and delivery risk.</p>
-        <ul>
-          <li><i>✓</i><span><strong>Good fit?</strong> Can our workers actually do it well?</span></li>
-          <li><i>✓</i><span><strong>Enough upside?</strong> Is the expected reward worth the cost?</span></li>
-          <li><i>✓</i><span><strong>Clear enough?</strong> Do we understand what must be delivered?</span></li>
-          <li><i>✓</i><span><strong>Safe to take?</strong> Are the market, payment and operating rules ready?</span></li>
-        </ul>
-      </div>
-      <div class="choice-board">
-        <div class="decision accepted">
-          <div><span>GOOD OPPORTUNITY</span><b>TAKE A CLOSER LOOK</b></div>
-          <strong>Clear brief</strong><strong>Supported work</strong><strong>Healthy margin</strong><strong>Delivery path ready</strong>
-          <footer><i></i> Candidate for work</footer>
-        </div>
-        <div class="decision passed">
-          <div><span>BAD DEAL</span><b>SKIP IT</b></div>
-          <strong>Unclear scope</strong><strong>Low reward</strong><strong>High delivery risk</strong><strong>Payment route uncertain</strong>
-          <footer><i></i> Protect time, money and reputation</footer>
-        </div>
-      </div>
-    </section>
-
-    <section class="truth-section shell" aria-labelledby="truth-title">
-      <div class="section-head">
-        <div><div class="eyebrow">PROFIT, SAFETY &amp; SETTLEMENT</div><h2 id="truth-title">Automation that knows<br><em>when to stop.</em></h2></div>
-        <p>Earn is built around permission and evidence. The Profit Brain evaluates expected economics before resources are committed. GenX supplies compatible AI capabilities when required, while safety gates keep account, payout, policy and quality proof separate.</p>
-      </div>
-      <div class="truth-grid">
-        <article><span>01</span><h3>Profit Brain</h3><p>Compares reward, marketplace fees, GenX credits, other expected cost, time and risk. Expected profit stays a forecast—not revenue.</p></article>
-        <article><span>02</span><h3>GenX execution</h3><p>Selects compatible provider capabilities for the task at runtime, records actual calls and stops ambiguous remote work for reconciliation.</p></article>
-        <article><span>03</span><h3>Approval controls</h3><p>Accounts, automation policy, acquisition, publishing and payout proof each keep their own fail-closed gate under owner control.</p></article>
-        <article><span>04</span><h3>Settlement truth</h3><p>Earned, pending and settled remain distinct. The console calls money received only after authoritative payout and reconciliation evidence exists.</p></article>
-      </div>
-    </section>
-
-    <section class="portfolio-section shell">
-      <div class="portfolio-card">
-        <div class="portfolio-copy">
-          <div class="eyebrow">NOT ONE BET</div>
-          <h2>Built to earn across the internet, not depend on one website.</h2>
-          <p>Freelance work can be quiet. Bounties can be unpredictable. Products take time to grow. APIs need customers. That is why Amarkt<span class="brand-ai">AI</span> Earn is designed as a portfolio of earning routes instead of a single source of income.</p>
-          <div class="portfolio-pills"><span>Job markets</span><span>Bounties</span><span>API sales</span><span>Data products</span><span>Digital products</span><span>Direct services</span></div>
-        </div>
-        <div class="portfolio-visual" aria-hidden="true">
-          <div class="orbit-ring ring-a"></div><div class="orbit-ring ring-b"></div>
-          <div class="center-ball">EARN</div>
-          <span class="orbit-chip chip-a">JOBS</span><span class="orbit-chip chip-b">APIs</span><span class="orbit-chip chip-c">DATA</span><span class="orbit-chip chip-d">PRODUCTS</span><span class="orbit-chip chip-e">BOUNTIES</span>
-        </div>
-      </div>
-    </section>
-
-    <section class="owner-section shell" id="owner">
-      <div class="owner-panel">
-        <div class="owner-copy">
-          <div class="eyebrow">YOU STAY IN CHARGE</div>
-          <h2>The system handles the repetitive work.<br><em>You set the rules.</em></h2>
-          <p>The private owner dashboard is where approved channels, work, workers, costs, payouts, security and automation controls live. Connecting an account never makes it automatically ready: work and payout routes still have to be proven first.</p>
-          <div class="owner-actions">
-            <a class="btn btn-primary owner-dashboard-cta" href="{% url 'login' %}">Open owner dashboard <span>→</span></a>
-            <span>Protected owner access with two-factor authentication.</span>
-          </div>
-        </div>
-        <div class="owner-console" aria-hidden="true">
-          <div class="console-head"><i></i><i></i><i></i><span>AMARKT<span class="brand-ai">AI</span> EARN</span></div>
-          <div class="console-body">
-            <aside><b></b><b></b><b></b><b></b><b></b><b></b></aside>
-            <div class="console-main">
-              <div class="console-title"><i></i><i></i></div>
-              <div class="console-stats"><span></span><span></span><span></span></div>
-              <div class="console-chart"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-              <div class="console-list"><b></b><b></b><b></b></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="final shell">
-      <span class="final-kicker">AMARKT<span class="brand-ai">AI</span> EARN</span>
-      <h2>Run the earning loop.<br><em>Keep the good work.</em><br>Learn from every result.</h2>
-      <p>Amarkt<span class="brand-ai">AI</span> Earn brings AI capabilities, approved marketplaces, sales channels, quality control and payout tracking into one owner-controlled earning operation.</p>
-      <a class="btn btn-primary final-btn owner-dashboard-cta" href="{% url 'login' %}">Owner dashboard <span>→</span></a>
-      <div class="final-scribble" aria-hidden="true">↗</div>
-    </section>
+    <section class="engine-section" id="engine"><div class="shell"><header class="section-heading compact"><p class="kicker">The economic engine</p><h2>From opportunity to settlement truth.</h2></header><ol class="economic-flow"><li><span>01</span><h3>Discover</h3><p>Observe paid work and reusable products.</p></li><li><span>02</span><h3>Qualify</h3><p>Apply payout, cost, risk and capacity evidence.</p></li><li><span>03</span><h3>Price</h3><p>Protect fees, reserves and minimum margin.</p></li><li><span>04</span><h3>Execute</h3><p>Route to canonical workers with bounded retries.</p></li><li><span>05</span><h3>Verify</h3><p>Run acceptance contracts and independent QA.</p></li><li><span>06</span><h3>Settle</h3><p>Record cash only from authoritative settlement.</p></li><li><span>07</span><h3>Learn</h3><p>Rank by proven commercial outcomes.</p></li></ol></div></section>
+    <section class="trust-section shell" id="trust"><header class="section-heading"><p class="kicker">Built for commercial truth</p><h2>Controls that protect the business.</h2></header><div class="trust-grid"><article><span>01</span><h3>Cost-aware routing</h3><p>Provider, platform and operating costs are evaluated first.</p></article><article><span>02</span><h3>Independent QA</h3><p>A result completes only after acceptance evidence passes.</p></article><article><span>03</span><h3>Bounded execution</h3><p>Payloads, timeouts, retries and quotas have explicit limits.</p></article><article><span>04</span><h3>Owner control</h3><p>Publication and credentials remain explicit owner decisions.</p></article><article><span>05</span><h3>Settlement truth</h3><p>Views, clicks and pending payouts never become cash.</p></article><article><span>06</span><h3>Explainable choices</h3><p>Fees, costs, risk, alternatives and blockers stay visible.</p></article></div></section>
+    {% if commercial_products %}<section class="catalog-section" aria-labelledby="catalog-title"><div class="shell"><header class="section-heading compact"><p class="kicker">Launch catalog</p><h2 id="catalog-title">Products with canonical proof.</h2><p>Only offerings whose current proof state permits public discovery appear here.</p></header><div class="catalog-grid">{% for product in commercial_products %}<article class="catalog-card" data-product="{{ product.slug }}" data-funnel="PRODUCT_IMPRESSION"><div><span class="catalog-type">{{ product.execution_class }}</span><span class="catalog-state">{{ product.proof_state }}</span></div><h3>{{ product.display_name }}</h3><p>{{ product.problem_statement }}</p><dl><div><dt>From</dt><dd>${{ product.gross_price }} / {{ product.pricing_unit }}</dd></div><div><dt>Request limit</dt><dd>{{ product.request_limits.max_bytes|filesizeformat }}</dd></div></dl><a href="{% url 'api_docs' %}#{{ product.slug }}" data-funnel="PRODUCT_VIEW">View specification →</a></article>{% endfor %}</div></div></section>{% endif %}
+    <section class="final-cta shell"><div><p class="kicker">Commercial documentation</p><h2>Start with a focused API.</h2><p>Review schemas, plans, quotas and lifecycle behavior. Access remains owner-gated until required channel and payment routes are proven.</p></div><div class="final-actions"><a class="button button-primary" href="{% url 'api_docs' %}" data-funnel="CTA_CLICK">Explore APIs</a><a class="button button-secondary" href="{% url 'login' %}">Owner control centre</a></div></section>
   </main>
-
-  <footer class="footer shell">
-    <a class="brand footer-brand" href="/" aria-label="AmarktAI Earn home">
-      <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span class="brand-copy"><strong>AMARKT<span class="brand-ai">AI</span> <span class="brand-earn">EARN</span></strong></span>
-    </a>
-    <p class="footer-copyright">© 2026 Amarkt<span class="brand-ai">AI</span> Earn. All rights reserved.</p>
-    <p class="footer-network">Part of the Amarkt<span class="brand-ai">AI</span> Network · <a href="/terms/">Terms</a></p>
-  </footer>
-  <script src="{% static 'control/landing.js' %}?v=frontend-owner-console" defer></script>
-</body>
-</html>
+  <footer class="site-footer"><div class="shell"><a class="launch-brand" href="/"><span class="launch-mark" aria-hidden="true"><i></i><i></i><i></i></span><strong>AMARKT<span>AI</span> EARN</strong></a><p>Profit-aware digital work, with owner control.</p><nav aria-label="Footer"><a href="{% url 'api_docs' %}">API docs</a><a href="/terms/">Terms</a></nav></div></footer>
+  <script src="{% static 'control/landing.js' %}?v=launch-profitability" defer></script>
+</body></html>

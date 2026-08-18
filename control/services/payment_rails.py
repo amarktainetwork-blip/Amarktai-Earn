@@ -11,7 +11,7 @@ from control.models import AuditEvent, SystemSetting
 
 
 PAYMENT_RAIL_SETTING_KEY = "treasury.payment_rails.v1"
-PAYMENT_RAIL_VERSION = 3
+PAYMENT_RAIL_VERSION = 4
 
 RAIL_STATES = (
     "NOT_CONFIGURED",
@@ -22,8 +22,8 @@ RAIL_STATES = (
     "PAUSED",
 )
 
-# Earn stores proof/status only. Bank-account numbers, FNB details, wallet private
-# keys and exchange withdrawal secrets remain in the external provider account.
+# Earn stores proof/status only. Bank-account numbers and withdrawal credentials
+# remain in the external provider account.
 DEFAULT_PAYMENT_RAILS: dict[str, dict[str, Any]] = {
     "paystack": {
         "display_name": "Paystack",
@@ -43,23 +43,23 @@ DEFAULT_PAYMENT_RAILS: dict[str, dict[str, Any]] = {
         "human_withdrawal_required": True,
         "external_configuration_note": "Marketplace payouts may arrive automatically. A human handles any later withdrawal outside AmarktAI.",
     },
-    "crypto-wallet": {
-        "display_name": "Crypto / Stablecoin Wallet",
-        "category": "EXTERNAL_CRYPTO_RECEIPT",
-        "candidate_capabilities": ["STABLECOIN_RECEIPT", "CRYPTO_PAYOUT_RECEIPT", "OFFHOST_SETTLEMENT"],
-        "receipt_mode": "AUTOMATIC",
-        "withdrawal_mode": "HUMAN_OR_OFFHOST_BRIDGE",
-        "human_withdrawal_required": True,
-        "external_configuration_note": "Only public receiving addresses and non-secret proof may be recorded here. Private keys and signing stay off Webdock.",
+    "provider-bank": {
+        "display_name": "Provider-managed bank payout",
+        "category": "FIAT_MARKETPLACE_PAYOUT",
+        "candidate_capabilities": ["USD_BANK_TRANSFER", "MARKETPLACE_PAYOUT_RECEIPT"],
+        "receipt_mode": "AUTOMATIC_AFTER_PROVIDER_ONBOARDING",
+        "withdrawal_mode": "PROVIDER_MANAGED",
+        "human_withdrawal_required": False,
+        "external_configuration_note": "Complete bank onboarding with the marketplace or its processor. AmarktAI stores proof, never bank details.",
     },
-    "valr": {
-        "display_name": "VALR",
-        "category": "EXTERNAL_CRYPTO_CASP",
-        "candidate_capabilities": ["CRYPTO_RECEIPT", "ASSET_CONVERSION", "ZAR_WITHDRAWAL"],
-        "receipt_mode": "AUTOMATIC",
-        "withdrawal_mode": "HUMAN_NOW_AUTOMATION_LATER_OFFHOST",
-        "human_withdrawal_required": True,
-        "external_configuration_note": "VALR custody, bank linking, trading and withdrawal credentials stay outside Webdock. Earn records non-secret settlement evidence only.",
+    "stripe-connect": {
+        "display_name": "Stripe Connect payout",
+        "category": "FIAT_MARKETPLACE_PAYOUT",
+        "candidate_capabilities": ["MARKETPLACE_PAYOUT_RECEIPT"],
+        "receipt_mode": "AUTOMATIC_AFTER_PROVIDER_ONBOARDING",
+        "withdrawal_mode": "PROVIDER_MANAGED",
+        "human_withdrawal_required": False,
+        "external_configuration_note": "Complete Stripe Connect onboarding externally. AmarktAI stores only status and receipt evidence.",
     },
     "wise": {
         "display_name": "Wise",
@@ -88,7 +88,6 @@ ACCOUNT_SETUP_PLAN = {
     "open_now": (
         ("paystack", "Paystack", "Owned checkout, payment links and provider-managed South African settlement"),
         ("paypal", "PayPal", "Shared receipt rail for marketplaces and direct creator sales"),
-        ("valr", "VALR", "South African crypto/CASP receipt, conversion and human cash-out path"),
         ("lemon-squeezy", "Lemon Squeezy", "Recurring products, subscriptions and direct digital commerce"),
         ("payhip", "Payhip", "One-off digital products and services paid directly into Paystack"),
         ("ko-fi", "Ko-fi", "Instant PayPal tips, shop sales, memberships and service commissions"),
@@ -96,12 +95,11 @@ ACCOUNT_SETUP_PLAN = {
         ("patreon", "Patreon", "Recurring memberships and one-time digital product revenue"),
         ("rapidapi", "RapidAPI Provider", "Recurring API subscriptions and usage revenue paid to PayPal"),
         ("apify-store", "Apify", "Paid Actors and data/automation products with execution kept on Apify"),
-        ("taskbounty", "TaskBounty Solver", "API-native coding bounties with USDC/ETH/BTC public-address payout"),
+        ("taskbounty", "TaskBounty Solver", "API-native coding bounties with USD bank-transfer payout"),
         ("contra", "Contra", "Projects, services and payment links with non-Stripe payout options"),
         ("freelancer", "Freelancer.com", "Official API project discovery/bidding with PayPal or Payoneer withdrawal"),
         ("dealwork", "Dealwork", "Escrow-backed autonomous agent work; open account now to complete KYA and prove withdrawal"),
         ("algora", "Algora", "Coding bounty and contract income; open now to prove the owner payout method"),
-        ("nevermined", "Nevermined", "Agent/API pay-per-use revenue using stablecoin settlement without owner Stripe"),
         ("impact", "impact.com Partner", "Affiliate and referral commissions with automatic payout scheduling"),
         ("partnerstack", "PartnerStack", "B2B SaaS affiliate and referral commissions payable to PayPal"),
     ),

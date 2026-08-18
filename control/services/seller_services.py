@@ -671,7 +671,9 @@ def receive_inbound_order(
         deadline=order.deadline,
         normalized_payload={
             "source_type": "INBOUND_SERVICE_ORDER",
+            "source_classification": "BUILT_IN_DEMAND" if marketplace.slug in {"rapidapi", "apify-store"} else "DIRECT_DEMAND",
             "revenue_channel": "PAY_PER_CALL_API" if offering.pricing_model == ServiceOffering.PricingModel.PER_CALL else "SERVICE_LISTING",
+            "autonomous_action": "MARKETPLACE_API_ACTOR_INCOME" if marketplace.slug in {"rapidapi", "apify-store"} else "",
             "inbound_order_id": str(order.id),
             "operation": offering.operation,
             "requirements": requirements,
