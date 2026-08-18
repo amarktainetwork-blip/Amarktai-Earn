@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from markets.base import MarketAdapter, MarketCapabilities, NormalizedOpportunity
 from markets.http import JSONHTTPClient, MarketHTTPError
 from markets.normalization import decimal_reward, first_value, list_rows
@@ -8,11 +10,10 @@ from markets.normalization import decimal_reward, first_value, list_rows
 class TaskBountyAdapter(MarketAdapter):
     slug = "taskbounty"
     capabilities = MarketCapabilities(
-        discover=True, input_assets=True, submission=True, status=True, payment=True,
-        payout=True, rate_limit=True, policy_verified=True, payout_ready=False,
+        discover=True, claim=True, input_assets=True, repo_access=True, submission=True,
+        delivery=True, status=True, payment=True, payout=True, settlement_status=True,
+        rate_limit=True, policy_verified=True, payout_ready=False,
     )
-
-    PAYOUT_METHODS = frozenset({"solana_usdc", "eth", "btc"})
 
     def __init__(self, api_key: str, base_url: str = "https://www.task-bounty.com/api/v1", timeout: int = 20, session=None, mcp_client=None):
         if not api_key:
@@ -34,29 +35,16 @@ class TaskBountyAdapter(MarketAdapter):
     def payout_status(self):
         return {
             "ready": False,
-            "crypto_prohibited": False,
-            "supported_external_methods": sorted(self.PAYOUT_METHODS),
+            "crypto_prohibited": True,
+            "supported_method": "usd_bank_transfer",
+            "selected_method": "usd_bank_transfer",
             "reason": (
-                "TaskBounty supports public-address crypto payout registration. "
-                "AmarktAI treats the route as ready only after the owner records non-secret proof of the configured external address."
+                "USD bank transfer onboarding is an owner dashboard action; no payout method is configured by this adapter."
             ),
         }
 
     def set_payout_method(self, method: str, address: str):
-        method = str(method or "").strip().lower()
-        address = str(address or "").strip()
-        if method not in self.PAYOUT_METHODS:
-            raise ValueError("Unsupported TaskBounty payout method")
-        if not address:
-            raise ValueError("TaskBounty payout address is required")
-        # TaskBounty's solver API accepts public payout addresses only. This
-        # adapter must never accept or transmit private keys, seed phrases or
-        # signing credentials.
-        return self.http.request(
-            "POST",
-            "/solver/payout-method",
-            json={"method": method, "address": address},
-        )
+        raise ValueError("TaskBounty payout API is disabled: AmarktAI uses owner-configured USD bank transfer only")
 
     def discover_jobs(self, **filters):
         params = {"state": filters.get("state", "open"), "limit": max(1, min(int(filters.get("limit", 50)), 100))}
@@ -66,6 +54,8 @@ class TaskBountyAdapter(MarketAdapter):
         reward = decimal_reward(raw, "reward", "bounty", "amount", "payout")
         if reward == 0:
             reward = decimal_reward(raw, "reward_cents", "amount_cents", cents=True)
+        category = str(first_value(raw, "type", "category", default="bug")).casefold()
+        action = "TASKBOUNTY_COVERAGE" if "coverage" in category else "TASKBOUNTY_BUG_FIX"
         return NormalizedOpportunity(
             external_id=str(first_value(raw, "id", "task_id")),
             title=str(first_value(raw, "title", "issue_title", default="Untitled TaskBounty task")),
@@ -73,7 +63,28 @@ class TaskBountyAdapter(MarketAdapter):
             reward=reward,
             currency=str(first_value(raw, "currency", default="USD"))[:3].upper(),
             raw=raw,
+            action=action,
+            fee_rate=Decimal("0.20"),
+            payout_probability=Decimal(str(first_value(raw, "payout_probability", default="0.90"))),
+            acceptance_probability=Decimal(str(first_value(raw, "acceptance_probability", default="0.65"))),
+            expected_provider_cost=Decimal(str(first_value(raw, "expected_provider_cost", default="0"))),
+            expected_execution_cost=Decimal(str(first_value(raw, "expected_execution_cost", default="0"))),
+            expected_minutes=int(first_value(raw, "expected_minutes", default=60)),
+            competition={
+                "solvers": int(first_value(raw, "solver_count", "solvers", default=0) or 0),
+                "existing_prs": int(first_value(raw, "existing_prs", "pr_count", default=0) or 0),
+                "claim_exclusive": bool(first_value(raw, "claim_exclusive", default=False)),
+            },
+            capabilities_required=("coding", "git", "tests", "sandbox"),
         )
+
+    def claim(self, job):
+        if self.mcp_client is None:
+            raise NotImplementedError("Configure the official TaskBounty MCP client for claim; a REST path is not guessed")
+        claim = getattr(self.mcp_client, "claim", None)
+        if not callable(claim):
+            raise NotImplementedError("The configured TaskBounty MCP binding must expose its verified claim operation")
+        return claim(task_id=job.external_id)
 
     def get_input_assets(self, job):
         return self.http.request("POST", f"/tasks/{job.external_id}/access")
@@ -98,5 +109,6 @@ class TaskBountyAdapter(MarketAdapter):
         return {
             "ready": False,
             "settled": False,
-            "reason": "External payout receipt must be reconciled from TaskBounty and the configured public-address receipt evidence.",
+            "rail": "USD_BANK_TRANSFER",
+            "reason": "A verified TaskBounty bank transfer receipt must be reconciled before revenue is settled.",
         }

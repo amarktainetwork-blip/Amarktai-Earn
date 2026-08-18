@@ -1,13 +1,15 @@
 from django.core.management.base import BaseCommand
 
-from control.services.commercial_api import bootstrap_commercial_catalog
+from control.services.api_distribution import bootstrap_api_distribution
+from control.services.api_distribution_packages import enrich_distribution_packages
 from control.services.commercial_intelligence import bootstrap_commercial_packages
 
 
 class Command(BaseCommand):
-    help = "Idempotently materialize the engineering-proven commercial API, channel economics, and reusable package catalog."
+    help = "Idempotently materialize the engineering-proven commercial API, channel economics, distribution exports, and reusable package catalog."
 
     def handle(self, *args, **options):
-        api = bootstrap_commercial_catalog()
+        distribution = bootstrap_api_distribution()
         packages = bootstrap_commercial_packages()
-        self.stdout.write(self.style.SUCCESS(f"commercial catalog ready: api={api} packages={packages}"))
+        enrichment = enrich_distribution_packages()
+        self.stdout.write(self.style.SUCCESS(f"commercial catalog ready: distribution={distribution} packages={packages} enrichment={enrichment}"))

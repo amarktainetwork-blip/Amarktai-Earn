@@ -67,7 +67,7 @@ def banking_page(request):
         {
             "section": "banking",
             "page_title": "Treasury & Settlement",
-            "page_description": "Automatic payout receipt, human withdrawals, crypto settlement, and account setup",
+            "page_description": "Fiat payout receipt, human withdrawals, normal settlement, and account setup",
             "advanced_section": False,
         },
     )

@@ -10,9 +10,8 @@ class WorkloadDecision:
     reason_codes: tuple[str, ...]
 
 
-# Host-level workload guardrails. These deliberately target execution intent,
-# not mere subject matter: writing about Bitcoin or receiving an off-host USDC
-# payout is different from operating blockchain infrastructure on this VPS.
+# Host-level workload guardrails target execution intent, while all crypto
+# earning and settlement lanes are separately absent from the revenue catalogue.
 #
 # IMPORTANT: reason-code names are part of the V1 acceptance/audit contract.
 # Existing canonical names such as PROHIBITED_UNAUTHORIZED_SCANNING and
@@ -42,6 +41,8 @@ _PROHIBITED = {
         r"\b(?:network|port|host|internet[- ]wide|vulnerability) scan(?:ner|ning)?\b",
         r"\b(?:nmap|masscan|zmap)\b",
         r"\bscan (?:random |public |internet )?(?:hosts|ips|networks|ports)\b",
+        r"\b(?:perform|run|conduct)\b.{0,35}\b(?:penetration|pentest|vulnerability) test(?:ing)?\b",
+        r"\bexploit\b.{0,35}\b(?:remote|public|third[- ]party) (?:host|service|network)\b",
     ),
     "PROHIBITED_STRESS_TESTING": (
         r"\b(?:stress|load|flood) test(?:ing)?\b",
@@ -54,6 +55,20 @@ _PROHIBITED = {
         r"\bbulk cold email scraping\b",
         r"\bunsolicited bulk e[- ]?mail\b",
         r"\bsend (?:bulk|mass) unsolicited (?:email|mail|messages?)\b",
+        r"\bmass[- ]comment\b",
+        r"\bbidding flood\b",
+    ),
+    "PROHIBITED_ENGAGEMENT_MANIPULATION": (
+        r"\b(?:buy|sell|generate|inflate|manipulate)\b.{0,35}\b(?:followers?|likes?|views?|engagement|upvotes?)\b",
+        r"\bfake (?:followers?|likes?|views?|engagement)\b",
+    ),
+    "PROHIBITED_CAPTCHA_BYPASS": (
+        r"\b(?:bypass|defeat|solve at scale|evade)\b.{0,25}\bcaptcha\b",
+        r"\bcaptcha (?:bypass|farm|solver bot)\b",
+    ),
+    "PROHIBITED_CREDENTIAL_ATTACK": (
+        r"\b(?:credential stuffing|password spraying|brute[- ]force (?:login|password|credential))\b",
+        r"\b(?:steal|harvest|phish)\b.{0,35}\b(?:passwords?|credentials?|login tokens?)\b",
     ),
     "PROHIBITED_TOR_RELAY": (
         r"\btor relay\b",
@@ -70,6 +85,7 @@ _PROHIBITED = {
     "PROHIBITED_CONTINUOUS_SCRAPING": (
         r"\b(?:continuous|continuously|constant|24/7|high[- ]volume|massive)\b.{0,35}\b(?:scrap(?:e|er|ing)|crawl(?:er|ing)?)\b",
         r"\b(?:scrap(?:e|ing)|crawl(?:ing)?)\b.{0,45}\b(?:millions of pages|entire internet|nonstop|without rate limits)\b",
+        r"\bcontinuous browser (?:crawl(?:er|ing)?|extraction|automation)\b",
     ),
     "PROHIBITED_COPYRIGHT_SCRAPING": (
         r"\bscrap(?:e|ing)\b.{0,45}\b(?:copyrighted|paywalled|pirated)\b",
@@ -87,6 +103,7 @@ _PROHIBITED = {
         r"\b(?:run|host|deploy|serve)\b.{0,55}\b(?:neural net(?:work)?|llm|language model|ai model)\b.{0,35}\b(?:locally|on (?:the )?(?:vps|server|host)|self[- ]hosted)\b",
         r"\b(?:local|self[- ]hosted)\b.{0,30}\b(?:gpu )?(?:llm|neural net(?:work)?|model) (?:inference|server|runtime)\b",
         r"\b(?:train|training|fine[- ]?tune|fine[- ]?tuning)\b.{0,55}\b(?:neural net(?:work)?|llm|ai model)\b.{0,35}\b(?:on (?:the )?(?:vps|server|host)|locally)\b",
+        r"\b(?:local|self[- ]hosted|on[- ]server)\b.{0,30}\b(?:ocr neural|neural ocr|image model|vision model)\b",
     ),
     "PROHIBITED_FAKE_IDENTITY": (
         r"\bfake (?:identity|id|account)\b",

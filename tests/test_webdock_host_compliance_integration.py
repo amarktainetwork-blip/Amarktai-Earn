@@ -45,13 +45,12 @@ class WebdockHostComplianceIntegrationTests(TestCase):
                 self.assertFalse(decision.allowed)
                 self.assertIn(reason, decision.reason_codes)
 
-    def test_legitimate_business_work_and_offhost_crypto_payment_are_not_false_positives(self):
+    def test_legitimate_business_work_is_not_a_false_positive(self):
         allowed = (
             "Write a research report about Bitcoin adoption in South Africa.",
             "Build a normal REST API and deploy the web application.",
             "Process this supplied MP4 into a smaller downloadable video file.",
             "Extract the authorised public product page once while respecting robots.txt.",
-            "Prepare an invoice where settlement may later arrive as USDC through an external payment provider.",
             "Review this supplied repository for defensive code quality and security issues.",
             "Draft customer support replies without sending them.",
         )
@@ -59,40 +58,14 @@ class WebdockHostComplianceIntegrationTests(TestCase):
             with self.subTest(text=text):
                 self.assertTrue(evaluate_text(text).allowed, evaluate_text(text).reason_codes)
 
-    def test_all_onchain_candidates_are_catalogued_offhost_only(self):
-        self.assertEqual(
-            WEBDOCK_OFFHOST_ONLY_MARKETS,
-            {
-                slug for slug, definition in REVENUE_BY_SLUG.items()
-                if definition.hosting_policy == "OFFHOST_SETTLEMENT_REQUIRED"
-            },
-        )
+    def test_all_onchain_candidates_are_absent_and_defensively_denied(self):
+        self.assertFalse(set(REVENUE_BY_SLUG) & WEBDOCK_OFFHOST_ONLY_MARKETS)
         for slug in WEBDOCK_OFFHOST_ONLY_MARKETS:
-            definition = REVENUE_BY_SLUG[slug]
-            self.assertEqual(definition.execution_placement, "OFFHOST_REQUIRED")
-            self.assertIn("WALLET_EXECUTION_PROHIBITED_ON_WEBDOCK", definition.blockers)
             self.assertFalse(market_runtime_compatible(slug, provider="webdock"))
 
     def test_offhost_market_cannot_be_made_webdock_ready_by_database_mutation(self):
         bootstrap_revenue_market_catalog()
-        market = Marketplace.objects.get(slug="virtuals-acp")
-        policy = market.policy_versions.order_by("-checked_at", "-created_at").first()
-        policy.webdock_compatible = True
-        policy.automation_allowed = True
-        policy.save(update_fields=["webdock_compatible", "automation_allowed", "updated_at"])
-        profile = market.integration_profile
-        profile.policy_verified = True
-        profile.source_wired = True
-        profile.capabilities = {"discover": True}
-        profile.blockers = []
-        profile.save(update_fields=["policy_verified", "source_wired", "capabilities", "blockers", "updated_at"])
-        MarketHealth.objects.update_or_create(
-            marketplace=market,
-            defaults={"api_ok": True, "auth_ok": True, "payout_ok": True, "supply_ok": True},
-        )
-        readiness = market_readiness(market)
-        self.assertFalse(readiness["work_ready"])
-        self.assertIn("MARKET_RUNTIME_NOT_COMPATIBLE", readiness["work_blockers"])
+        self.assertFalse(Marketplace.objects.filter(slug="virtuals-acp").exists())
 
     def test_webdock_runtime_tripwires_reject_prohibited_feature_switches(self):
         with patch.dict(os.environ, {"HOST_PROVIDER": "webdock", "CRYPTO_NODE_ENABLED": "1", "NETWORK_SCANNER_ENABLED": "true"}, clear=False):

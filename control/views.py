@@ -45,7 +45,7 @@ from .services.autonomy import current_mode
 
 User = get_user_model()
 
-PAGE_SECTIONS = (*SECTIONS, "jobs", "money", "system", "capabilities", "services", "channels", "audit", "commercial")
+PAGE_SECTIONS = (*SECTIONS, "jobs", "money", "system", "capabilities", "services", "channels", "audit", "commercial", "autonomous-earn")
 PAGE_META = {
     "overview": ("Overview", "Your autonomous earning business at a glance"),
     "jobs": ("Jobs", "Live work, delivery progress, and payout state"),
@@ -68,6 +68,7 @@ PAGE_META = {
     "audit": ("Audit", "Owner-readable events with filterable technical evidence"),
     "services": ("Services & Products", "Canonical offerings, listings, orders, delivery, and settlement state"),
     "commercial": ("Commercial", "Sellable inventory, API economics, customers, experiments, and settled outcomes"),
+    "autonomous-earn": ("Autonomous Earn", "Existing paid demand, expected settled profit, work state, and payout truth"),
     "security": ("Security", "Owner access, sessions, and protected secret state"),
     "settings": ("Settings", "Connections, limits, AI, security, system health, and audit evidence"),
 }
@@ -145,6 +146,9 @@ def ops_api(request, section):
     if section == "commercial":
         from control.services.commercial_intelligence import commercial_snapshot
         return JsonResponse(commercial_snapshot())
+    if section == "autonomous-earn":
+        from control.services.autonomous_income import autonomous_earn_snapshot
+        return JsonResponse(autonomous_earn_snapshot())
     try:
         return JsonResponse(ops_snapshot(section, owner=request.owner))
     except KeyError:

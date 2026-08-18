@@ -44,6 +44,8 @@ ZERO = Decimal(0)
 MONEY = Decimal("0.0001")
 RAPIDAPI_SOURCE = "https://docs.rapidapi.com/do/docs/payouts-and-finance"
 APIFY_SOURCE = "https://docs.apify.com/actors/publishing/monetize/pay-per-event"
+API_MARKET_BACKEND_LABEL_PREFIX = "api.market backend"
+ZYLA_BACKEND_LABEL_PREFIX = "zyla backend"
 
 
 class CommercialAPIError(ValueError):
@@ -424,6 +426,15 @@ class AuthenticatedAPIIdentity:
     source: str
 
 
+def _source_for_key(row: CommercialAPIKey) -> str:
+    label = str(row.label or "").strip().casefold()
+    if label.startswith(API_MARKET_BACKEND_LABEL_PREFIX):
+        return "API_MARKET_PROXY"
+    if label.startswith(ZYLA_BACKEND_LABEL_PREFIX):
+        return "ZYLA_PROXY"
+    return "DIRECT_API_KEY"
+
+
 def authenticate_api_key(raw: str) -> AuthenticatedAPIIdentity:
     if not raw.startswith("ak_") or "." not in raw:
         raise CommercialAPIError("AUTHENTICATION_REQUIRED", status=401)
@@ -437,7 +448,7 @@ def authenticate_api_key(raw: str) -> AuthenticatedAPIIdentity:
         raise CommercialAPIError("API_KEY_EXPIRED", status=401)
     if not row.plan.active or not row.plan.product.enabled:
         raise CommercialAPIError("PLAN_NOT_ENTITLED", status=403)
-    return AuthenticatedAPIIdentity(row, "DIRECT_API_KEY")
+    return AuthenticatedAPIIdentity(row, _source_for_key(row))
 
 
 def authenticate_request(request, product: CommercialAPIProduct) -> AuthenticatedAPIIdentity:
@@ -535,14 +546,21 @@ def _quota_and_rate(identity: AuthenticatedAPIIdentity, product: CommercialAPIPr
 
 
 def _fee_rate(identity: AuthenticatedAPIIdentity, product: CommercialAPIProduct) -> Decimal:
-    if identity.source != "RAPIDAPI_PROXY":
+    if identity.source == "DIRECT_API_KEY":
+        return ZERO
+    channel = {
+        "RAPIDAPI_PROXY": "rapidapi",
+        "API_MARKET_PROXY": "api-market",
+        "ZYLA_PROXY": "zyla-api-hub",
+    }.get(identity.source)
+    if not channel:
         return product.marketplace_fee_rate
-    policy = active_channel_economics("rapidapi")
+    policy = active_channel_economics(channel)
     if policy is None:
         raise CommercialAPIError(
             "ECONOMICS_CATALOG_STALE",
             status=503,
-            detail="RapidAPI economics are stale or unverified.",
+            detail=f"{channel} economics are stale or unverified.",
         )
     return policy.marketplace_fee_rate
 
@@ -575,6 +593,14 @@ def _stage_job_input(request_row: CommercialAPIRequest, content: bytes, filename
     stage_local_job_asset(job_id=request_row.job_id, path=str(target), source="commercial_api", external_id=str(request_row.id), semantic_role="source")
 
 
+def _marketplace_identity(identity: AuthenticatedAPIIdentity) -> tuple[str, str]:
+    return {
+        "RAPIDAPI_PROXY": ("rapidapi", "RapidAPI"),
+        "API_MARKET_PROXY": ("api-market", "API.market"),
+        "ZYLA_PROXY": ("zyla-api-hub", "Zyla API Hub"),
+    }.get(identity.source, ("amarktai-direct-api", "AmarktAI Direct API"))
+
+
 @transaction.atomic
 def admit_request(*, identity: AuthenticatedAPIIdentity, product: CommercialAPIProduct, idempotency_key: str, payload: dict, correlation_id: str) -> tuple[CommercialAPIRequest, bool]:
     if not idempotency_key.strip():
@@ -589,9 +615,10 @@ def admit_request(*, identity: AuthenticatedAPIIdentity, product: CommercialAPIP
             raise CommercialAPIError("IDEMPOTENCY_CONFLICT", status=409)
         return existing, False
     _quota_and_rate(identity, product)
+    marketplace_slug, marketplace_name = _marketplace_identity(identity)
     marketplace, _ = Marketplace.objects.get_or_create(
-        slug="amarktai-direct-api",
-        defaults={"display_name": "AmarktAI Direct API", "status": Marketplace.Status.WATCH_ONLY, "enabled": False, "payout_ready": False, "south_africa_verified": False, "fee_rate": ZERO, "payment_model": "OWNER_GATED_API_ENTITLEMENT"},
+        slug=marketplace_slug,
+        defaults={"display_name": marketplace_name, "status": Marketplace.Status.WATCH_ONLY, "enabled": False, "payout_ready": False, "south_africa_verified": False, "fee_rate": ZERO, "payment_model": "OWNER_GATED_API_ENTITLEMENT"},
     )
     row = CommercialAPIRequest.objects.create(
         api_key=identity.key, product=product, idempotency_key=idempotency_key[:180], request_digest=digest,
@@ -601,7 +628,16 @@ def admit_request(*, identity: AuthenticatedAPIIdentity, product: CommercialAPIP
     job = Job.objects.create(
         marketplace=marketplace, external_id=f"commercial-api:{row.id}", title=f"API: {product.display_name}",
         task_class=product.slug, reward=product.gross_price, currency="USD", state=Job.State.AWARDED,
-        normalized_payload={"source_type": "COMMERCIAL_API", "commercial_api_request_id": str(row.id), "operation": product.operation, "inputs": payload},
+        normalized_payload={
+            "source_type": "COMMERCIAL_API",
+            "source_classification": "BUILT_IN_DEMAND",
+            "revenue_channel": "PAY_PER_CALL_API",
+            "autonomous_action": "MARKETPLACE_API_ACTOR_INCOME",
+            "commercial_api_request_id": str(row.id),
+            "commercial_api_source": identity.source,
+            "operation": product.operation,
+            "inputs": payload,
+        },
     )
     row.job = job
     row.save(update_fields=["job", "updated_at"])
@@ -615,7 +651,7 @@ def admit_request(*, identity: AuthenticatedAPIIdentity, product: CommercialAPIP
     ), decision="API_ADMITTED", reason_codes=[], max_genx_credits=product.offering.max_genx_credits, recommended_offer=product.gross_price)
     identity.key.last_used_at = timezone.now()
     identity.key.save(update_fields=["last_used_at", "updated_at"])
-    AuditEvent.objects.create(event_type="commercial.api_request_admitted", actor=f"api:{identity.source.lower()}", metadata={"request_id": str(row.id), "product": product.slug, "job_id": str(job.id), "correlation_id": row.correlation_id})
+    AuditEvent.objects.create(event_type="commercial.api_request_admitted", actor=f"api:{identity.source.lower()}", metadata={"request_id": str(row.id), "product": product.slug, "job_id": str(job.id), "correlation_id": row.correlation_id, "marketplace": marketplace_slug})
     return row, True
 
 
@@ -684,14 +720,17 @@ def _record_usage_once(row: CommercialAPIRequest) -> CommercialAPIUsage:
         return existing
     plan = row.api_key.plan
     gross = plan.overage_price * row.quota_units
-    fee = gross * _fee_rate(AuthenticatedAPIIdentity(row.api_key, "RAPIDAPI_PROXY" if row.api_key.prefix.startswith("rapid-") else "DIRECT_API_KEY"), row.product)
+    source = _source_for_key(row.api_key)
+    if row.api_key.prefix.startswith("rapid-"):
+        source = "RAPIDAPI_PROXY"
+    fee = gross * _fee_rate(AuthenticatedAPIIdentity(row.api_key, source), row.product)
     cost = row.actual_cost if row.actual_cost is not None else row.estimated_cost
     usage = CommercialAPIUsage.objects.create(
         request=row, buyer=row.api_key.buyer, product=row.product, plan=plan, units=row.quota_units,
         gross_billed=gross, marketplace_fee=fee, execution_cost=cost,
         settled_revenue=ZERO, settled_net_profit=ZERO, authoritative_settlement=False,
     )
-    AuditEvent.objects.create(event_type="commercial.api_usage_metered", actor="commercial-api", metadata={"request_id": str(row.id), "usage_id": usage.id, "units": usage.units, "settlement_state": "NOT_SETTLED"})
+    AuditEvent.objects.create(event_type="commercial.api_usage_metered", actor="commercial-api", metadata={"request_id": str(row.id), "usage_id": usage.id, "units": usage.units, "source": source, "settlement_state": "NOT_SETTLED"})
     return usage
 
 

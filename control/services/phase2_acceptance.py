@@ -285,15 +285,15 @@ def _ocr_runtime_row(root: Path) -> dict:
     text = dockerfile.read_text(encoding="utf-8", errors="replace").casefold() if dockerfile.is_file() else ""
     checks = {
         "production_dockerfile_exists": dockerfile.is_file(),
-        "tesseract_installed": "tesseract-ocr" in text,
+        "local_neural_ocr_absent": "tesseract-ocr" not in text,
         "poppler_installed": "poppler-utils" in text,
         "ocr_operation_registered": "ocr_document" in set(registered_operations()),
     }
     return {
         "kind": "runtime",
-        "name": "local_scanned_document_ocr_runtime",
+        "name": "offhost_scanned_document_ocr_runtime",
         "family": "documents",
-        "status": "PASS" if all(checks.values()) else "FAIL",
+        "status": "READY_FOR_CREDENTIAL" if all(checks.values()) else "FAIL",
         "checks": checks,
     }
 

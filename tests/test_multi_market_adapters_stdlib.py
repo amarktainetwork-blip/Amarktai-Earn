@@ -56,17 +56,22 @@ class MarketAdapterContractTests(unittest.TestCase):
             "discover", "normalize", "claim", "apply", "bid", "messages", "input_assets",
             "submission", "revision", "status", "payment", "payout",
             "webhook_or_event_support", "rate_limit", "policy_verified", "payout_ready",
+            "repo_access", "github_try", "github_claim", "application", "assignment_status",
+            "delivery", "payment_request", "settlement_status",
         }
         self.assertEqual(set(MarketCapabilities().as_dict()), expected)
-        self.assertEqual(set(BY_SLUG), {"agentgigs", "dealwork", "callboard", "opire", "algora", "taskbounty"})
+        self.assertEqual(set(BY_SLUG), {"agentgigs", "dealwork", "callboard", "opire", "algora", "taskbounty", "gitpay"})
         for slug, definition in BY_SLUG.items():
             self.assertEqual(set(definition.capabilities.as_dict()), expected)
             self.assertFalse(definition.capabilities.payout_ready)
             self.assertTrue(definition.source_urls)
             if slug == "taskbounty":
-                self.assertIn("EXTERNAL_PAYOUT_ADDRESS_NOT_VERIFIED", definition.blockers)
-                self.assertTrue(definition.evidence["external_crypto_receipt_allowed"])
-                self.assertTrue(definition.evidence["private_keys_prohibited_on_webdock"])
+                self.assertIn("BANK_PAYOUT_ONBOARDING_REQUIRED", definition.blockers)
+                self.assertEqual(definition.evidence["supported_payout_selected"], "USD_BANK_TRANSFER")
+                self.assertTrue(definition.evidence["crypto_payout_api_disabled"])
+            elif slug == "gitpay":
+                self.assertIn("ASSIGNMENT_REQUIRED", definition.blockers)
+                self.assertEqual(definition.evidence["supported_payout_selected"], "BANK_OR_PAYPAL")
             else:
                 self.assertIn("SOUTH_AFRICA", " ".join(definition.blockers))
 
@@ -181,29 +186,23 @@ class MarketAdapterContractTests(unittest.TestCase):
             "in_review",
         )
 
-    def test_taskbounty_rest_flow_and_external_crypto_fail_closed_truth(self):
+    def test_taskbounty_rest_flow_and_fiat_only_payout_truth(self):
         session = FakeSession([
             FakeResponse({"tasks": [{"id": "tb-1", "title": "Fix bug", "reward": 40, "language": "Python"}]}),
             FakeResponse({"clone_url": "https://example.test/clone"}),
             FakeResponse({"id": "submission-1"}),
-            FakeResponse({"method": "solana_usdc", "address": "PUBLIC_SOLANA_ADDRESS"}),
         ])
         adapter = TaskBountyAdapter("tb_live_secret", session=session)
         job = adapter.normalize_job(adapter.discover_jobs(limit=1)[0])
         adapter.get_input_assets(job)
         adapter.submit(job, {"external_link": "https://github.com/acme/repo/pull/12"})
-        payout = adapter.set_payout_method("solana_usdc", "PUBLIC_SOLANA_ADDRESS")
         self.assertEqual(job.reward, Decimal("40"))
-        self.assertFalse(adapter.payout_status()["crypto_prohibited"])
+        self.assertTrue(adapter.payout_status()["crypto_prohibited"])
         self.assertFalse(adapter.payout_status()["ready"])
-        self.assertIn("solana_usdc", adapter.payout_status()["supported_external_methods"])
-        self.assertEqual(payout["method"], "solana_usdc")
-        payout_call = session.calls[3]
-        self.assertEqual(payout_call[0], "POST")
-        self.assertTrue(payout_call[1].endswith("/api/v1/solver/payout-method"))
-        self.assertEqual(payout_call[2]["json"], {"method": "solana_usdc", "address": "PUBLIC_SOLANA_ADDRESS"})
+        self.assertEqual(adapter.payout_status()["selected_method"], "usd_bank_transfer")
+        self.assertEqual(len(session.calls), 3)
         with self.assertRaises(ValueError):
-            adapter.set_payout_method("bank", "not-supported")
+            adapter.set_payout_method("solana_usdc", "PUBLIC_SOLANA_ADDRESS")
         with self.assertRaises(ValueError):
             adapter.submit(job, {"external_link": "https://evil.test/not-a-pr"})
 

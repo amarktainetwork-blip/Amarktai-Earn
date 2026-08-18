@@ -7,6 +7,7 @@ from markets.algora.client import AlgoraAdapter
 from markets.base import MarketCapabilities
 from markets.callboard.client import CallboardAdapter
 from markets.dealwork.client import DealworkAdapter
+from markets.gitpay.client import GitpayAdapter
 from markets.opire.client import OpireAdapter
 from markets.taskbounty.client import TaskBountyAdapter
 
@@ -103,16 +104,37 @@ DEFINITIONS = (
             "https://www.task-bounty.com/docs/mcp", "https://www.task-bounty.com/terms",
         ),
         auth_method="Bearer tb_live API key", rate_limit="60 requests/minute; poll every 30-60 seconds",
-        payout_method="Public-address USDC on Solana, ETH, BTC, or eligible bank payout; private keys stay off Webdock",
+        payout_method="USD bank transfer via owner-completed dashboard onboarding only",
         automation_allowed=True,
-        blockers=("EXTERNAL_PAYOUT_ADDRESS_NOT_VERIFIED", "ACCOUNT_PAYOUT_NOT_VERIFIED"),
+        blockers=("BANK_PAYOUT_ONBOARDING_REQUIRED", "ACCOUNT_PAYOUT_NOT_VERIFIED"),
         evidence={
             "mode": "REST",
-            "external_crypto_receipt_allowed": True,
-            "private_keys_prohibited_on_webdock": True,
+            "supported_payout_selected": "USD_BANK_TRANSFER",
+            "payout_configuration_method": "OWNER_DASHBOARD_ONLY",
+            "crypto_payout_api_disabled": True,
             "contributor_share": "80%",
             "ai_generated_work_disclosure_required": True,
             "resubmission_only_after_failed_verification": True,
+        },
+        webdock_compatible=True,
+    ),
+    MarketDefinition(
+        slug="gitpay", display_name="Gitpay",
+        adapter_path="markets.gitpay.client.GitpayAdapter", capabilities=GitpayAdapter.capabilities,
+        source_urls=("https://gitpay.me/", "https://github.com/worknenjoy/gitpay"),
+        auth_method="First-party task source import; assignment and payment workflow remains owner-assisted until an official mutation contract is verified",
+        rate_limit="Bounded source refresh only; no browser automation or generic form submission",
+        payout_method="Bank or PayPal after assignment, accepted delivery, and payment request",
+        automation_allowed=False,
+        blockers=(
+            "APPLICATION_MUTATION_CONTRACT_NOT_VERIFIED", "ASSIGNMENT_REQUIRED",
+            "PAYMENT_REQUEST_OWNER_ACTION", "ACCOUNT_PAYOUT_NOT_VERIFIED",
+        ),
+        evidence={
+            "mode": "FIRST_PARTY_SOURCE_IMPORT",
+            "assignment_required_before_execution": True,
+            "provider_spend_before_assignment": False,
+            "supported_payout_selected": "BANK_OR_PAYPAL",
         },
         webdock_compatible=True,
     ),

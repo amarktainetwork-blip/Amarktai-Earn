@@ -6,10 +6,9 @@ from collections.abc import Mapping
 
 WEBDOCK_PROVIDER = "webdock"
 
-# These markets remain valid future revenue candidates, but their blockchain /
-# wallet / testnet execution must live outside the Webdock VPS. The Webdock
-# controller may later call a separately approved external bridge over normal
-# HTTPS; it must never hold chain keys or run chain software itself.
+# Defensive deny-list for identifiers removed from every earning catalogue.
+# Keeping the identifiers here prevents stale database rows or future code from
+# reintroducing them into the Webdock runtime.
 WEBDOCK_OFFHOST_ONLY_MARKETS = frozenset({
     "virtuals-acp",
     "coinbase-x402-bazaar",
