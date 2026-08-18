@@ -1,0 +1,88 @@
+:root {
+  --brand-bg: #07111f;
+  --brand-panel: #0d1b2b;
+  --brand-panel-raised: #12243a;
+  --brand-line: rgba(166, 190, 219, .2);
+  --brand-text: #f7f9fc;
+  --brand-muted: #a9b7c8;
+  --brand-accent: #baf45a;
+  --brand-accent-strong: #9ee83c;
+  --brand-blue: #72b8ff;
+  --brand-danger: #ff7d8d;
+  --brand-warning: #f4c66d;
+  --brand-radius: 16px;
+  --brand-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+html { color-scheme: dark; }
+body { font-family: var(--brand-font) !important; background: var(--brand-bg); color: var(--brand-text); }
+
+/* A single accessible type floor across public, authentication, and owner surfaces. */
+body :where(p, li, label, input, select, textarea, button, a, td, dd) { font-size: max(14px, 1em); }
+body :where(small, .kicker, .eyebrow, .step-kicker, .nav-label, .breadcrumb) {
+  font-size: 12px !important;
+  line-height: 1.45;
+  letter-spacing: .06em !important;
+}
+
+:where(.launch-brand, .brand-lockup, .mobile-brand, .sidebar-brand) strong { letter-spacing: .08em; }
+:where(.launch-brand, .brand-lockup, .sidebar-brand) :where(i, .launch-mark i, .brand-mark i) { background: var(--brand-accent); }
+
+/* Login now belongs to the same product as the landing page. */
+.auth-shell { background: var(--brand-bg) !important; }
+.auth-story { background:
+  radial-gradient(circle at 36% 38%, rgba(186,244,90,.13), transparent 34%),
+  linear-gradient(145deg, #09182a, #07111f) !important; }
+.auth-story::before { opacity: .18 !important; }
+.story-copy h1 em { color: var(--brand-accent) !important; background: none !important; -webkit-text-fill-color: currentColor !important; }
+.status-dot, .security-dot, .proof-chip i { background: var(--brand-accent) !important; }
+.primary-action { background: var(--brand-accent) !important; color: #0a1420 !important; }
+.primary-action:hover { background: var(--brand-accent-strong) !important; }
+.auth-card { border-color: var(--brand-line) !important; background: rgba(13,27,43,.92) !important; }
+.field-shell:focus-within { border-color: var(--brand-accent) !important; box-shadow: 0 0 0 3px rgba(186,244,90,.12) !important; }
+
+/* Owner console: readable by default, technical density only in Advanced disclosures. */
+.app-shell { grid-template-columns: 248px minmax(0, 1fr) !important; }
+.app-header { min-height: 104px; height: auto !important; }
+.app-header h1 { font-size: clamp(24px, 2.3vw, 34px) !important; }
+.app-header p { font-size: 14px !important; line-height: 1.45; }
+.sidebar-nav > a { min-height: 46px; font-size: 14px !important; }
+.sidebar-context, .owner-card small { font-size: 12px !important; }
+.metric-label, .metric-truth, .health-card small, .health-card p,
+.working-kicker, .working-copy, .agent-mini small, .job-title small,
+.panel-head p, .page-toolbar-copy p, .agent-card-copy, .agent-foot,
+.modern-table th, .modern-table td, .drawer-field small, .drawer-field strong,
+.ledger-disclosure summary, .settings-copy, .state-badge, .status-badge {
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+}
+.panel-head h2, .working-title { font-size: 18px !important; }
+.health-card strong { font-size: 22px !important; }
+.modern-table code, .raw-object { font-size: 11px !important; }
+.technical-id { display: none !important; }
+.ledger-disclosure.technical-only:not([open]) + * { display: none; }
+
+.launch-readiness { margin-bottom: 22px; padding: 22px; border: 1px solid rgba(186,244,90,.26); border-radius: var(--brand-radius); background: linear-gradient(135deg, rgba(186,244,90,.09), rgba(14,31,50,.82)); }
+.launch-readiness-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; margin-bottom:18px; }
+.launch-readiness-head h2 { margin:0 0 6px; font-size:22px; }
+.launch-readiness-head p { margin:0; color:var(--brand-muted); font-size:14px !important; }
+.launch-readiness-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+.launch-step { display:flex; gap:11px; align-items:flex-start; min-height:92px; padding:15px; border:1px solid var(--brand-line); border-radius:13px; background:rgba(7,17,31,.7); text-decoration:none; }
+.launch-step > i { display:grid; place-items:center; flex:0 0 28px; height:28px; border-radius:50%; background:rgba(244,198,109,.14); color:var(--brand-warning); font-style:normal; font-weight:800; }
+.launch-step.ready > i { background:rgba(186,244,90,.15); color:var(--brand-accent); }
+.launch-step strong,.launch-step small { display:block; }
+.launch-step strong { margin-bottom:5px; color:var(--brand-text); font-size:14px; }
+.launch-step small { color:var(--brand-muted); font-size:12px !important; }
+
+.sidebar-advanced { margin-top:14px; border-top:1px solid var(--brand-line); padding-top:12px; }
+.sidebar-advanced summary { padding:10px 12px; color:var(--brand-muted); cursor:pointer; font-size:13px; font-weight:700; }
+.sidebar-advanced a { display:flex; min-height:40px; align-items:center; margin:2px 0; padding:0 12px 0 18px; border-radius:10px; color:var(--brand-muted); text-decoration:none; font-size:13px; }
+.sidebar-advanced a:hover,.sidebar-advanced a.active { background:rgba(114,184,255,.1); color:var(--brand-text); }
+
+@media (max-width: 1100px) { .launch-readiness-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width: 650px) {
+  .launch-readiness { padding:17px; }
+  .launch-readiness-head { display:block; }
+  .launch-readiness-grid { grid-template-columns:1fr; }
+  .app-header p { display:none; }
+}

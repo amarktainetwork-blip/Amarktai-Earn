@@ -48,7 +48,13 @@ def _extract_completed_text(
     remote_job_id: str,
 ) -> tuple[str, list[str], dict[str, Any]]:
     history: dict[str, Any] = {}
-    text = ""
+    # A completed job's terminal inline result is authoritative. Session history
+    # can contain an assistant preamble carrying the same job_id before tool use
+    # finishes, so consulting history first can materialize an intermediate
+    # message instead of the completed deliverable.
+    text = decode_text_result_url(str(remote_payload.get("result_url") or ""))
+    if not text:
+        text = decode_text_result_url(call.result_url)
     sources: list[str] = []
 
     if session_id:
@@ -56,20 +62,17 @@ def _extract_completed_text(
             history = gateway.client.session_messages(session_id)
         except GenXError:
             history = {}
-        if history:
+        if history and not text:
             text = extract_session_assistant_text(
                 history,
                 job_id=remote_job_id or None,
                 message_id=message_id or None,
             )
+        if history:
             sources.extend(extract_session_sources(history))
 
     if not text:
         text = str((call.requested_metadata or {}).get("assistant_text") or "").strip()
-    if not text:
-        text = decode_text_result_url(call.result_url)
-    if not text:
-        text = decode_text_result_url(str(remote_payload.get("result_url") or ""))
 
     result_payload: dict[str, Any] = {}
     if not text and remote_job_id:
