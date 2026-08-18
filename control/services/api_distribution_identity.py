@@ -6,7 +6,7 @@ import secrets
 from django.contrib.auth.hashers import make_password
 
 from control.models import CommercialAPIKey, CommercialAPIProduct
-from control.services.api_distribution import API_MARKET_BACKEND_LABEL_PREFIX
+from control.services.api_distribution import API_MARKET_KEY_LABEL_PREFIX
 from control.services.commercial_api import (
     AuthenticatedAPIIdentity,
     CommercialAPIError,
@@ -42,7 +42,7 @@ def contextualize_marketplace_identity(identity: AuthenticatedAPIIdentity, reque
             "secret_hash": make_password(secrets.token_urlsafe(32)),
             "buyer": buyer,
             "plan": identity.key.plan,
-            "label": f"{API_MARKET_BACKEND_LABEL_PREFIX} buyer {digest}",
+            "label": f"{API_MARKET_KEY_LABEL_PREFIX} buyer {digest}",
         },
     )
     if key.buyer_id != buyer.id or key.plan_id != identity.key.plan_id:
