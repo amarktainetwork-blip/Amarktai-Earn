@@ -108,13 +108,16 @@ jobs:
         run: python manage.py phase2_acceptance --format json --fail-on FAIL
       - name: Phase 3 composition and self-improvement boundary
         run: python manage.py test tests.test_phase3_ready_for_keys_integration -v 2
-      - name: Commercial API and profitability launch integration
+      - name: Commercial API profitability and multi-market distribution
         run: >-
           python manage.py test
           tests.test_commercial_api_launch_integration
           tests.test_commercial_intelligence_integration
           tests.test_launch_ui_acceptance_integration
+          tests.test_api_distribution_integration
           -v 2
+      - name: API distribution acceptance gate
+        run: python manage.py api_distribution_acceptance --format json --fail-on FAIL
       - name: Responsive Chromium structural proof
         env:
           AMARKTAI_RESPONSIVE_ARTIFACT_DIR: test-artifacts/responsive
@@ -159,7 +162,7 @@ jobs:
         if: always()
         run: python manage.py test tests.test_channel_completion_regressions_integration -v 2
       - name: Full Django integration matrix
-        run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration tests.test_dependency_media_integration tests.test_v1_acceptance_integration tests.test_profit_brain_integration tests.test_multifile_composite_integration tests.test_expanded_workers_integration tests.test_multi_market_adapters_integration tests.test_synthetic_safety_integration tests.test_final_freeze_integration tests.test_owner_ui_integration tests.test_owner_dashboard_final_integration tests.test_frontend_owner_console_integration tests.test_genx_async_session_integration tests.test_genx_web_search_negotiation tests.test_two_sided_revenue_integration tests.test_banking_integration tests.test_phase5_market_readiness_integration tests.test_phase3_channels_integration tests.test_channel_completion_integration tests.test_channel_completion_regressions_integration tests.test_webdock_host_compliance_integration tests.test_autonomous_income_integration tests.test_rq_queueing_integration tests.test_phase1_execution_engine_integration tests.test_phase2_capability_factory_integration tests.test_phase2_ocr_browser_integration tests.test_phase3_ready_for_keys_integration -v 2
+        run: python manage.py test tests.test_django_integration tests.test_workplan_integration tests.test_agentgigs_asset_integration tests.test_ops_dashboard_integration tests.test_phase8b_agents_integration tests.test_phase8c_coding_integration tests.test_operations_governor_integration tests.test_security_preflight_integration tests.test_dependency_media_integration tests.test_v1_acceptance_integration tests.test_profit_brain_integration tests.test_multifile_composite_integration tests.test_expanded_workers_integration tests.test_multi_market_adapters_integration tests.test_synthetic_safety_integration tests.test_final_freeze_integration tests.test_owner_ui_integration tests.test_owner_dashboard_final_integration tests.test_frontend_owner_console_integration tests.test_genx_async_session_integration tests.test_genx_web_search_negotiation tests.test_two_sided_revenue_integration tests.test_banking_integration tests.test_phase5_market_readiness_integration tests.test_phase3_channels_integration tests.test_channel_completion_integration tests.test_channel_completion_regressions_integration tests.test_webdock_host_compliance_integration tests.test_autonomous_income_integration tests.test_api_distribution_integration tests.test_rq_queueing_integration tests.test_phase1_execution_engine_integration tests.test_phase2_capability_factory_integration tests.test_phase2_ocr_browser_integration tests.test_phase3_ready_for_keys_integration -v 2
       - name: Production configuration preflight
         env:
           AMARKTAI_ENV: production
@@ -242,6 +245,8 @@ jobs:
         run: python manage.py v1_acceptance --format json --ci-proven --fail-on FAIL
       - name: Final Phase 3 ready-for-keys report
         run: python manage.py phase3_acceptance --format json --ci-proven --fail-on FAIL
+      - name: Final API distribution acceptance report
+        run: python manage.py api_distribution_acceptance --format json --fail-on FAIL
       - name: Final launch acceptance report
         run: python manage.py launch_acceptance --format json --ci-proven --fail-on FAIL
       - name: Final autonomous income acceptance report
