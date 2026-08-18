@@ -11,6 +11,7 @@ from control.models import (
     GenXCall,
     OfferExperiment,
 )
+from control.services.api_distribution import api_distribution_acceptance_report
 from control.services.commercial_api import apify_export, openapi_spec, rapidapi_export
 from control.services.phase1_acceptance import phase1_acceptance_report
 from control.services.phase2_acceptance import phase2_acceptance_report
@@ -35,6 +36,7 @@ def launch_acceptance_report(*, ci_proven: bool = False, repository_root: Path |
     api_products = CommercialAPIProduct.objects.count()
     rapid = rapidapi_export()
     apify = apify_export()
+    distribution = api_distribution_acceptance_report()
     historical = GenXCall.objects.filter(pk=HISTORICAL_CALL_ID).first()
     historical_remote_preserved = historical is None or historical.external_job_id in {"", HISTORICAL_REMOTE_JOB}
     criteria = [
@@ -47,6 +49,7 @@ def launch_acceptance_report(*, ci_proven: bool = False, repository_root: Path |
         _criterion("API_PRODUCT_CATALOG", "PASS" if api_products >= 5 else "FAIL", {"products": api_products}),
         _criterion("RAPIDAPI_PACKAGE", "READY_FOR_CREDENTIAL" if rapid.get("products") and not rapid.get("published") else "FAIL", {"products": len(rapid.get("products", [])), "published": rapid.get("published"), "connection_state": rapid.get("connection_state")}),
         _criterion("APIFY_COMMERCIAL_PACKAGE", "READY_FOR_OWNER_ACTION" if apify.get("events") and not apify.get("published") else "FAIL", {"events": len(apify.get("events", [])), "published": apify.get("published")}),
+        _criterion("MULTI_MARKET_API_DISTRIBUTION", "PASS" if distribution.get("status") == "PASS" else "FAIL", {"channels": distribution.get("channels", []), "summary": distribution.get("summary"), "external_mutations_performed": distribution.get("external_mutations_performed")}),
         _criterion("CUSTOMER_ECONOMICS", "PASS", {"privacy_model": "channel_plus_hashed_external_reference", "profiles": BuyerProfile.objects.count()}),
         _criterion("OFFER_EXPERIMENTS", "PASS", {"experiments": OfferExperiment.objects.count(), "winner_metric": "settled_risk_adjusted_net_profit_per_exposure"}),
         _criterion("PRODUCT_PACKAGING", "PASS" if CommercialProductPackage.objects.count() >= 5 else "FAIL", {"packages": CommercialProductPackage.objects.count()}),
