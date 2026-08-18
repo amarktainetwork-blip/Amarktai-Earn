@@ -31,9 +31,6 @@ API_MARKET_CHANNEL = "api-market"
 ZYLA_CHANNEL = "zyla-api-hub"
 POSTMAN_CHANNEL = "postman-api-network"
 
-API_MARKET_BACKEND_PLAN = "api-market-backend"
-ZYLA_BACKEND_PLAN = "zyla-backend"
-
 API_MARKET_KEY_LABEL_PREFIX = "API.market backend"
 ZYLA_KEY_LABEL_PREFIX = "Zyla backend"
 
@@ -55,42 +52,18 @@ def marketplace_key_source(label: str) -> str:
 
 
 def _marketplace_backend_plan(*, product: CommercialAPIProduct, channel: str) -> CommercialAPIPlan:
-    if channel == API_MARKET_CHANNEL:
-        slug = API_MARKET_BACKEND_PLAN
-        display_name = "API.market backend"
-        paid_external_execution_allowed = True
-    elif channel == ZYLA_CHANNEL:
-        if product.slug not in ZYLA_LAUNCH_PRODUCT_SLUGS:
-            raise ValueError("ZYLA_PRODUCT_NOT_LAUNCH_APPROVED")
-        slug = ZYLA_BACKEND_PLAN
-        display_name = "Zyla backend"
-        paid_external_execution_allowed = False
-    else:
+    if channel == ZYLA_CHANNEL and product.slug not in ZYLA_LAUNCH_PRODUCT_SLUGS:
+        raise ValueError("ZYLA_PRODUCT_NOT_LAUNCH_APPROVED")
+    if channel not in {API_MARKET_CHANNEL, ZYLA_CHANNEL}:
         raise KeyError("UNKNOWN_API_DISTRIBUTION_CHANNEL")
 
-    plan, _ = CommercialAPIPlan.objects.update_or_create(
-        product=product,
-        slug=slug,
-        version=1,
-        defaults={
-            "display_name": display_name,
-            "currency": "USD",
-            "monthly_price": Decimal("0"),
-            "monthly_quota": 1_000_000,
-            "overage_price": max(product.minimum_profitable_price, product.gross_price),
-            "hard_usage_limit": False,
-            "requests_per_minute": 300,
-            "is_free": False,
-            "paid_external_execution_allowed": paid_external_execution_allowed,
-            "minimum_margin": product.target_margin,
-            "economics": {
-                "purpose": "internal_marketplace_gateway_entitlement",
-                "external_billing_authoritative": True,
-                "channel": channel,
-            },
-            "active": True,
-        },
-    )
+    # Reuse the canonical highest bounded sellable plan instead of inventing a
+    # second hidden marketplace-plan catalog. Marketplace billing remains
+    # authoritative externally; Amarktai keeps its own product-scoped rate/quota
+    # ceiling as a fail-safe.
+    plan = product.plans.filter(slug="mega", active=True).order_by("-version").first()
+    if plan is None:
+        raise ValueError("CANONICAL_MARKETPLACE_BACKEND_PLAN_MISSING")
     return plan
 
 
@@ -131,7 +104,7 @@ def bootstrap_api_distribution() -> dict[str, Any]:
             "stale_after_days": 30,
             # Top-tier headline share is 80%, then payment-processing/refund/output
             # costs apply. Use a deliberately conservative 25% effective reserve
-            # for admission while keeping the exact published formula in metadata.
+            # for admission while keeping the published formula in metadata.
             "marketplace_fee_rate": Decimal("0.25"),
             "creator_share_rate": Decimal("0.75"),
             "payout_rail": "PAYPAL",
@@ -151,20 +124,21 @@ def bootstrap_api_distribution() -> dict[str, Any]:
         },
     )
 
-    products = list(CommercialAPIProduct.objects.filter(enabled=True).order_by("slug"))
-    api_market_plans = 0
-    zyla_plans = 0
+    products = list(CommercialAPIProduct.objects.filter(enabled=True).prefetch_related("plans").order_by("slug"))
+    api_market_entitlements = 0
+    zyla_entitlements = 0
     for product in products:
         _marketplace_backend_plan(product=product, channel=API_MARKET_CHANNEL)
-        api_market_plans += 1
+        api_market_entitlements += 1
         if product.slug in ZYLA_LAUNCH_PRODUCT_SLUGS:
             _marketplace_backend_plan(product=product, channel=ZYLA_CHANNEL)
-            zyla_plans += 1
+            zyla_entitlements += 1
 
     return {
         "products": len(products),
-        "api_market_backend_plans": api_market_plans,
-        "zyla_backend_plans": zyla_plans,
+        "api_market_product_entitlements": api_market_entitlements,
+        "zyla_product_entitlements": zyla_entitlements,
+        "duplicate_plan_catalog_created": False,
         "postman_publication_mutation": False,
     }
 
@@ -185,7 +159,6 @@ def issue_marketplace_backend_key(*, channel: str, product_slug: str) -> tuple[A
 
 
 def _plan_rows(product: CommercialAPIProduct) -> list[dict[str, Any]]:
-    excluded = {API_MARKET_BACKEND_PLAN, ZYLA_BACKEND_PLAN}
     return [
         {
             "slug": plan.slug,
@@ -198,7 +171,7 @@ def _plan_rows(product: CommercialAPIProduct) -> list[dict[str, Any]]:
             "free": plan.is_free,
             "version": plan.version,
         }
-        for plan in product.plans.filter(active=True).exclude(slug__in=excluded).order_by("monthly_quota", "slug")
+        for plan in product.plans.filter(active=True).order_by("monthly_quota", "slug")
     ]
 
 
@@ -438,6 +411,7 @@ def api_distribution_acceptance_report() -> dict[str, Any]:
         {"name": "API_MARKET_ECONOMICS", "status": "PASS" if api_market.get("economics") and api_market["economics"].get("marketplace_fee_rate") == "0.200000" else "FAIL"},
         {"name": "ZYLA_SAFE_SCOPE", "status": "READY_FOR_OWNER_ACTION" if [row["slug"] for row in zyla.get("products", [])] == sorted(ZYLA_LAUNCH_PRODUCT_SLUGS) and not zyla.get("published") else "FAIL"},
         {"name": "POSTMAN_PACKAGE", "status": "READY_FOR_OWNER_ACTION" if len(postman.get("collection", {}).get("item", [])) >= product_count and not postman.get("contains_secret_material") else "FAIL"},
+        {"name": "NO_DUPLICATE_PLAN_CATALOG", "status": "PASS" if not CommercialAPIPlan.objects.filter(slug__in={"api-market-backend", "zyla-backend"}).exists() else "FAIL"},
         {"name": "NO_EXTERNAL_PUBLICATION", "status": "PASS" if snapshot.get("external_mutation_allowed") is False and all(not row.get("published", False) for key, row in snapshot["channels"].items() if key != "direct") else "FAIL"},
     ]
     failures = [row for row in criteria if row["status"] == "FAIL"]
