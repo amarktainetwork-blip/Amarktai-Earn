@@ -20,11 +20,12 @@ from markets.algora.client import AlgoraAdapter
 from markets.callboard.client import CallboardAdapter
 from markets.catalog import BY_SLUG, DEFINITIONS, MarketDefinition
 from markets.dealwork.client import DealworkAdapter
+from markets.gitpay.client import GitpayAdapter
 from markets.opire.client import OpireAdapter
 from markets.taskbounty.client import TaskBountyAdapter
 
 
-_BOUNTY_DISCOVERY_MARKETS = frozenset({"taskbounty", "opire", "algora"})
+_BOUNTY_DISCOVERY_MARKETS = frozenset({"taskbounty", "opire", "algora", "gitpay"})
 
 
 def _policy_hash(definition: MarketDefinition) -> str:
@@ -55,6 +56,8 @@ def _trusted_discovery_payload(definition: MarketDefinition, payload: dict | Non
 
 @transaction.atomic
 def bootstrap_market_integrations() -> dict[str, int]:
+    from control.services.autonomous_income import MARKET_POLICIES
+
     created = updated = 0
     for definition in DEFINITIONS:
         market, was_created = Marketplace.objects.get_or_create(
@@ -106,6 +109,31 @@ def bootstrap_market_integrations() -> dict[str, int]:
         )
         updated += int(not profile_created)
         policy_hash = _policy_hash(definition)
+        autonomous_policy = MARKET_POLICIES.get(definition.slug)
+        policy_snapshot = {
+            "source_urls": list(definition.source_urls),
+            "capabilities": definition.capabilities.as_dict(),
+            "blockers": list(definition.blockers),
+            "evidence": definition.evidence,
+            "webdock_compatible": definition.webdock_compatible,
+        }
+        if autonomous_policy is not None:
+            policy_snapshot["autonomous_income"] = {
+                "market": autonomous_policy.market,
+                "policy_source": list(autonomous_policy.policy_source),
+                "checked_at": autonomous_policy.checked_at.isoformat(),
+                "automation_allowed": autonomous_policy.automation_allowed,
+                "machine_access_method": autonomous_policy.machine_access_method,
+                "terms_verified": autonomous_policy.terms_verified,
+                "payout_methods": list(autonomous_policy.payout_methods),
+                "supported_payout_selected": autonomous_policy.supported_payout_selected,
+                "fees": autonomous_policy.fees,
+                "settlement_model": autonomous_policy.settlement_model,
+                "work_types": list(autonomous_policy.work_types),
+                "prohibited_work": list(autonomous_policy.prohibited_work),
+                "owner_actions": list(autonomous_policy.owner_actions),
+                "credential_fields": list(autonomous_policy.credential_fields),
+            }
         MarketPolicyVersion.objects.update_or_create(
             marketplace=market,
             policy_hash=policy_hash,
@@ -114,13 +142,7 @@ def bootstrap_market_integrations() -> dict[str, int]:
                 "automation_allowed": definition.automation_allowed,
                 "webdock_compatible": definition.webdock_compatible,
                 "checked_at": profile.docs_checked_at,
-                "snapshot": {
-                    "source_urls": list(definition.source_urls),
-                    "capabilities": definition.capabilities.as_dict(),
-                    "blockers": list(definition.blockers),
-                    "evidence": definition.evidence,
-                    "webdock_compatible": definition.webdock_compatible,
-                },
+                "snapshot": policy_snapshot,
             },
         )
     return {"created": created, "updated": updated, "total": len(DEFINITIONS)}
@@ -162,6 +184,8 @@ def configured_adapter(slug: str, *, source_readers: dict[str, Callable] | None 
         return OpireAdapter(source_readers.get(slug))
     if slug == "algora":
         return AlgoraAdapter(source_readers.get(slug))
+    if slug == "gitpay":
+        return GitpayAdapter(source_readers.get(slug))
     raise KeyError(f"unknown market adapter: {slug}")
 
 
@@ -197,9 +221,25 @@ def sync_market_discovery(slug: str, *, adapter=None, limit: int = 50) -> dict:
         opportunity = adapter.normalize_job(raw)
         if not opportunity.external_id or opportunity.reward < 0:
             continue
+        from control.services.autonomous_income import ACTION_BY_KEY, canonical_action
+        action = canonical_action(slug, opportunity)
         opportunity = replace(
             opportunity,
-            raw=_trusted_discovery_payload(definition, opportunity.raw),
+            action=action,
+            raw={
+                **_trusted_discovery_payload(definition, opportunity.raw),
+                "autonomous_action": action,
+                "source_classification": opportunity.source_classification,
+                "marketplace_fee_rate": str(opportunity.fee_rate),
+                "payout_probability": str(opportunity.payout_probability),
+                "acceptance_probability": str(opportunity.acceptance_probability),
+                "expected_provider_cost": str(opportunity.expected_provider_cost),
+                "expected_execution_cost": str(opportunity.expected_execution_cost),
+                "expected_minutes": opportunity.expected_minutes,
+                "competition": opportunity.competition,
+                "capability_requirements": list(opportunity.capabilities_required),
+                "assignment_required": bool(ACTION_BY_KEY[action].assignment_required),
+            },
         )
         job, _ = ingest_opportunity(market, opportunity)
         result = qualify_and_shadow_score(job)

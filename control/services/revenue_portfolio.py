@@ -127,8 +127,13 @@ def rank_portfolio_candidates(
 
 def _selection_truth(job: Job, source_type: str) -> tuple[bool, bool, tuple[str, ...]]:
     blockers: list[str] = []
+    commercial_api = source_type == "COMMERCIAL_API"
     preflight = job.acquisition_preflights.order_by("-created_at").first()
     if preflight is None:
+        if commercial_api:
+            # Authenticated commercial API demand has already passed its
+            # canonical quota, funding, idempotency, and margin admission.
+            return True, True, ()
         return False, False, ("NO_VALID_ACQUISITION_PREFLIGHT",)
     eligible = preflight.eligible
     action_allowed = preflight.allowed
@@ -214,6 +219,10 @@ def candidates_from_jobs(jobs: Iterable[Job]) -> list[PortfolioCandidate]:
         if channel not in REVENUE_CHANNEL_VALUES:
             channel = "POSTED_JOB"
         eligible, action_allowed, selection_blockers = _selection_truth(job, source_type)
+        if str(payload.get("source_classification") or "").upper() == "MARKETING_DEPENDENT":
+            eligible = False
+            action_allowed = False
+            selection_blockers = (*selection_blockers, "MARKETING_DEPENDENT_EXCLUDED")
         candidates.append(PortfolioCandidate(
             job_id=str(job.id),
             source_type=source_type,

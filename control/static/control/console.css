@@ -5,7 +5,7 @@
   --console-subtle:#71869f;--console-blue:#5596ff;--console-green:#48d7a0;
   --console-amber:#f1bd61;--console-red:#ff7489;--console-violet:#9a7cff;
 }
-html,body{max-width:100%;overflow-x:hidden}
+.app-shell,.app-main,.page-content,.page-root{min-width:0}
 .app-shell{grid-template-columns:276px minmax(0,1fr);--text:var(--console-text);--muted:var(--console-muted);--muted-2:var(--console-subtle)}
 .app-shell :where(p,small,label,.breadcrumb,.nav-label,.sidebar-context,.sidebar-nav a,.owner-card small,.updated-state,.updated-state time,.live-state,.metric-label,.metric-truth,.working-copy,.working-signal,.job-title small,.job-detail-label,.job-detail-value,.page-toolbar-copy p,.panel-head p,.agent-card-copy,.agent-foot,.agent-current small,.agent-current strong,.money-side span,.money-side small,.payout-row small,.market-card-title p,.readiness-item,.market-stats small,.alert-card p,.alert-time,.health-card small,.health-card p,.modern-table th,.modern-table td,.drawer-field small,.drawer-field strong,.ledger-disclosure summary,.empty-state,.empty-state h2,.empty-state p,.settings-copy){color:var(--console-muted)!important;opacity:1}
 .app-shell :where(h1,h2,h3,strong,.metric-value,.reward){color:var(--console-text)}
@@ -29,4 +29,7 @@ html,body{max-width:100%;overflow-x:hidden}
 @media(max-width:1080px){.app-shell{grid-template-columns:1fr}.app-header{height:96px}.sidebar{width:290px}.operational-status{display:none}.header-actions{margin-left:auto}.capability-summary{grid-template-columns:repeat(2,1fr)}.genx-hero{grid-template-columns:1fr 1fr}}
 @media(max-width:768px){.app-header{height:76px;padding:12px 14px}.app-header h1{font-size:20px}.page-content{padding:18px 14px 32px}.metric-truth{font-size:10px!important}.metric-value{font-size:27px}.panel-head h2{font-size:14px}.capability-summary{grid-template-columns:1fr 1fr}.toolbar-row{align-items:stretch;flex-direction:column}.toolbar-row input{width:100%}.genx-hero{grid-template-columns:1fr 1fr}.service-row{grid-template-columns:1fr 1fr}.service-row>div:first-child{grid-column:1/-1}.audit-event{grid-template-columns:100px minmax(0,1fr)}.audit-event>*:nth-child(3){grid-column:1/-1}.timeline-row{grid-template-columns:14px 100px 1fr}}
 @media(max-width:480px){.header-actions .live-state{display:flex}.capability-summary,.genx-hero{grid-template-columns:1fr}.service-row{grid-template-columns:1fr}.service-row>div:first-child{grid-column:auto}.drawer-panel{padding:22px 15px}.audit-event{grid-template-columns:1fr}.audit-event>*:nth-child(3){grid-column:auto}.timeline-row{grid-template-columns:14px 1fr}.timeline-row time{grid-column:2}.modern-table{min-width:640px}}
+.commercial-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}.commercial-grid{margin-top:18px}
+@media(max-width:1080px){.commercial-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:480px){.commercial-metrics{grid-template-columns:1fr}.app-header p{display:none}.header-leading,.header-leading>div{min-width:0}.app-header h1{overflow-wrap:anywhere}.page-toolbar{align-items:flex-start;flex-direction:column}.account-manage.inline-action{width:100%;justify-content:center}}
 @media(prefers-reduced-motion:reduce){.catalogue-bar i{transition:none}}

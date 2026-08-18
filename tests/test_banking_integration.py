@@ -41,12 +41,12 @@ class BankingIntegrationTests(TestCase):
         self.assertEqual(body["section"], "treasury")
         self.assertEqual(body["meta"]["ready_rails"], 0)
         self.assertEqual(body["meta"]["action_required"], 6)
-        self.assertEqual(body["meta"]["accounts_open_now"], 18)
+        self.assertEqual(body["meta"]["accounts_open_now"], 16)
         self.assertEqual(body["meta"]["accounts_open_next"], 0)
         self.assertEqual(body["meta"]["optional_accounts"], 2)
         self.assertEqual(
             {row["slug"] for row in body["rows"]},
-            {"paystack", "paypal", "crypto-wallet", "valr", "wise", "payoneer"},
+            {"paystack", "paypal", "provider-bank", "stripe-connect", "wise", "payoneer"},
         )
         self.assertTrue(all(row["ready"] is False for row in body["rows"]))
         self.assertTrue(all(row["stores_bank_details"] is False for row in body["rows"]))
@@ -56,9 +56,9 @@ class BankingIntegrationTests(TestCase):
         self.assertEqual(
             [row["slug"] for row in body["account_setup"]["open_now"]],
             [
-                "paystack", "paypal", "valr", "lemon-squeezy", "payhip", "ko-fi", "gumroad", "patreon",
+                "paystack", "paypal", "lemon-squeezy", "payhip", "ko-fi", "gumroad", "patreon",
                 "rapidapi", "apify-store", "taskbounty", "contra", "freelancer", "dealwork", "algora",
-                "nevermined", "impact", "partnerstack",
+                "impact", "partnerstack",
             ],
         )
         self.assertEqual(body["account_setup"]["open_next"], [])

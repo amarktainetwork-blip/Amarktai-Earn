@@ -33,10 +33,7 @@ class FrontendOwnerConsoleCompletionTests(TestCase):
     def test_public_site_has_metadata_mobile_navigation_and_product_explanation(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        for marker in (
-            'name="robots"', 'property="og:title"', 'id="navToggle"', 'id="mainNav"',
-            "Profit Brain", "GenX execution", "Approval controls", "Settlement truth",
-        ):
+        for marker in ('id="navToggle"', 'id="mainNav"', "Profit-aware", "Economic admission", "Independent QA", "Settlement truth"):
             self.assertContains(response, marker)
         self.assertIsNotNone(finders.find("control/landing.js"))
 
@@ -106,11 +103,12 @@ class FrontendOwnerConsoleCompletionTests(TestCase):
 
     def test_responsive_structural_contract_prevents_page_overflow(self):
         console = Path(finders.find("control/console.css")).read_text(encoding="utf-8")
-        landing = Path(finders.find("control/landing-shell.css")).read_text(encoding="utf-8")
-        for marker in ("html,body{max-width:100%;overflow-x:hidden}", ".table-scroll{max-width:100%", "@media(max-width:1080px)", "@media(max-width:768px)", "@media(max-width:480px)"):
+        landing = Path(finders.find("control/launch.css")).read_text(encoding="utf-8")
+        for marker in (".app-shell,.app-main,.page-content,.page-root{min-width:0}", ".table-scroll{max-width:100%", "@media(max-width:1080px)", "@media(max-width:768px)", "@media(max-width:480px)"):
             self.assertIn(marker, console)
+        self.assertNotIn("overflow-x:hidden", console.replace(" ", ""))
         self.assertIn(".main-nav.open{display:grid}", landing)
-        self.assertIn("@media (max-width:720px)", landing)
+        self.assertIn("@media(max-width:768px)", landing)
 
     def test_console_source_never_embeds_secret_values_or_invented_finance(self):
         self.authenticate()

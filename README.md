@@ -134,9 +134,10 @@ All markets are disabled for autonomous acquisition by default. A source or adap
 | AgentGigs | REST/webhook service | source-wired | application/acquisition path exists behind policy, autonomy, payout, and separate switches | submission, revision, webhook/status lifecycle | requires real account/KYC/rail reconciliation | strongest source-wired adapter; live runtime and payout remain external proof |
 | Dealwork | official REST adapter | source-wired REST discovery | REST mutation capabilities remain policy/payout/autonomy gated and disabled | REST status/mutation surface only where exposed | not verified for South Africa | runtime-proven discovery; current inventory is qualified fail-closed and payout blockers remain explicit |
 | Callboard | REST adapter | discovery contract | capability-dependent and disabled | contract/status surface only where exposed | not verified for South Africa | source-wired contract; live docs/auth/policy/payout remain external proof |
-| TaskBounty | REST/MCP adapter | discovery/status contract | disabled | status surface where exposed | not verified for South Africa | source-wired contract; live integration and payout proof remain external |
-| Opire | public/source import adapter | source import | no autonomous mutation in V1 | source/status import only | prohibited crypto-only rails cannot open payout gate | watch/import truth; payout/policy proof required before enablement |
-| Algora | public/source import adapter | source import | no autonomous mutation in V1 | source/status import only | prohibited crypto-only rails cannot open payout gate | watch/import truth; payout/policy proof required before enablement |
+| TaskBounty | official REST/MCP adapter | funded bounty discovery | claim/repo-access contract behind gates | PR submission/status | USD bank transfer only; owner onboarding required | bug and coverage actions are code-complete; credential and payout proof remain external |
+| Opire | first-party reward source plus GitHub commands | bounded import | documented `/try` and `/claim #issue`, owner action gated | PR/creator status | Stripe receipt proof required | rewarded-issue action is code-complete to the supported GitHub boundary |
+| Algora | official API/SDK source | bounty resources | claim contract requires official auth proof | PR/claim status | approved fiat receipt proof required | bounty action is code-complete and fail-closed at missing owner proof |
+| Gitpay | first-party task source | funded task import | application and explicit assignment remain owner-assisted | PR/payment request owner boundary | bank or PayPal receipt proof required | no execution or provider spend before assignment |
 
 Contra, RapidAPI, Apify Store, and Lemon Squeezy Direct are priority **shadow-preparation** channels. Their package/pricing/placement plans may be prepared locally, but account onboarding, KYC, listing publication, checkout activation, paid external execution, and payout-route activation remain manual and fail-closed until separately proven. Scraper-heavy Apify work must execute on Apify infrastructure rather than as continuous high-load scraping on Webdock.
 
@@ -144,7 +145,7 @@ Deterministic CI mocks prove adapter contracts without making live-market claims
 
 ## Dashboard truth
 
-The owner-only dashboard is database-backed and exposes overview, live work, agents, markets, Banking/payment rails and marketplace-to-owner settlement routes, earnings, treasury, GenX, nodes, storage, performance, logs, alerts, settings, and security.
+The owner-only dashboard is database-backed and exposes overview, Autonomous Earn, live work, agents, markets, Banking/payment rails and marketplace-to-owner settlement routes, earnings, treasury, GenX, nodes, storage, performance, logs, alerts, settings, and security.
 
 - Overview separates settled today/7d/30d, payout pending, awarded/accepted exposure, allowed expected profit, recorded GenX cost, target status, productive utilization, avoidable idle, active work, and blocked profitable opportunities.
 - Performance shows persisted growth targets/evaluations, stage, market/capability/operation/worker/strategy profitability, QA/revision/settlement latency, capacity state, foregone expected profit, GenX model outcomes, and actual market-provided reputation observations.
@@ -195,6 +196,7 @@ REPUTATION_INVESTMENT_DAILY_LIMIT=0
 ```bash
 python manage.py v1_acceptance --format text
 python manage.py v1_acceptance --format json
+python manage.py autonomous_income_acceptance --format json
 ```
 
 Statuses are `PASS`, `FAIL`, `BLOCKED`, and `EXTERNAL_PROOF_REQUIRED`. The command exits non-zero on `FAIL` by default. `--ci-proven` is reserved for the final sequential GitHub Actions step after compilation, Django checks, migration drift/migrations, real PostgreSQL/Redis health, deterministic and integration suites, production preflight, Compose parsing, sandbox builds/isolation, production-image secret exclusion, and encrypted backup/clean restore.

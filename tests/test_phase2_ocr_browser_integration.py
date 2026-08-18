@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
-from workers.base import WorkRequest
+from workers.base import WorkRequest, WorkResult
 from workers.media.worker import MediaWorker
 from workers.ocr.worker import OCRWorker
 from workers.qa.runtime import run_qa
@@ -22,18 +22,24 @@ class Phase2OCRCapabilityTests(SimpleTestCase):
             request = WorkRequest(
                 job_id="fixture-job",
                 workspace=root / "workspace",
-                inputs={"operation": "ocr_document", "source": str(source), "language": "eng"},
+                inputs={"operation": "ocr_document", "source": str(source), "language": "eng", "source_authorized": True},
                 worker_id="fixture-ocr",
                 execution_id=1,
                 attempt=1,
             )
-            with patch(
-                "workers.ocr.worker._tesseract",
-                return_value="Fixture scanned document contains enough words for independent OCR structural verification.",
-            ):
+            provider_target = root / "provider.md"
+            provider_target.write_text(
+                "Fixture scanned document contains enough words for independent OCR structural verification.",
+                encoding="utf-8",
+            )
+            with patch("workers.ocr.worker._offhost_page") as provider:
+                provider.return_value = WorkResult(
+                    ok=True, artifacts=[provider_target], evidence={"model": "dynamic-fixture"}
+                )
                 result = OCRWorker().execute(request)
             self.assertTrue(result.ok, result.error)
-            self.assertEqual(result.evidence["runtime"], "tesseract+poppler")
+            self.assertEqual(result.evidence["runtime"], "offhost_genx_vision+local_poppler")
+            self.assertFalse(result.evidence["local_neural_runtime"])
             self.assertEqual(result.evidence["page_count"], 1)
             self.assertTrue(run_qa("transcript", result.artifacts[0], result.evidence).passed)
 
@@ -44,15 +50,15 @@ class Phase2OCRCapabilityTests(SimpleTestCase):
             request = WorkRequest(
                 job_id="fixture-job",
                 workspace=Path(temp) / "workspace",
-                inputs={"operation": "ocr_document", "source": str(source), "language": "fra"},
+                inputs={"operation": "ocr_document", "source": str(source), "language": "fra", "source_authorized": True},
                 worker_id="fixture-ocr",
                 execution_id=1,
                 attempt=1,
             )
-            with patch("workers.ocr.worker.subprocess.run") as process:
+            with patch("workers.ocr.worker._offhost_page") as provider:
                 result = OCRWorker().execute(request)
             self.assertFalse(result.ok)
-            process.assert_not_called()
+            provider.assert_not_called()
 
 
 class Phase2VideoAssemblyTests(SimpleTestCase):

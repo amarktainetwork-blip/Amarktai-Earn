@@ -18,15 +18,18 @@ SETTLEMENT_ROUTE_VERSION = 2
 # Candidate receipt rails only. A human may perform the final withdrawal after
 # funds arrive. No South African bank account details are stored in AmarktAI.
 MARKET_OWNER_RAIL_CANDIDATES: dict[str, tuple[str, ...]] = {
-    "contra": ("paypal", "payoneer", "crypto-wallet"),
+    "contra": ("paypal", "payoneer"),
     "rapidapi": ("paypal",),
     "apify-store": ("paypal", "wise"),
     "lemon-squeezy": ("paypal",),
-    "nevermined": ("crypto-wallet", "valr"),
-    "skyfire": ("crypto-wallet", "valr"),
+    "nevermined": ("stripe-connect",),
+    "skyfire": ("provider-bank", "stripe-connect"),
     "agentgigs": (),
     "callboard": (),
-    "taskbounty": ("crypto-wallet", "valr"),
+    "taskbounty": ("provider-bank",),
+    "opire": ("stripe-connect",),
+    "algora": ("provider-bank", "paypal"),
+    "gitpay": ("provider-bank", "paypal"),
     "dealwork": (),
 }
 
