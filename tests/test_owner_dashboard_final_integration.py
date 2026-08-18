@@ -70,7 +70,7 @@ class FinalOwnerDashboardAcceptanceTests(TestCase):
 
     def test_c_every_primary_navigation_link_maps_to_a_real_route(self):
         self.authenticate(); html = self.client.get("/ops/overview/").content.decode()
-        for path in ("/ops/overview/", "/ops/jobs/", "/ops/capabilities/", "/ops/markets/", "/ops/services/", "/ops/agents/", "/ops/money/", "/ops/treasury/", "/ops/genx/", "/ops/alerts/", "/ops/audit/", "/ops/settings/"):
+        for path in ("/ops/overview/", "/ops/jobs/", "/ops/services/", "/ops/markets/", "/ops/money/", "/ops/alerts/", "/ops/settings/", "/ops/capabilities/", "/ops/agents/", "/ops/commercial/", "/ops/autonomous-earn/", "/ops/genx/", "/ops/audit/"):
             self.assertIn(f'href="{path}"', html)
 
     def test_d_no_obsolete_primary_navigation_routes_remain(self):
@@ -106,7 +106,7 @@ class FinalOwnerDashboardAcceptanceTests(TestCase):
 
     def test_i_earnings_does_not_mix_expected_and_settled_revenue(self):
         script = Path(finders.find("control/app.js")).read_text(encoding="utf-8")
-        self.assertIn("Gross, fees, paid execution cost, pending payout, settlement, and profit", script)
+        self.assertIn("Only received payouts count as cash", script)
         self.assertIn("Real payout history only; no invented chart points", script)
         self.assertIn("Contract exposure, not received cash", script)
 
@@ -157,10 +157,10 @@ class FinalOwnerDashboardAcceptanceTests(TestCase):
         self.assertIn("overscroll-behavior:contain", styles)
 
     def test_r_main_dashboard_has_readable_shared_console_typography(self):
-        styles = Path(finders.find("control/console.css")).read_text(encoding="utf-8")
-        self.assertIn("--console-muted:#9aadc3", styles)
-        self.assertIn(".modern-table td{padding:13px 14px;font-size:11px", styles)
-        self.assertIn("@media(max-width:768px)", styles)
+        styles = Path(finders.find("control/brand-system.css")).read_text(encoding="utf-8")
+        self.assertIn("--brand-accent: #baf45a", styles)
+        self.assertIn("font-size: 12px", styles)
+        self.assertIn("@media (max-width: 650px)", styles)
 
     def test_s_no_visible_placeholder_action_remains(self):
         script = Path(finders.find("control/app.js")).read_text(encoding="utf-8").lower()
